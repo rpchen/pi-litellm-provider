@@ -13,6 +13,8 @@
 | 发行渠道 | 不发布 npm；公开 GitHub 仓库，`pi install git:github.com/rpchen/pi-litellm-provider` | 与现仓库策略一致（现仓库明确不上 npm） |
 | 验证凭据 | 真实 LiteLLM 验证统一使用 `~/.agents/skills/opencode-litellm-config-sync/.env` 的 `LITELLM_BASE_URL` / `LITELLM_API_KEY`，只在运行时读取、只在内存使用 | 与现仓库约定一致；不得读取 `~/.config/opencode` 下用户的 Key，也不得把地址与 Key 写入仓库、fixtures、日志 |
 | 仓库治理 | 公开仓库；功能分支 + PR + required `CI`；conventional commits；OpenSpec 管理规格变更 | 与现仓库治理方式保持一致 |
+| core 共享落地（2026-09-26 拍板） | pi 侧先把 core **复制进本仓 `src/core/`**，不跨仓库源码引用、暂不抽独立包 | pi 以 git 仓库根为 package root，用户机器没有平级仓库，跨仓 import 对 `pi install git:` 必断；抽包时机可晚于首次跑通 |
+| 凭据机制（2026-09-26 拍板） | Key 走 pi 宿主原生 `/login`（auth.json 持久）+ `$LITELLM_API_KEY` 兜底；地址走 `litellm.json` 配置文件（全局 + 项目级）+ `LITELLM_BASE_URL` 覆盖 | 参考 `fgrehm/pi-ollama-cloud` 的同类机制；宿主解析链保证发现与调用同一把 Key；不伪造 OAuth 语义 |
 
 ## 判断依据
 
