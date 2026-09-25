@@ -1,0 +1,921 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
+[
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 3,
+      "output": 15,
+    },
+    "id": "claude-bedrock",
+    "limit": {
+      "context": 200000,
+      "input": 200000,
+      "output": 64000,
+    },
+    "name": "claude-bedrock",
+    "protocol": "messages",
+    "releaseUnit": "unix-ms",
+    "released": 1759104000000,
+    "variants": [
+      {
+        "id": "high",
+        "settings": {
+          "thinking": {
+            "budgetTokens": 16000,
+            "type": "enabled",
+          },
+        },
+      },
+      {
+        "id": "max",
+        "settings": {
+          "thinking": {
+            "budgetTokens": 64000,
+            "type": "enabled",
+          },
+        },
+      },
+    ],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 3,
+      "output": 15,
+    },
+    "id": "claude-db",
+    "limit": {
+      "context": 200000,
+      "input": 200000,
+      "output": 64000,
+    },
+    "name": "claude-db",
+    "protocol": "messages",
+    "releaseUnit": "unix-ms",
+    "released": 1759104000000,
+    "variants": [
+      {
+        "id": "high",
+        "settings": {
+          "thinking": {
+            "budgetTokens": 16000,
+            "type": "enabled",
+          },
+        },
+      },
+      {
+        "id": "max",
+        "settings": {
+          "thinking": {
+            "budgetTokens": 64000,
+            "type": "enabled",
+          },
+        },
+      },
+    ],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.14,
+      "output": 0.28,
+    },
+    "id": "deepseek-v4-flash",
+    "limit": {
+      "context": 1000000,
+      "input": 1000000,
+      "output": 384000,
+    },
+    "name": "deepseek-v4-flash",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 1.74,
+      "output": 3.48,
+    },
+    "id": "deepseek-v4-pro",
+    "limit": {
+      "context": 1000000,
+      "input": 1000000,
+      "output": 384000,
+    },
+    "name": "deepseek-v4-pro",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.15,
+      "output": 0.6,
+    },
+    "id": "deepseek-v4.1-flash",
+    "limit": {
+      "context": 1000000,
+      "input": 1000000,
+      "output": 384000,
+    },
+    "name": "deepseek-v4.1-flash",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 1.4,
+      "output": 4.4,
+    },
+    "id": "glm-5.3",
+    "limit": {
+      "context": 1000000,
+      "input": 1000000,
+      "output": 131072,
+    },
+    "name": "glm-5.3",
+    "protocol": "responses",
+    "releaseUnit": "unix-ms",
+    "released": 1770854400000,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+        "audio",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.15,
+      "output": 0.5,
+    },
+    "id": "glm-5.3-flash",
+    "limit": {
+      "context": 1000000,
+      "input": 1000000,
+      "output": 131072,
+    },
+    "name": "glm-5.3-flash",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "id": "glm-fallback",
+    "limit": {
+      "context": 128000,
+      "input": 128000,
+      "output": 16000,
+    },
+    "name": "glm-fallback",
+    "protocol": "chat",
+    "releaseUnit": "unix-ms",
+    "released": 1735689600000,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.19999999999999998,
+      "output": 1.2,
+    },
+    "id": "gpt-5.6-luna",
+    "limit": {
+      "context": 272000,
+      "input": 272000,
+      "output": 128000,
+    },
+    "name": "gpt-5.6-luna",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 5,
+      "output": 30,
+    },
+    "id": "gpt-5.6-sol",
+    "limit": {
+      "context": 272000,
+      "input": 272000,
+      "output": 128000,
+    },
+    "name": "gpt-5.6-sol",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 2,
+      "output": 12,
+    },
+    "id": "gpt-5.6-terra",
+    "limit": {
+      "context": 272000,
+      "input": 272000,
+      "output": 128000,
+    },
+    "name": "gpt-5.6-terra",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 10,
+      "output": 50,
+    },
+    "id": "gpt-6-astra",
+    "limit": {
+      "context": 272000,
+      "input": 272000,
+      "output": 128000,
+    },
+    "name": "gpt-6-astra",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.09999999999999999,
+      "output": 0.5,
+    },
+    "id": "gpt-6-luna",
+    "limit": {
+      "context": 272000,
+      "input": 272000,
+      "output": 128000,
+    },
+    "name": "gpt-6-luna",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "pdf",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 2,
+      "output": 10,
+    },
+    "id": "gpt-6-sol",
+    "limit": {
+      "context": 272000,
+      "input": 272000,
+      "output": 128000,
+    },
+    "name": "gpt-6-sol",
+    "protocol": "responses",
+    "releaseUnit": "unix-ms",
+    "released": 1777593600000,
+    "variants": [
+      {
+        "id": "none",
+        "settings": {
+          "reasoningEffort": "none",
+        },
+      },
+      {
+        "id": "low",
+        "settings": {
+          "reasoningEffort": "low",
+        },
+      },
+      {
+        "id": "medium",
+        "settings": {
+          "reasoningEffort": "medium",
+        },
+      },
+      {
+        "id": "high",
+        "settings": {
+          "reasoningEffort": "high",
+        },
+      },
+      {
+        "id": "xhigh",
+        "settings": {
+          "reasoningEffort": "xhigh",
+        },
+      },
+      {
+        "id": "max",
+        "settings": {
+          "reasoningEffort": "max",
+        },
+      },
+    ],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "id": "invalid-fields",
+    "limit": {
+      "context": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "name": "invalid-fields",
+    "protocol": "chat",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "video",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.95,
+      "output": 4,
+    },
+    "id": "kimi-k2.6",
+    "limit": {
+      "context": 262144,
+      "input": 262144,
+      "output": 65536,
+    },
+    "name": "kimi-k2.6",
+    "protocol": "responses",
+    "releaseUnit": "unix-ms",
+    "released": 1773532800000,
+    "variants": [
+      {
+        "id": "low",
+        "settings": {
+          "reasoningEffort": "low",
+        },
+      },
+      {
+        "id": "high",
+        "settings": {
+          "reasoningEffort": "high",
+        },
+      },
+    ],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.95,
+      "output": 4,
+    },
+    "id": "kimi-k2.7-code",
+    "limit": {
+      "context": 262144,
+      "input": 262144,
+      "output": 262144,
+    },
+    "name": "kimi-k2.7-code",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 3,
+      "output": 15,
+    },
+    "id": "kimi-k3",
+    "limit": {
+      "context": 1048576,
+      "input": 1048576,
+      "output": 131072,
+    },
+    "name": "kimi-k3",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "audio",
+        "video",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.14,
+      "output": 0.28,
+    },
+    "id": "mimo-v2.6-flash",
+    "limit": {
+      "context": 1048576,
+      "input": 1048576,
+      "output": 131072,
+    },
+    "name": "mimo-v2.6-flash",
+    "protocol": "chat",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "audio",
+        "video",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.435,
+      "output": 0.87,
+    },
+    "id": "mimo-v2.6-pro",
+    "limit": {
+      "context": 1048576,
+      "input": 1048576,
+      "output": 131072,
+    },
+    "name": "mimo-v2.6-pro",
+    "protocol": "chat",
+    "releaseUnit": "unix-ms",
+    "released": 1771545600000,
+    "variants": [
+      {
+        "id": "low",
+        "settings": {
+          "reasoningEffort": "low",
+        },
+      },
+      {
+        "id": "medium",
+        "settings": {
+          "reasoningEffort": "medium",
+        },
+      },
+      {
+        "id": "high",
+        "settings": {
+          "reasoningEffort": "high",
+        },
+      },
+    ],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.3,
+      "output": 1.2,
+    },
+    "id": "minimax-m2.7",
+    "limit": {
+      "context": 204800,
+      "input": 204800,
+      "output": 131072,
+    },
+    "name": "minimax-m2.7",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0.3,
+      "output": 1.2,
+    },
+    "id": "minimax-m3",
+    "limit": {
+      "context": 512000,
+      "input": 512000,
+      "output": 131072,
+    },
+    "name": "minimax-m3",
+    "protocol": "responses",
+    "releaseUnit": "unix-ms",
+    "released": 1768003200000,
+    "variants": [
+      {
+        "id": "low",
+        "settings": {
+          "reasoningEffort": "low",
+        },
+      },
+      {
+        "id": "medium",
+        "settings": {
+          "reasoningEffort": "medium",
+        },
+      },
+      {
+        "id": "high",
+        "settings": {
+          "reasoningEffort": "high",
+        },
+      },
+    ],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "id": "multi-endpoint-model",
+    "limit": {
+      "context": 128000,
+      "input": 128000,
+      "output": 16000,
+    },
+    "name": "multi-endpoint-model",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+        "image",
+        "video",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "id": "qwen3.7-plus",
+    "limit": {
+      "context": 1000000,
+      "input": 1000000,
+      "output": 64000,
+    },
+    "name": "qwen3.7-plus",
+    "protocol": "chat",
+    "releaseUnit": "unix-ms",
+    "released": 1769904000000,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "id": "responses-only-model",
+    "limit": {
+      "context": 128000,
+      "input": 128000,
+      "output": 16000,
+    },
+    "name": "responses-only-model",
+    "protocol": "responses",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0,
+    },
+    "id": "shared-route",
+    "limit": {
+      "context": 200000,
+      "input": 200000,
+      "output": 32000,
+    },
+    "name": "shared-route",
+    "protocol": "chat",
+    "releaseUnit": "unix-ms",
+    "released": 1760486400000,
+    "variants": [],
+  },
+  {
+    "capabilities": {
+      "input": [
+        "text",
+      ],
+      "output": [
+        "text",
+      ],
+      "tools": true,
+    },
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 1,
+      "output": 4,
+    },
+    "id": "tiered-pricing-model",
+    "limit": {
+      "context": 256000,
+      "input": 256000,
+      "output": 64000,
+    },
+    "name": "tiered-pricing-model",
+    "protocol": "chat",
+    "releaseUnit": "none",
+    "released": 0,
+    "variants": [],
+  },
+]
+`;

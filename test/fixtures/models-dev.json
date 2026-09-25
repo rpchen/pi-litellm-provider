@@ -1,0 +1,225 @@
+{
+  "openai": {
+    "id": "openai",
+    "models": {
+      "gpt-5.5": {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "release_date": "2026-03-01",
+        "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+        "limit": { "context": 1050000, "output": 128000 },
+        "cost": { "input": 2.5, "output": 10, "cache_read": 0.25, "cache_write": 3 },
+        "tool_call": true,
+        "reasoning_options": [
+          { "type": "effort", "values": ["none", "low", "medium", "high", "xhigh"] }
+        ]
+      },
+      "gpt-6-sol": {
+        "id": "gpt-6-sol",
+        "name": "GPT-6 Sol",
+        "release_date": "2026-05-01",
+        "modalities": { "input": ["text", "image"], "output": ["text"] },
+        "limit": { "context": 922000, "output": 128000 },
+        "reasoning_options": [
+          { "type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"] }
+        ]
+      },
+      "missing-fields-model": {
+        "id": "missing-fields-model",
+        "name": "Missing Fields",
+        "release_date": "2026-01-01",
+        "limit": { "output": 65536 }
+      }
+    }
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "models": {
+      "claude-sonnet-4-5": {
+        "id": "claude-sonnet-4-5",
+        "name": "Claude Sonnet 4.5",
+        "release_date": "2025-09-29",
+        "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+        "limit": { "context": 200000, "output": 64000 },
+        "cost": { "input": 3, "output": 15 },
+        "tool_call": true,
+        "reasoning_options": [
+          { "type": "budget_tokens", "max": 64000 }
+        ]
+      },
+      "claude-opus-4-1": {
+        "id": "claude-opus-4-1",
+        "name": "Claude Opus 4.1",
+        "release_date": "2025-08-05",
+        "limit": { "context": 200000, "output": 32000 },
+        "reasoning_options": [
+          { "type": "budget_tokens" }
+        ]
+      },
+      "claude-haiku-4-5": {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5",
+        "release_date": "2025-10-15",
+        "limit": { "context": 200000, "output": 32000 }
+      }
+    }
+  },
+  "zai": {
+    "id": "zai",
+    "models": {
+      "glm-5.3": {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "release_date": "2026-02-12",
+        "modalities": { "input": ["text"], "output": ["text"] },
+        "limit": { "context": 200000, "output": 32000 },
+        "tool_call": true,
+        "reasoning_options": [{ "type": "toggle" }]
+      }
+    }
+  },
+  "zhipuai": {
+    "id": "zhipuai",
+    "models": {
+      "glm-fallback": {
+        "id": "glm-fallback",
+        "name": "GLM Fallback",
+        "release_date": "2025-01-01",
+        "limit": { "context": 128000, "output": 16000 }
+      }
+    }
+  },
+  "moonshotai": {
+    "id": "moonshotai",
+    "models": {
+      "kimi-k2.5": {
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5",
+        "release_date": "2025-12-01",
+        "modalities": { "input": ["text", "image"], "output": ["text"] },
+        "limit": { "context": 262144, "output": 32768 }
+      }
+    }
+  },
+  "moonshotai-cn": {
+    "id": "moonshotai-cn",
+    "models": {
+      "kimi-cn-only": {
+        "id": "kimi-cn-only",
+        "name": "Kimi CN",
+        "release_date": "2025-10-01",
+        "limit": { "context": 131072, "output": 32768 }
+      }
+    }
+  },
+  "minimax": {
+    "id": "minimax",
+    "models": {
+      "MiniMax-M3": {
+        "id": "MiniMax-M3",
+        "name": "MiniMax M3",
+        "release_date": "2026-01-10",
+        "modalities": { "input": ["text"], "output": ["text"] },
+        "limit": { "context": 1000000, "output": 131072 },
+        "cost": { "input": 1, "output": 4 },
+        "tool_call": true,
+        "reasoning_options": [
+          { "type": "effort", "values": ["low", "medium", "high"] }
+        ]
+      }
+    }
+  },
+  "minimax-cn": {
+    "id": "minimax-cn",
+    "models": {
+      "MiniMax-M3-CN": {
+        "id": "MiniMax-M3-CN",
+        "name": "MiniMax M3 CN",
+        "release_date": "2026-01-12",
+        "limit": { "context": 500000, "output": 64000 }
+      }
+    }
+  },
+  "xiaomi": {
+    "id": "xiaomi",
+    "models": {
+      "mimo-v2.6-pro": {
+        "id": "mimo-v2.6-pro",
+        "name": "MiMo V2.6 Pro",
+        "release_date": "2026-02-20",
+        "modalities": { "input": ["text", "image", "video"], "output": ["text"] },
+        "limit": { "context": 1048576, "output": 131072 },
+        "reasoning_options": [
+          { "type": "effort", "values": ["low", "medium", "high"] }
+        ]
+      }
+    }
+  },
+  "alibaba": {
+    "id": "alibaba",
+    "models": {
+      "qwen3.7-plus": {
+        "id": "qwen3.7-plus",
+        "name": "Qwen 3.7 Plus",
+        "release_date": "2026-02-01",
+        "modalities": { "input": ["text", "image", "video"], "output": ["text"] },
+        "limit": { "context": 1000000, "output": 64000 },
+        "tool_call": true
+      }
+    }
+  },
+  "alibaba-cn": {
+    "id": "alibaba-cn",
+    "models": {
+      "qwen-cn-only": {
+        "id": "qwen-cn-only",
+        "name": "Qwen CN",
+        "release_date": "2025-12-15",
+        "limit": { "context": 131072, "output": 32000 }
+      }
+    }
+  },
+  "opencode": {
+    "id": "opencode",
+    "models": {
+      "kimi-k2.6": {
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "release_date": "2026-03-15",
+        "modalities": { "input": ["text", "image", "video"], "output": ["text"] },
+        "limit": { "context": 262144, "output": 65536 },
+        "reasoning_options": [
+          { "type": "effort", "values": ["low", "high"] }
+        ]
+      },
+      "MiniMax-M3": {
+        "id": "MiniMax-M3",
+        "name": "MiniMax M3 via Zen",
+        "release_date": "2026-01-11",
+        "limit": { "context": 500000, "output": 64000 }
+      }
+    }
+  },
+  "reseller-a": {
+    "id": "reseller-a",
+    "models": {
+      "shared-model": {
+        "id": "shared-model",
+        "name": "Shared Model A",
+        "release_date": "2025-01-01",
+        "limit": { "context": 100000, "output": 10000 }
+      }
+    }
+  },
+  "reseller-b": {
+    "id": "reseller-b",
+    "models": {
+      "shared-model": {
+        "id": "shared-model",
+        "name": "Shared Model B",
+        "release_date": "2025-01-02",
+        "limit": { "context": 200000, "output": 20000 }
+      }
+    }
+  }
+}
