@@ -14,7 +14,7 @@
 | `test/` | Bun 单元测试；`test/fixtures/` 放脱敏后的 LiteLLM / models.dev 响应样本 |
 | `docs/` | 文档；`docs/decisions.md` 记录用户拍板的方案决策（实施前必读） |
 | `openspec/` | 变更提案、能力规格、归档 |
-| `.pi/skills/`、`.agents/skills/` | openspec 生成的代理 skills（入库，保证协作者可复现；分别面向 pi 宿主与通用 agents） |
+| `.agents/skills/` | agent skills 唯一副本（入库，保证协作者可复现）：pi 会加载项目/仓库祖先的 `.agents/skills/`，其他 agents 工具也认这一位置；不再生成 `.pi/skills/` 副本 |
 
 ## 规则
 
@@ -25,3 +25,4 @@
 5. **共享 core**：宿主无关逻辑以单副本方式复用平级仓库 `../opencode-litellm-provider` 的 `src/core/`；本仓库不得再复制一份，也不得让 core 反向依赖 pi。
 6. **验证**：`bun run typecheck && bun test` 必须通过后再提交。
 7. **提交**：conventional commits（`feat:` / `fix:` / `chore:` / `docs:`）；openspec 在途变更随实施一起提交，完成后 archive。
+8. **agent skills 单副本**：skill 只维护在 `.agents/skills/`。若 `openspec init`/`update` 又为 Pi 生成了 `.pi/skills/`，删掉它（否则会出现同名 skill collision 提示）；日常刷新用 `openspec update --force`，它只重写 `.agents/skills/`。

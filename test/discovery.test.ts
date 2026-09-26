@@ -409,4 +409,83 @@ describe("refreshProviderModels 失败分类", () => {
     })
     expect(models.map((model) => model.id)).toEqual(["gpt-6-sol"])
   })
+
+  test("真实持久化失败仍记录警告（console.warn）", async () => {
+    const captured: string[] = []
+    const originalWarn = console.warn
+    console.warn = (message: unknown) => captured.push(String(message))
+    try {
+      const { context } = fakeContext({
+        publish: async () => {
+          throw new Error("ENOSPC: no space left on device")
+        },
+      })
+      await refreshProviderModels(config(), context, {
+        fetchImpl: fetchRouter({
+          [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+          "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        }),
+        logger: silent,
+      })
+    } finally {
+      console.warn = originalWarn
+    }
+    expect(captured.some((message) => message.includes("目录持久化失败"))).toBeTrue()
+  })
+
+  test("host 取消（网络阶段中止）静默回放清单：不告警、不抛错、不持久化", async () => {
+    const controller = new AbortController()
+    const warns: string[] = []
+    const errors: string[] = []
+    const { published, context } = fakeContext({
+      signal: controller.signal,
+      stored: { models: [storedModel("remembered")] },
+    })
+    const deps = {
+      fetchImpl: ((_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          // The host cancels this refresh while the LiteLLM request is in flight
+          // (supersede by a newer refresh, 15s catalog timeout, or shutdown).
+          queueMicrotask(() => controller.abort())
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("This operation was aborted", "AbortError")),
+            { once: true },
+          )
+        })) as FetchLike,
+      logger: { warn: (message: string) => warns.push(message), error: (message: string) => errors.push(message) },
+    }
+
+    const models = await refreshProviderModels(config(), context, deps)
+    // Cancellation is not a failure: replay the persisted baseline, log nothing, do not write.
+    expect(models.map((model) => model.id)).toEqual(["remembered"])
+    expect(warns).toEqual([])
+    expect(errors).toEqual([])
+    expect(published).toHaveLength(0)
+  })
+
+  test("持久化写入被取消竞态打断时静默（发布结果仍返回）", async () => {
+    const controller = new AbortController()
+    const warns: string[] = []
+    const context = fakeContext().context as Parameters<typeof refreshProviderModels>[1]
+    const racingContext: typeof context = {
+      ...context,
+      signal: controller.signal,
+      publish: async () => {
+        // Cancellation lands while the store write is in flight.
+        controller.abort()
+        throw new DOMException("This operation was aborted", "AbortError")
+      },
+    }
+
+    const models = await refreshProviderModels(config(), racingContext, {
+      fetchImpl: fetchRouter({
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+      }),
+      logger: { warn: (message: string) => warns.push(message), error: () => {} },
+    })
+    expect(models.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    expect(warns.filter((message) => message.includes("持久化失败"))).toEqual([])
+  })
 })
