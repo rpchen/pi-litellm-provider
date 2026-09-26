@@ -6,10 +6,8 @@
  * with a 30s poll interval shortened for the test via a direct refresh call.
  */
 import { describe, expect, test } from "bun:test"
-import { loadConfig } from "../src/extension/config.ts"
 import { refreshProviderModels } from "../src/extension/discovery.ts"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
-import { resetModelsDevCacheForTest } from "../src/net/fetch.ts"
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "../src/extension/types.ts"
 
 function config(baseUrl: string): ExtensionConfig {
@@ -56,7 +54,12 @@ describe("轮询跟随 LiteLLM 端变更", () => {
         return true
       },
     }
-    const deps = { logger: { warn: () => {}, error: () => {} } }
+    // Offline: inject the models.dev catalog so the test never depends on the real
+    // 5MB api.json (which timed out CI without this).
+    const deps = {
+      logger: { warn: () => {}, error: () => {} },
+      loadModelsDevCatalog: async () => ({}),
+    }
 
     try {
       const first = await refreshProviderModels(config(baseUrl), context, deps)
@@ -64,7 +67,6 @@ describe("轮询跟随 LiteLLM 端变更", () => {
 
       // Admin adds a model and removes another.
       deployments = [deployment("model-b"), deployment("model-c")]
-      resetModelsDevCacheForTest()
       const second = await refreshProviderModels(config(baseUrl), context, deps)
       expect(second.map((model) => model.id)).toEqual(["model-b", "model-c"])
       expect(stored?.map((model) => model.id)).toEqual(["model-b", "model-c"])
