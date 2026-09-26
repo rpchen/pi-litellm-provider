@@ -155,7 +155,7 @@ API Key 不会写入日志、错误信息或模型定义；错误信息中的 Ke
 若此前在 `~/.pi/agent/models.json` 手工配置过 litellm provider：
 
 1. 按上文完成 Key 登录与地址配置，确认模型出现在 `/model` 中
-2. 删除 `models.json` 中手工的 litellm provider 块
+2. 删除 `models.json` 中手工的 litellm provider 块——若文件里只剩该块，**直接删除整个 `models.json`** 即可（pi 对文件缺失不报错、按空配置处理）。**不要把文件清空成 0 字节**：pi 对空文件每次启动都会报 `Failed to parse models.json: Unexpected end of JSON input`，而写 `{}` 也会因缺少 `providers` 字段报 schema 错误
 3. 回滚：`pi remove git:github.com/rpchen/pi-litellm-provider`，恢复手工配置；如已 `/login`，用 `/logout` 移除凭据
 
 扩展不读写你的 `models.json`。
