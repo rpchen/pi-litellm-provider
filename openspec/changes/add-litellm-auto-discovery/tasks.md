@@ -38,11 +38,20 @@
 > 来源：`litellm/mimo-v2.6-pro` 独立评审（1 blocker / 4 major / 8 minor）。本组前的 spec/design 修正已随 update-change 写入（A1/A2、B1/B2、C1-C3、D1/D2）；以下为代码与文档侧修复。
 
 - [x] 6.1 修复 B1（blocker）：`src/extension/map.ts` budget 分支不写 `off` 键（保持可关闭思考），修正 `test/map.test.ts` 对应断言（`off` 缺省而非 `null`）；验证：测试覆盖 budget 模型 `off` 缺省 + `getSupportedThinkingLevels` 语义（high/max 可选、minimal/low/medium 为 null）
-- [x] 6\.2 修复 M1：`src/extension/config.ts` 校验 `baseUrl` 为 http(s) URI，非法时跳过该来源回退下一来源并 `logger.warn`；字段类型非法同样告警；验证：`test/config.test.ts` 新增"非 http(s) 跳过回退"与"字段非法记录警告"两场景
-- [x] 6\.3 修复 M2：地址缺失时记录说明性提示（"未配置 LiteLLM 地址，设置 LITELLM_BASE_URL 或 litellm.json"）；验证：discovery 测试断言未连接分支发出 warn
-- [x] 6\.4 修复 m1：注册与轮询重注册前规范化 provider 级 `baseUrl`（经 `normalizeLiteLLMURL` 取根地址，空地址保持空串）；验证：extension 测试断言注册配置的 `baseUrl` 无尾斜杠、无重复 `/v1`
-- [x] 6\.5 修复 m2：非 http(s) 地址错误按 spec 记 error 级且文案不带"保留上次结果"前缀（配置类错误与网络类错误分级）；验证：测试断言日志级别与文案
-- [x] 6\.6 修复 m3：未连接与 401/403 分支的空清单持久化前先做指纹比较（与已持久化清单一致时不写入）；验证：discovery 测试连续两次相同空结果只 publish 一次
-- [x] 6\.7 修复 i6：给 `test/extension.test.ts`"重复 session_start 不叠加轮询"补真实断言（验证轮询刷新只被触发一次的等价行为，或直接断言 stopPolling 幂等状态）；验证：测试含非零断言
+- [x] 6.2 修复 M1：`src/extension/config.ts` 校验 `baseUrl` 为 http(s) URI，非法时跳过该来源回退下一来源并 `logger.warn`；字段类型非法同样告警；验证：`test/config.test.ts` 新增"非 http(s) 跳过回退"与"字段非法记录警告"两场景
+- [x] 6.3 修复 M2：地址缺失时记录说明性提示（"未配置 LiteLLM 地址，设置 LITELLM_BASE_URL 或 litellm.json"）；验证：discovery 测试断言未连接分支发出 warn
+- [x] 6.4 修复 m1：注册与轮询重注册前规范化 provider 级 `baseUrl`（经 `normalizeLiteLLMURL` 取根地址，空地址保持空串）；验证：extension 测试断言注册配置的 `baseUrl` 无尾斜杠、无重复 `/v1`
+- [x] 6.5 修复 m2：非 http(s) 地址错误按 spec 记 error 级且文案不带"保留上次结果"前缀（配置类错误与网络类错误分级）；验证：测试断言日志级别与文案
+- [x] 6.6 修复 m3：未连接与 401/403 分支的空清单持久化前先做指纹比较（与已持久化清单一致时不写入）；验证：discovery 测试连续两次相同空结果只 publish 一次
+- [x] 6.7 修复 i6：给 `test/extension.test.ts`"重复 session_start 不叠加轮询"补真实断言（验证轮询刷新只被触发一次的等价行为，或直接断言 stopPolling 幂等状态）；验证：测试含非零断言
 - [x] 6.8 修复 m5：清理 `docs/research/acceptance-notes.md` 陈旧待办（4.4 已完成，§4 待办区改为仅存真实未竟项）；验证：文档无已完成的 `[ ]` 条目
-- [x] 6\.9 全量门禁与治理：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿 → 功能分支 → PR（`CI` 绿）→ squash merge；合并后回到 5.1 待用户确认归档
+- [x] 6.9 全量门禁与治理：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿 → 功能分支 → PR（`CI` 绿）→ squash merge；合并后回到 5.1 待用户确认归档
+
+## 7. 第二轮独立评审 minor 修复（2026-09-26）
+
+> 来源：`litellm/mimo-v2.6-pro` 第二轮评审（总体通过，0 blocker / 0 major / 3 minor / 4 info）。本组只修 3 项 minor（均为规格/设计文本），info 项按评审结论不阻塞、不处理。
+
+- [x] 7.1 修复 N1：change-sync「仅在内容变化时更新」正文删去"触发宿主刷新或"（与「刷新触发」条款字面冲突，指纹比较发生在刷新内部）；验证：`openspec validate` 通过
+- [x] 7.2 修复 N2：design D4 budget 规则摘要补 16000 边界（与 spec 及实现 `maximum > 16000` 对齐）
+- [x] 7.3 修复 N3：litellm-connection「地址规范化」改为两级分级（配置来源非法 = 跳过+警告+回退；已采用地址无法规范化 = 不发请求+撤下+错误），对齐「非 http(s) 地址」scenario 并新增「已采用的地址无法规范化」scenario；验证：discovery 测试用 userinfo 地址直接覆盖 error 级场景
+- [x] 7.4 全量门禁与治理：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿 → 功能分支 → PR（`CI` 绿）→ squash merge；合并后回到 5.1 待用户确认归档

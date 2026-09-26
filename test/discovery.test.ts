@@ -299,6 +299,30 @@ describe("refreshProviderModels 失败分类", () => {
     expect((published[0] as { models: unknown[] }).models).toEqual([])
   })
 
+  test("已采用的地址无法规范化（含用户信息）按 error 级处理（spec scenario）", async () => {
+    // This is the production path that reaches the error tier: userinfo addresses pass
+    // a plain http(s) check in config, then normalizeLiteLLMURL rejects them.
+    let calls = 0
+    const errors: string[] = []
+    const { published, context } = fakeContext({ stored: { models: [storedModel("old")] } })
+    const models = await refreshProviderModels(
+      config({ baseUrl: "http://user:pass@litellm.example:4000" }),
+      context,
+      {
+        fetchImpl: async () => {
+          calls += 1
+          return jsonResponse(200, LITELLM_BODY)
+        },
+        logger: { warn: () => {}, error: (message) => errors.push(message) },
+      },
+    )
+    expect(models).toEqual([])
+    expect(calls).toBe(0)
+    expect(errors.some((message) => message.includes("地址无效"))).toBeTrue()
+    expect(published).toHaveLength(1)
+    expect((published[0] as { models: unknown[] }).models).toEqual([])
+  })
+
   test("网络错误抛出以保留宿主旧清单", async () => {
     const { published, context } = fakeContext()
     await expect(
