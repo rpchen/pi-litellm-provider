@@ -65,7 +65,7 @@ describe("配置文件容错", () => {
     expect("unknown" in config).toBeFalse()
   })
 
-  test("类型非法的字段回退默认值并记录警告", () => {
+  test("配置文件字段非法时回退默认值并记录警告", () => {
     const { cwd, agentDir } = makeDirs()
     const { warnings, logger } = collectingLogger()
     mkdirSync(join(cwd, ".pi"), { recursive: true })
@@ -74,6 +74,52 @@ describe("配置文件容错", () => {
     expect(config.baseUrl).toBe("")
     expect(config.pollInterval).toBe(DEFAULT_POLL_INTERVAL_SECONDS)
     expect(warnings.length).toBeGreaterThan(0)
+  })
+
+  test("非 http(s) 的 baseUrl 跳过该来源并回退下一来源", () => {
+    const { cwd, agentDir } = makeDirs()
+    const { warnings, logger } = collectingLogger()
+    writeJson(join(cwd, ".pi", "litellm.json"), { baseUrl: "ftp://litellm.example" })
+    writeJson(join(agentDir, "litellm.json"), { baseUrl: "http://global.example:4000" })
+    const config = loadConfig(cwd, logger, {}, agentDir)
+    expect(config.baseUrl).toBe("http://global.example:4000")
+    expect(warnings.some((message) => message.includes("非法"))).toBeTrue()
+  })
+
+  test("非字符串的 baseUrl 记录警告而非静默丢弃", () => {
+    const { cwd, agentDir } = makeDirs()
+    const { warnings, logger } = collectingLogger()
+    mkdirSync(join(cwd, ".pi"), { recursive: true })
+    writeFileSync(join(cwd, ".pi", "litellm.json"), JSON.stringify({ baseUrl: 42 }), "utf-8")
+    const config = loadConfig(cwd, logger, {}, agentDir)
+    expect(config.baseUrl).toBe("")
+    expect(warnings.some((message) => message.includes("baseUrl"))).toBeTrue()
+  })
+
+  test("非法的 LITELLM_BASE_URL 跳过 env 并回退配置文件", () => {
+    const { cwd, agentDir } = makeDirs()
+    const { warnings, logger } = collectingLogger()
+    writeJson(join(cwd, ".pi", "litellm.json"), { baseUrl: "http://project.example:4000" })
+    const config = loadConfig(cwd, logger, { LITELLM_BASE_URL: "ftp://bad.example" }, agentDir)
+    expect(config.baseUrl).toBe("http://project.example:4000")
+    expect(warnings.some((message) => message.includes("LITELLM_BASE_URL"))).toBeTrue()
+  })
+
+  test("其他已知字段类型非法时记录警告", () => {
+    const { cwd, agentDir } = makeDirs()
+    const { warnings, logger } = collectingLogger()
+    mkdirSync(join(cwd, ".pi"), { recursive: true })
+    writeFileSync(
+      join(cwd, ".pi", "litellm.json"),
+      JSON.stringify({ baseUrl: "http://litellm.example:4000", pollInterval: "soon", contextTierCap: "yes" }),
+      "utf-8",
+    )
+    const config = loadConfig(cwd, logger, {}, agentDir)
+    expect(config.baseUrl).toBe("http://litellm.example:4000")
+    expect(config.pollInterval).toBe(DEFAULT_POLL_INTERVAL_SECONDS)
+    expect(config.contextTierCap).toBeTrue()
+    expect(warnings.some((message) => message.includes("pollInterval"))).toBeTrue()
+    expect(warnings.some((message) => message.includes("contextTierCap"))).toBeTrue()
   })
 
   test("JSON 为数组或基础类型时不崩", () => {

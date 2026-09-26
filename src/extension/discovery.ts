@@ -89,9 +89,13 @@ export async function refreshProviderModels(
     return stored?.models ?? []
   }
 
-  // Not connected: no address resolved. Clear the catalog so stale models disappear.
+  // Not connected: no address resolved. Tell the user how to configure one (spec:
+  // 记录说明性提示) and drop the catalog so stale models disappear.
   if (config.baseUrl.length === 0) {
-    await publish(context, [])
+    logger.warn(
+      "LiteLLM 未配置地址：请设置 LITELLM_BASE_URL，或在 ~/.pi/agent/litellm.json / 项目 .pi/litellm.json 中填写 baseUrl",
+    )
+    await publishIfChanged(context, stored, [])
     return []
   }
 
@@ -100,28 +104,64 @@ export async function refreshProviderModels(
     // The host only reaches the network phase when a credential resolved; treat a missing
     // key defensively as unconfigured rather than sending an unauthenticated request.
     logger.warn("LiteLLM Key 未配置，跳过发现（请使用 /login 或设置 LITELLM_API_KEY）")
-    await publish(context, [])
+    await publishIfChanged(context, stored, [])
     return []
   }
 
   try {
     const outcome = await discoverModels(config, apiKey, context.signal, deps)
-    if (modelsFingerprint(stored?.models) !== modelsFingerprint(outcome.models)) {
-      await publish(context, outcome.models)
-    }
+    await publishIfChanged(context, stored, outcome.models)
     return outcome.models
   } catch (error) {
     if (error instanceof DiscoveryError && error.kind === "auth") {
       logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`)
-      await publish(context, [])
+      await publishIfChanged(context, stored, [])
+      return []
+    }
+    if (normalizeLiteLLMURLFailed(error, config.baseUrl)) {
+      // Configuration error (not a transport failure): the address itself is unusable.
+      // Spec: 记录错误、不发起发现请求、不注册模型 — so drop the catalog instead of
+      // keeping stale models pointed at a dead address.
+      logger.error(`LiteLLM 地址无效（${redactUrl(config.baseUrl)}）：${messageOf(error)}`)
+      await publishIfChanged(context, stored, [])
       return []
     }
     // Network / timeout / 5xx / 429 / parse / redirect / 404-exhausted: keep last good
     // catalog by letting the host record the error.
-    const message = error instanceof Error ? error.message : String(error)
-    logger.warn(`LiteLLM 发现失败，保留上次结果：${message}`)
+    logger.warn(`LiteLLM 发现失败，保留上次结果：${messageOf(error)}`)
     throw error
   }
+}
+
+/** Whether the failure came from address normalization (config error, not transport). */
+function normalizeLiteLLMURLFailed(error: unknown, _baseUrl: string): boolean {
+  if (error instanceof DiscoveryError) return false
+  // normalizeLiteLLMURL only rejects non-URL / non-http(s) / credential-bearing strings,
+  // always with a message starting with "LiteLLM 地址".
+  return messageOf(error).startsWith("LiteLLM 地址")
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Best-effort URL display that never includes userinfo (defensive; config may be raw). */
+function redactUrl(value: string): string {
+  return value.replace(/\/\/[^/@\s]+@/g, "//***@")
+}
+
+/**
+ * Persist `models` only when the registered list actually changed. Covers the empty-list
+ * branches too, so repeated identical empty results do not rewrite models-store (spec:
+ * 仅在内容变化时更新).
+ */
+async function publishIfChanged(
+  context: RefreshModelsContextLike,
+  stored: PersistedCatalog | undefined,
+  models: ProviderModelConfigLike[],
+): Promise<void> {
+  if (modelsFingerprint(stored?.models) === modelsFingerprint(models)) return
+  await publish(context, models)
 }
 
 function asStoredCatalog(stored: RefreshModelsContextLike["stored"]): PersistedCatalog | undefined {

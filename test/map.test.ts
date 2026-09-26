@@ -93,7 +93,7 @@ describe("thinkingLevelMap", () => {
     })
   })
 
-  test("budget 类只提供 high/max 且未声明项为 null", () => {
+  test("budget 类只提供 high/max 且未声明项为 null，off 不写键", () => {
     const withMax = thinkingLevelMapFor(
       spec(
         [
@@ -104,7 +104,6 @@ describe("thinkingLevelMap", () => {
       ),
     )!
     expect(withMax).toEqual({
-      off: null,
       minimal: null,
       low: null,
       medium: null,
@@ -112,12 +111,16 @@ describe("thinkingLevelMap", () => {
       xhigh: null,
       max: "max",
     })
+    // `off` must be absent so the picker offers "thinking off" and the request path can
+    // send `thinking: {type:"disabled"}` (host hides null levels).
+    expect("off" in withMax).toBeFalse()
 
     const withoutMax = thinkingLevelMapFor(
       spec([{ id: "high", settings: { thinking: { type: "enabled", budgetTokens: 16000 } } }], "messages"),
     )!
     expect(withoutMax.max).toBeNull()
     expect(withoutMax.high).toBe("high")
+    expect("off" in withoutMax).toBeFalse()
   })
 
   test("无档位时不给 thinkingLevelMap 且 reasoning 为 false", () => {

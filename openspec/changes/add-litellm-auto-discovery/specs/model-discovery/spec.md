@@ -1,9 +1,8 @@
-# model-discovery Specification
-
 ## Purpose
+
 定义扩展从 LiteLLM 发现哪些模型、过滤哪些模型，以及如何为每个模型填充名称、能力、上下文与输出上限、推理档位与价格；规定 LiteLLM 与 models.dev 两个数据源的优先级。行为基线与 ../opencode-litellm-provider 的 model-discovery 能力一致。
 
-## Requirements
+## ADDED Requirements
 
 ### Requirement: 以真实部署作为模型清单
 扩展 SHALL 以 LiteLLM `/v1/model/info` 返回的部署作为模型清单来源，按 `model_name` 聚合为模型。扩展 MUST NOT 注册仅出现在 `/v1/models` 或 `/model_group/info`、但在 `/v1/model/info` 中没有任何部署的模型名。
@@ -54,7 +53,7 @@
 - **THEN** 注册的输入模态包含 text 与 image（video 被 pi 模态集合丢弃）
 
 ### Requirement: models.dev 记录选择
-扩展 SHALL 只从一条 models.dev 记录补充一个模型的缺失字段。候选 id 依次为：部署的 `base_model`、去掉路由前缀的 `litellm_params.model`、`model_name`；id 比较不区分大小写。对每个候选 id，记录选择顺序为：1）模型原厂 provider（含原厂备选 provider）下 id 匹配的记录；2）OpenCode Zen（models.dev provider id `opencode`）下 id 匹配的记录；3）若该 id 在全部 provider 中只存在于唯一一个 provider，则取该记录。所有候选都不满足时 SHALL 不补充任何字段。扩展 MUST NOT 跨多条记录合并字段，MUST NOT 通过去掉 `-free` 等后缀进行模糊匹配（大小写不敏感不属于模糊匹配）。模型原厂 SHALL 由模型名所属家族识别（完整家族表与备选顺序继承基线），部署 `model_info` 中若显式给出 `models_dev_provider`，SHALL 以它作为原厂。
+扩展 SHALL 只从一条 models.dev 记录补充一个模型的缺失字段。候选 id 依次为：部署的 `base_model`、去掉路由前缀的 `litellm_params.model`、`model_name`；id 比较不区分大小写。对每个候选 id，记录选择顺序为：1）模型原厂 provider（含原厂备选 provider）下 id 匹配的记录；2）OpenCode Zen（models.dev provider id `opencode`）下 id 匹配的记录；3）若该 id 在全部 provider 中只存在于唯一一个 provider，则取该记录。所有候选都不满足时 SHALL 不补充任何字段。扩展 MUST NOT 跨多条记录合并字段，MUST NOT 通过去掉 `-free` 等后缀进行模糊匹配（大小写不敏感不属于模糊匹配）。模型原厂 SHALL 由模型名所属家族识别：GPT / o 系列 / Codex → openai；Claude → anthropic；Gemini → google；Grok → xai；GLM → zai（备选 zhipuai）；DeepSeek → deepseek；Kimi → moonshotai（备选 moonshotai-cn）；MiMo → xiaomi；MiniMax → minimax（备选 minimax-cn）；Qwen → alibaba（备选 alibaba-cn）。部署 `model_info` 中若显式给出 `models_dev_provider`，SHALL 以它作为原厂。
 
 #### Scenario: 原厂记录缺失时使用 Zen
 - **WHEN** 模型 `kimi-k2.6` 在 models.dev 的 `moonshotai` 下不存在，但在 `opencode` 下存在
@@ -71,7 +70,7 @@
 ### Requirement: 推理档位来源
 扩展 SHALL 仅依据上一条规则选中的 models.dev 记录的 `reasoning_options` 生成推理档位；扩展 MUST NOT 依据 LiteLLM 的 `supports_*_reasoning_effort` 等字段生成或删减档位。档位 SHALL 翻译为 pi 的 `thinkingLevelMap`，规则如下：
 - `type: effort` 的每个取值映射到同名 pi 档位（`none` 映射到 `off`）；记录未声明的 pi 档位 SHALL 显式置 `null` 隐藏，使模型选择器只提供实际可用的档位。
-- `type: budget_tokens` 且协议为 Anthropic Messages 时，生成 `high` 与（记录声明最大值时）`max` 两个档位；记录未声明最大值时只生成 `high`；声明的最大值小于 16000 时只生成 `high`。`off` 不写键（保持可关闭思考）；`minimal`/`low`/`medium` 与未声明的 `max` 置 `null` 隐藏。档位对应的预算数值由 pi 宿主按自身设置推导（扩展注册接口无法按模型注入预算数值），扩展 MUST NOT 通过映射值编码预算。
+- `type: budget_tokens` 且协议为 Anthropic Messages 时，生成 `high` 与（记录声明最大值时）`max` 两个档位；记录未声明最大值时只生成 `high`；声明的最大值不超过 16000 时只生成 `high`。`off` 不写键（保持可关闭思考）；`minimal`/`low`/`medium` 与未声明的 `max` 置 `null` 隐藏。档位对应的预算数值由 pi 宿主按自身设置推导（扩展注册接口无法按模型注入预算数值），扩展 MUST NOT 通过映射值编码预算。
 - `type: toggle` 不生成档位。无 `reasoning_options` 或无选中记录时 SHALL 不生成档位（`reasoning` 为 false），模型照常注册，这是合法的最终状态。
 
 #### Scenario: effort 档位

@@ -38,7 +38,10 @@ export function thinkingLevelMapFor(spec: ModelSpec): Partial<Record<ThinkingLev
   const map: Partial<Record<ThinkingLevel, string | null>> = {}
   if (isBudget) {
     // Budget-token variants: only the high/max levels produced by the core are selectable.
+    // `off` must stay absent (not null): a null value would hide "thinking off" in the
+    // picker and block the disabled-thinking request path (spec: off 不写键).
     for (const level of ALL_LEVELS) {
+      if (level === "off") continue
       if (level === "high" || level === "max") {
         map[level] = variantIDs.has(level) ? level : null
       } else {

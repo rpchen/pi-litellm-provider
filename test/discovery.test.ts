@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
 import { resetModelsDevCacheForTest, type FetchLike } from "../src/net/fetch.ts"
-import type { ProviderModelConfigLike } from "../src/extension/types.ts"
+import type { ProviderModelConfigLike, RefreshModelsContextLike } from "../src/extension/types.ts"
 
 const KEY = "sk-litellm-secret"
 const BASE = "http://litellm.example:4000"
@@ -177,19 +177,51 @@ describe("refreshProviderModels 两阶段", () => {
 })
 
 describe("refreshProviderModels 失败分类", () => {
-  test("未连接地址时返回空且不发请求", async () => {
+  test("未连接地址时返回空且不发请求，并记录说明性提示", async () => {
     let calls = 0
+    const warnings: string[] = []
     const { published, context } = fakeContext()
     const models = await refreshProviderModels(config({ baseUrl: "" }), context, {
       fetchImpl: async () => {
         calls += 1
         return jsonResponse(200, LITELLM_BODY)
       },
-      logger: silent,
+      logger: { warn: (message) => warnings.push(message), error: () => {} },
     })
     expect(models).toEqual([])
     expect(calls).toBe(0)
+    expect(warnings.some((message) => message.includes("未配置地址"))).toBeTrue()
     expect(published).toHaveLength(1)
+  })
+
+  test("未连接时连续两次相同空结果只持久化一次", async () => {
+    let stored: ProviderModelConfigLike[] | undefined
+    let publishCount = 0
+    const warnings: string[] = []
+    const makeContext = () => ({
+      signal: new AbortController().signal,
+      credential: { type: "api_key", key: KEY },
+      allowNetwork: true,
+      get stored() {
+        return stored ? { models: stored } : undefined
+      },
+      publish: async (publication: { persist?: unknown }) => {
+        const persist = publication.persist as { models: ProviderModelConfigLike[] } | undefined
+        if (persist) {
+          publishCount += 1
+          stored = persist.models
+        }
+        return true
+      },
+    })
+    const deps = { logger: { warn: (m: string) => warnings.push(m), error: () => {} } }
+    const emptyConfig = config({ baseUrl: "" })
+    await refreshProviderModels(emptyConfig, makeContext(), deps)
+    await refreshProviderModels(emptyConfig, makeContext(), deps)
+    // First call persisted []; second sees an identical stored [] and skips the write.
+    expect(publishCount).toBe(1)
+    expect(stored).toEqual([])
+    expect(warnings.filter((message) => message.includes("未配置地址"))).toHaveLength(2)
   })
 
   test("缺少凭据时返回空且不发请求", async () => {
@@ -213,6 +245,56 @@ describe("refreshProviderModels 失败分类", () => {
       logger: silent,
     })
     expect(models).toEqual([])
+    expect(published).toHaveLength(1)
+    expect((published[0] as { models: unknown[] }).models).toEqual([])
+  })
+
+  test("连续两次相同 401 空结果只持久化一次", async () => {
+    let stored: ProviderModelConfigLike[] | undefined
+    let publishCount = 0
+    const contextFor = (): RefreshModelsContextLike => ({
+      signal: new AbortController().signal,
+      credential: { type: "api_key", key: KEY },
+      allowNetwork: true,
+      get stored() {
+        return stored ? { models: stored } : undefined
+      },
+      publish: async (publication: { persist?: unknown }) => {
+        const persist = publication.persist as { models: ProviderModelConfigLike[] } | undefined
+        if (persist) {
+          publishCount += 1
+          stored = persist.models
+        }
+        return true
+      },
+    })
+    const deps = {
+      fetchImpl: fetchRouter({ [`${BASE}/v1/model/info`]: () => jsonResponse(401, {}) }),
+      logger: silent,
+    }
+    await refreshProviderModels(config(), contextFor(), deps)
+    await refreshProviderModels(config(), contextFor(), deps)
+    expect(publishCount).toBe(1)
+  })
+
+  test("非 http(s) 地址按配置错误处理：error 级、不发请求、撤下模型", async () => {
+    let calls = 0
+    const errors: string[] = []
+    const warnings: string[] = []
+    const { published, context } = fakeContext({ stored: { models: [storedModel("old")] } })
+    const models = await refreshProviderModels(config({ baseUrl: "ftp://litellm.example" }), context, {
+      fetchImpl: async () => {
+        calls += 1
+        return jsonResponse(200, LITELLM_BODY)
+      },
+      logger: { warn: (message) => warnings.push(message), error: (message) => errors.push(message) },
+    })
+    expect(models).toEqual([])
+    expect(calls).toBe(0)
+    expect(errors.some((message) => message.includes("地址无效"))).toBeTrue()
+    // m2: configuration errors must not carry the transport-failure prefix.
+    expect(warnings.some((message) => message.includes("保留上次结果"))).toBeFalse()
+    // Address unusable → stale models dropped and persisted as empty.
     expect(published).toHaveLength(1)
     expect((published[0] as { models: unknown[] }).models).toEqual([])
   })

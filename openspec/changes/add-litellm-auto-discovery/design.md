@@ -102,15 +102,15 @@ provider `baseUrl` = 规范化根地址 + `/v1`。pi-ai 客户端拼路径（核
 
 ### D5. 刷新：宿主两阶段 refreshModels + 扩展轮询驱动宿主刷新
 
-宿主在启动 / `/model` 打开 / `pi update --models` / `/reload` 时调用 provider 的 `refreshModels(context)`，每次调用分两阶段（pi-ai `models.js` 源码核实，`pi-ollama-cloud` 同款处理）：
+宿主在启动 / `/model` 打开 / `/reload` 时调用 provider 的 `refreshModels(context)`，每次调用分两阶段（pi-ai `models.js` 源码核实，`pi-ollama-cloud` 同款处理）：
 
 1. **restore 阶段**（`allowNetwork: false`）：返回 `context.stored.models`（宿主 FileModelsStore 里的上次持久化清单）——跨会话回放，重启即有模型可用。
-2. **network 阶段**（`allowNetwork: true`，且宿主解析出凭据才进入）：执行真实发现（读地址配置 → 用 `context.credential.key` 请求 LiteLLM → 可选 models.dev → 构建 → 指纹比较）→ 成功且非空时 `context.publish({ persist: { models, checkedAt } })` 持久化并返回新清单。
+2. **network 阶段**（`allowNetwork: true`，且宿主解析出凭据才进入）：执行真实发现（读地址配置 → 用 `context.credential.key` 请求 LiteLLM → 可选 models.dev → 构建 → 指纹比较）→ 成功时 `context.publish({ persist: { models, checkedAt } })` 持久化并返回新清单（**含空清单**，见下）。
 
 时效性（LiteLLM 端变更在一个轮询间隔内跟随）由扩展自建轮询补足，但轮询**不再自己发请求**，而是调用 `ctx.modelRegistry.refresh({ providers: ["litellm"], force: true })`（`ModelRegistry.refresh` 公开 API，`ModelsRefreshOptions.providers` 限定 provider），让宿主走同一条两阶段路径：
 
 - `session_start` 后启动轮询循环（默认 300s，下限 30s）；`session_shutdown` 幂等清理（`/reload` safe）。
-- 轮询与用户触发的刷新共用同一 in-flight 发现（最多一个实例，新触发合并等待）。
+- 轮询与用户触发的刷新之间的并发**由宿主管理**：宿主对同一 provider 的并发刷新采用 supersede 语义（新刷新中止旧刷新，`beginProviderRefresh`），扩展不自建 in-flight 合并。
 - 指纹相同的成功结果跳过 `publish`，避免无谓写入。
 - **空清单要持久化**（区别于 pi-ollama-cloud 的 guard）：本项目的 spec 把"成功但过滤后没有对话模型"定义为合法终态，必须撤下模型且**跨重启保持撤下**；若不持久化，restore 阶段会回放旧清单形成回归。pi-ollama-cloud 保留 guard 是因为它的空清单来自部分失败，我们的空清单是明确成功结果。
 - 与 pi-ollama-cloud 的差异：它不需要自建轮询（云端目录变更频率低，用户开 `/model` 自然刷新），LiteLLM 基线要求 5 分钟跟随，必须轮询。
@@ -136,7 +136,7 @@ provider `baseUrl` = 规范化根地址 + `/v1`。pi-ai 客户端拼路径（核
 
 ### D7. 并发与清理
 
-发现最多一个实例（in-flight promise 合并）；`registerProvider` 重注册只在新指纹时发生；`session_shutdown` 清定时器与 in-flight（abort）。不写任何磁盘缓存。
+发现的并发**由宿主管理**：宿主对同一 provider 的刷新采用 supersede 语义（新刷新中止旧刷新，`beginProviderRefresh`；被中止的旧发现随 `context.signal` 结束，宿主经 generation 检查丢弃过期发布），扩展不自建 in-flight 合并。扩展侧只做：`session_start` 后**无条件**重新 `registerProvider`（宿主幂等合并，用于同步地址等配置变更）与启动轮询定时器；`session_shutdown` 只停止轮询定时器，不中止宿主在途刷新。未连接与 401/403 分支的空清单持久化同样先做指纹比较（结果与已持久化清单一致时不写入）。不写任何磁盘缓存（models store 由宿主管理）。
 
 ## 与 ../opencode-litellm-provider 行为基线的差异清单
 
@@ -151,6 +151,9 @@ provider `baseUrl` = 规范化根地址 + `/v1`。pi-ai 客户端拼路径（核
 | 审计导出 / TUI 卡片 / 对话反馈 / `/litellm-audit-export` 不移植 | pi 侧 UI 能力（`ctx.ui`）形态不同，留后续变更（HANDOFF 明示可选） |
 | 插件 `options`（pollInterval 等 4 项）→ `litellm.json` 配置文件字段（全局 + 项目级双层） | pi 工厂拿不到 options（HANDOFF 核实）；采用 pi-ollama-cloud 的配置文件模式，字段语义与上位仓库一致 |
 | 401/403 通过返回 `[]` 撤下而非宿主事件 | pi 的 `refreshModels` throw 会保留旧模型（宿主 catch 语义），撤下必须走返回空清单 |
+| `net/fetch.ts` 新增外部 AbortSignal 贯穿（新错误文案"请求已取消"） | `refreshModels(context.signal)` 必须能中止在途网络请求（基线无此通道） |
+| 输入模态收窄为 text/image（基线注册 pdf/audio/video） | pi 的 `ProviderModelConfig.input` 类型限定 `("text"|"image")[]`，其余模态在 map 层丢弃 |
+| `release_date` 不进注册配置（`ModelSpec.released` 仅用于指纹） | pi 的 `ProviderModelConfig` 无发布时间字段，无法落库 |
 
 以下与基线**一致**（不再复述规则）：模型清单来源与过滤、保守合并、字段优先级与模态信任名单、models.dev 记录选择与家族表、推理档位生成规则（可用档位集合：budget 类生成 high/max 的判定条件不变）、阶梯截断与开关、协议判定顺序与覆盖、失败分类表、显示名与价格、凭据保密、空结果与异常数据。
 
@@ -162,7 +165,7 @@ provider `baseUrl` = 规范化根地址 + `/v1`。pi-ai 客户端拼路径（核
 - [Messages 模型 baseUrl 拼接（D3）错误] → 真实 Messages 部署验收（tasks 4.2）；错则只改 map.ts 一处。
 - [budget_tokens 档位无法携带记录声明的预算数值] → 已核实为宿主 API 硬限制（ProviderModelConfig 无 per-model thinkingBudgets）；档位可选用性保留，数值由宿主推导；tasks 4.2 验收档位参数生效即可。
 - [持久化清单中的模型 baseUrl 与后续地址变更不一致] → network 阶段每次用当前配置地址重新发现并覆盖持久化；restore 只是首次回放，最终一致。
-- [轮询调用 `modelRegistry.refresh` 与用户手动刷新竞争] → 共享 in-flight 合并；宿主 refresh 自带 generation 检查（publish 被 superseded 时返回 false，源码核实）。
+- [轮询调用 `modelRegistry.refresh` 与用户手动刷新竞争] → 宿主 supersede 语义兜底（新刷新中止旧刷新；publish 经 generation 检查丢弃过期结果，源码核实）。
 - [阶梯截断让用户无法使用超过阶梯点的长上下文] → 默认开启是上位仓库既定用户决策；可关闭。
 - [models.dev id 与 LiteLLM 模型名不匹配] → 只是缺档位与补缺字段，不影响可用性（基线既定）。
 
