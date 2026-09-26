@@ -26,3 +26,4 @@
 6. **验证**：`bun run typecheck && bun test` 必须通过后再提交。
 7. **提交**：conventional commits（`feat:` / `fix:` / `chore:` / `docs:`）；openspec 在途变更随实施一起提交，完成后 archive。
 8. **agent skills 单副本**：skill 只维护在 `.agents/skills/`。若 `openspec init`/`update` 又为 Pi 生成了 `.pi/skills/`，删掉它（否则会出现同名 skill collision 提示）；日常刷新用 `openspec update --force`，它只重写 `.agents/skills/`。
+9. **发版**：合入 `main` 的用户可见变更（`feat:` / `fix:`）应及时发版，**不要让 tag/Release 落后于 `main`**——`pi install git:` 用户跟随 `main` 没问题，但 `#vX.Y.Z` 锁定安装与 GitHub Release 附件依赖 tag。流程：先开 PR 提升 `package.json` 的 `version`（`feat:` → minor、`fix:` → patch；纯 `docs:`/`chore:` 不必发版）→ 合入后在 `main` 上打 `v<version>` tag 并推送（**打 tag 前向用户确认**；tag 必须等于 `v` + version，否则 `release.yml` 拒绝）→ workflow 自动创建 Release。发版后核对 GitHub Release 页面与 tag 是否对应**最新** main（`git ls-remote --tags` + `gh release list`）。**每次会话结束前自查：`v<version>` 是否落后于 `main` 的用户可见变更，落后则提醒发版。**
