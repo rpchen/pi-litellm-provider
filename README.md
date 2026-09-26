@@ -118,6 +118,8 @@ API Key 不会写入日志、错误信息或模型定义；错误信息中的 Ke
 
 扩展不读写你的 `models.json`。
 
+> **共存行为**：扩展与 `models.json` 中的同名 `litellm` 块**不会合并**——扩展激活期间由扩展整体接管该 provider（模型清单、`baseUrl`、`apiKey` 均以扩展为准）。**手工块里的 Key 不再生效**：扩展的认证来源是 `/login` 或 `LITELLM_API_KEY`，未配置则该 provider 视为未登录、模型不可见。扩展不修改 `models.json` 文件；移除扩展后手工块原样恢复（实测见 `docs/research/acceptance-notes.md` §6）。
+
 ## 开发
 
 ```bash

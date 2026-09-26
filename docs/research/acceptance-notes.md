@@ -73,7 +73,23 @@ Messages 的端点契约以 mock server + pi-ai 真实适配器验证（`test/me
 
 对应 spec：`pi-integration`「本地与远程安装都能加载」的两个 scenario 现均有真实证据。
 
-## 6. 待办
+## 6. 共存验证（手工 models.json 与扩展同名冲突，2026-09-26 补验）
+
+对应 spec `pi-integration`「不干扰用户自有 models.json 配置」。此前从未测过该场景（历次验收都用全新隔离 agent 目录，天然没有手工块）。补验方法：隔离 agent 目录写入含 `litellm` 块的 `models.json`（**全部占位值**：假地址 + `sk-manual-placeholder` + 一个 `manual-model`），四态矩阵实测。
+
+| 状态 | 结果 |
+|---|---|
+| 1. 无扩展（宿主原生） | 手工块 `manual-model` 可见（1 个模型）——手工配置独立可用 |
+| 2. 有扩展 + env Key | 0 diagnostics（注册不抛错）；发现 18 个真实模型；**手工模型不可见**（扩展整体接管，非合并） |
+| 3. 有扩展、无 env Key（仅手工块有 Key） | provider 视为未配置，**0 可见**——扩展的 `$LITELLM_API_KEY` 引用遮蔽手工块 apiKey（auth 源码：`configuredApiKey = extension?.apiKey ?? config?.apiKey`） |
+| 4. 移除扩展 | 手工块恢复可见（1 个）——扩展卸载零残留 |
+| 文件完整性 | 四态全程 `models.json` 字节不变：**扩展从不改写用户配置文件** |
+
+结论：**冲突 = 扩展接管**（宿主 provider 组合规则：扩展配置整体替换同名手工块的模型清单与认证来源），符合 spec「遵循宿主组合规则、不改写文件」的字面；对用户的实际影响是迁移期手工 Key 失效，README 迁移段已补充警示（必须 `/login` 或设 env 后模型才可见）。
+
+观察记录：该矩阵与 auth 探针的**首次执行**出现过一次与源码分析矛盾的读数（无 env Key 却报告 `configured API key` + 18 可见），随后 5 次独立复跑（矩阵重跑 + 两个 auth 探针各重跑）全部给出与源码、单元测试一致的结果（未配置、0 可见）。首次读数无法复现，疑为该次进程的环境残留；最终以复跑结果与 `provider-composer.js` 源码结论为准，列为观察项不作为缺陷。
+
+## 7. 待办
 
 - [ ] design Open Question：LiteLLM 对 Anthropic Messages 的 `x-api-key` 头是否接受——待有真实 Messages 部署时补验（当前以 `test/messages-endpoint.test.ts` 的 mock + pi-ai 真实适配器固化契约；见 tasks 4.2 的显式豁免注记）
 
