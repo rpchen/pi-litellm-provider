@@ -31,6 +31,18 @@ pi install git:github.com/rpchen/pi-litellm-provider
 指定版本：`pi install git:github.com/rpchen/pi-litellm-provider#v0.1.0`
 本地试跑（不安装）：`pi -e ./extensions/index.ts`
 
+安装会 clone 到 `~/.pi/agent/git/github.com/rpchen/pi-litellm-provider` 并写入全局 settings（`pi list` 可查看）。卸载（settings 条目即刻清除，`git/` 目录可能残留空壳，可手动删除）：
+
+```bash
+pi remove git:github.com/rpchen/pi-litellm-provider
+```
+
+## 快速开始
+
+1. **配置 LiteLLM 地址**（二选一，见下文"LiteLLM 地址"）：写 `~/.pi/agent/litellm.json`，或 `export LITELLM_BASE_URL="http://litellm.example:4000"`
+2. **打开 pi 并录入 API Key**：会话内 `/login` → 选 LiteLLM → 粘贴 Key
+3. **打开 `/model` 选模型开聊**：选择器每次打开都会实时向 LiteLLM 发起发现，几秒内模型即出现（pi 启动时也会后台自动发现一次）；Key 用环境变量方式的话，开 pi 后模型会自动就绪
+
 ## 配置
 
 ### 1. API Key
@@ -44,7 +56,8 @@ pi install git:github.com/rpchen/pi-litellm-provider
 无交互环境（CI、脚本）可用环境变量：
 
 ```bash
-export LITELLM_API_KEY="sk-xxx"
+export LITELLM_API_KEY="sk-xxx"          # bash / zsh
+$env:LITELLM_API_KEY = "sk-xxx"          # PowerShell
 ```
 
 两者同时存在时，`/login` 保存的凭据优先。发现与模型调用始终使用同一把 Key。
@@ -54,6 +67,11 @@ export LITELLM_API_KEY="sk-xxx"
 按优先级从高到低：
 
 1. 环境变量 `LITELLM_BASE_URL`
+
+   ```bash
+   export LITELLM_BASE_URL="http://litellm.example:4000"   # bash / zsh
+   $env:LITELLM_BASE_URL = "http://litellm.example:4000"   # PowerShell
+   ```
 2. 项目级配置文件 `<项目目录>/.pi/litellm.json`
 3. 全局配置文件 `~/.pi/agent/litellm.json`
 
@@ -84,6 +102,27 @@ export LITELLM_API_KEY="sk-xxx"
 }
 ```
 
+## 使用
+
+配置完成后（快速开始第 1–2 步），日常使用：
+
+**选择模型**：会话内 `/model` 打开模型选择器，LiteLLM 下列出的即当前 Key 可见的对话模型。
+
+**单次调用**（不进会话）：
+
+```bash
+pi -p "总结这个仓库的结构" --model litellm/gpt-6-sol
+```
+
+**推理档位**：会话内 `/thinking` 打开档位选择器，或 CLI 用 `--thinking xhigh` / `--thinking off`。
+
+- 档位由 models.dev 记录声明，因模型而异：声明了哪些档位选择器就只显示哪些；未声明 `reasoning` 的模型只有 `off`
+- 实测示例：`gpt-6-sol` 的 `xhigh` / `medium` / `off` 会分别把 `reasoning.effort` 置为 `xhigh` / `medium` / `none` 写入请求
+
+**凭据管理**：`/login` 重新录入或切换 Key；`/logout` 移除已存凭据（环境变量方式不受影响）。
+
+**自检**：`pi --list-models litellm` 可随时查看已发现的模型清单（地址、Key、发现、映射全链路正常时非空）。注意它**只回放上次发现的结果、不主动联网**——全新安装后首次发现前显示为空属正常，请以打开 `/model`（每次打开实时发现）为准；列不出模型再按下方"故障行为"排查。
+
 ## 刷新时机
 
 模型清单在以下时机刷新（pi 宿主机制）：
@@ -104,7 +143,8 @@ export LITELLM_API_KEY="sk-xxx"
 | LiteLLM 暂时不可达 / 超时 / 5xx / 429 | 保留上次成功清单，下个周期重试 |
 | Key 无效（401 / 403） | 撤下全部模型，提示 Key 无效；恢复后自动回来 |
 | models.dev 不可达 | 继续用 LiteLLM 数据注册（无推理档位、缺省字段不补充），后续重试 |
-| 地址未配置 | 不注册模型，不发起请求 |
+| 地址未配置 | 不注册模型，不发起请求，日志给出配置提示 |
+| 地址非法（非 http(s) 或无法解析） | 跳过该来源回退下一来源并告警；已采用地址不可用时不发起请求、撤下模型并记错误 |
 
 API Key 不会写入日志、错误信息或模型定义；错误信息中的 Key 会被脱敏。
 
@@ -114,7 +154,7 @@ API Key 不会写入日志、错误信息或模型定义；错误信息中的 Ke
 
 1. 按上文完成 Key 登录与地址配置，确认模型出现在 `/model` 中
 2. 删除 `models.json` 中手工的 litellm provider 块
-3. 回滚：`pi remove pi-litellm-provider`，恢复手工配置；如已 `/login`，用 `/logout` 移除凭据
+3. 回滚：`pi remove git:github.com/rpchen/pi-litellm-provider`，恢复手工配置；如已 `/login`，用 `/logout` 移除凭据
 
 扩展不读写你的 `models.json`。
 
