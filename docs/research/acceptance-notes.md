@@ -58,7 +58,22 @@ Messages 的端点契约以 mock server + pi-ai 真实适配器验证（`test/me
 
 补充说明：**`pi update --models` 不加载扩展**（`package-manager-cli.js` 只读 `models.json`），因此它不会调用扩展的 `refreshModels`。宿主对扩展 provider 的真实网络刷新路径是交互式启动（`InteractiveMode.run` → `refreshModelCatalogs`）、模型选择器打开、以及本扩展的轮询。README 需如实说明。
 
-## 5. 待办
+## 5. 安装态验证（真实 `pi install git:`，2026-09-26 补验）
+
+此前验收仅覆盖 `pi -e` 本地加载与 CI 的 node 层远程安装冒烟（检查 `pi.extensions` 入口存在），未验证过"用户真实安装"路径。本节补验：在隔离 agent 目录（`PI_CODING_AGENT_DIR=.tmp/pi-agent-install`）执行真实安装并以**纯安装态**（不带 `-e`）加载。凭据仍按约定运行时读取、仅内存使用。
+
+| 验证项 | 方法 | 结果 |
+|---|---|---|
+| `pi install git:github.com/rpchen/pi-litellm-provider` | 真实 CLI 安装 | ✅ clone 到 `git/github.com/rpchen/pi-litellm-provider`，`settings.json` 写入 `packages` 条目 |
+| 纯安装态加载（无 `-e`） | `createAgentSessionServices`（宿主真实启动路径） | ✅ 加载 1 个扩展（`resolvedPath` 确认为 **git clone** 内的 `extensions/index.ts`，非工作区）、0 errors、0 diagnostics、`litellm` provider 注册成功 |
+| peer 依赖边界 | `pi-coding-agent/dist/core/extensions/loader.js` 的 `getAliases()` 源码核实 | ✅ jiti alias 把 `@earendil-works/*` 解析到**宿主自身**安装，clone 内无 `node_modules` 属预期行为（与 pi-ollama-cloud 同款），结论与 clone 位置无关、适用于真实用户环境 |
+| 安装态发现 | network refresh（`force`） | ✅ 0 errors，18 个真实模型，`models-store.json` 写入 |
+| `pi --list-models litellm` | 真实 CLI | ✅ 18 行表格；272K（gpt-5.6/6 系列）与 512K（minimax-m3）阶梯截断、thinking、images 列均正确 |
+| 安装态真实调用 | `pi -p`（print 模式，无 `-e`） | ✅ Responses（`gpt-6-sol`）与 Chat（`mimo-v2.6-pro`）各一条成功返回 |
+
+对应 spec：`pi-integration`「本地与远程安装都能加载」的两个 scenario 现均有真实证据。
+
+## 6. 待办
 
 - [ ] design Open Question：LiteLLM 对 Anthropic Messages 的 `x-api-key` 头是否接受——待有真实 Messages 部署时补验（当前以 `test/messages-endpoint.test.ts` 的 mock + pi-ai 真实适配器固化契约；见 tasks 4.2 的显式豁免注记）
 
