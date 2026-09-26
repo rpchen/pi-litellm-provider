@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { normalizeLiteLLMURL } from "../src/core/litellm.ts"
+import { normalizeLiteLLMURL } from "../src/core/index.ts"
 import {
   DiscoveryError,
   fetchJSON,

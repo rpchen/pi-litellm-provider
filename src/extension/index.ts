@@ -13,7 +13,7 @@
  *  - `session_shutdown`: idempotent teardown.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
-import { normalizeLiteLLMURL } from "../core/litellm.ts"
+import { normalizeLiteLLMURL } from "../core/index.ts"
 import { loadConfig, type ExtensionConfig } from "./config.ts"
 import { refreshProviderModels, type DiscoveryDeps } from "./discovery.ts"
 import { PROVIDER_ID } from "./provider-id.ts"

@@ -5,4 +5,4 @@
  * package.json points at this file (`pi.extensions`).
  */
 
-export { default } from "../src/extension/index.ts"
+export { default } from "../dist/extension/index.js"

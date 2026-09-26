@@ -1,0 +1,23 @@
+## MODIFIED Requirements
+
+### Requirement: 扩展工厂注册 provider
+扩展 SHALL 在扩展工厂函数中调用 `pi.registerProvider("litellm", config)` 注册 id 为 `litellm`、显示名为 `LiteLLM` 的 provider，使其参与启动时的模型选择与 `pi --list-models`；注册的 provider 配置 SHALL 包含规范化的 baseUrl、经宿主解析的 apiKey 引用（`$ENV_VAR` 形式）、逐模型的 `api` id 与 `refreshModels`。扩展入口 SHALL 解析到已提交的 `dist` 适配层产物；未连接（缺地址或 Key）时扩展 SHALL 仍完成加载，注册带空模型清单的 provider 或不注册 provider 中的哪种形态由 design 决定，两种形态都 MUST NOT 抛出加载错误。
+
+#### Scenario: 启动时已连接
+- **WHEN** 用户设置好连接信息后运行 `pi --list-models litellm`
+- **THEN** LiteLLM provider 下列出当前 Key 可见的对话模型，且加载路径来自包内 `dist` 产物
+
+#### Scenario: 未连接时加载
+- **WHEN** 没有任何连接信息时启动 pi
+- **THEN** 扩展从已提交产物正常加载，不出现加载错误，LiteLLM 下没有可用模型
+
+### Requirement: 本地与远程安装都能加载
+扩展 SHALL 在本地开发加载（`pi -e ./extensions/index.ts`）与远程安装（`pi install git:github.com/rpchen/pi-litellm-provider`）两种方式下完成注册；发布清单 MUST 包含 `extensions` 入口和 `dist` 编译产物，即使安装时禁用 lifecycle scripts 也能加载。运行时代码 MUST 只依赖 peer 依赖 `@earendil-works/pi-ai` 与 `@earendil-works/pi-coding-agent`（由宿主环境提供），MUST NOT 依赖安装机器上不存在的文件路径（如平级仓库或构建缓存）。
+
+#### Scenario: 本地加载
+- **WHEN** 在仓库内运行 `pi -e ./extensions/index.ts --list-models litellm`
+- **THEN** 扩展通过已构建的 `dist` 适配层注册，LiteLLM 模型按连接信息注册
+
+#### Scenario: 远程安装加载
+- **WHEN** 在任意目录执行 `pi install git:github.com/rpchen/pi-litellm-provider`，且安装生命周期脚本被禁用
+- **THEN** 扩展从包内 `dist` 加载并完成注册，不因缺失平级仓库、缓存或现场构建工具而失败

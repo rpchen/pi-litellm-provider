@@ -1,6 +1,6 @@
 {
   "name": "pi-litellm-provider",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Pi extension that auto-discovers providers, protocols, models and reasoning variants from a LiteLLM proxy",
   "type": "module",
   "license": "MIT",
@@ -18,13 +18,14 @@
   },
   "files": [
     "extensions",
-    "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "typecheck": "bun scripts/run-with-core.ts tsc --noEmit",
+    "test": "bun scripts/run-with-core.ts bun test",
+    "build:dist": "bun scripts/build.ts",
     "test:package": "bun scripts/test-package.ts",
     "validate:spec": "openspec validate --all --strict --no-interactive"
   },

@@ -1,12 +1,12 @@
 /**
  * Host-independent HTTP fetching with timeout, error classification and key redaction.
  *
- * Copied from ../opencode-litellm-provider/src/net/fetch.ts with one addition: an
- * optional external AbortSignal is combined with the per-request timeout, so pi's
+ * Pi-side network adapter for the independent discovery core. The optional external
+ * AbortSignal is combined with the per-request timeout, so pi's
  * `refreshModels(context.signal)` cancellation reaches in-flight discovery requests.
  * No pi or OpenCode imports allowed in this directory.
  */
-import type { LiteLLMAddresses } from "../core/litellm.ts"
+import type { LiteLLMAddresses } from "../core/index.ts"
 
 export type DiscoveryErrorKind =
   | "network"

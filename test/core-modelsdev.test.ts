@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
-import { groupLiteLLMDeployments } from "../src/core/litellm.ts"
+import { groupLiteLLMDeployments } from "../src/core/index.ts"
 import {
   buildVariants,
   candidateModelIDs,
   releaseTimestamp,
   selectModelsDevRecord,
-} from "../src/core/modelsdev.ts"
+} from "../src/core/index.ts"
 
 function one(modelName: string, model: string, info: Record<string, unknown> = {}) {
   return groupLiteLLMDeployments({

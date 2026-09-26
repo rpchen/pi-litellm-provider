@@ -15,5 +15,5 @@
     "rootDir": ".",
     "types": ["bun", "node"]
   },
-  "include": ["src", "extensions", "test"]
+  "include": ["src", "test"]
 }

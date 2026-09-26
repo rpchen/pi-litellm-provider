@@ -9,10 +9,10 @@ Pi 扩展：填写 LiteLLM 地址并登录 API Key 后，自动发现并同步�
 - 默认按 LiteLLM 的阶梯价格起点截断上下文窗口
 - 启动、打开模型选择器与定时轮询时同步模型清单；短暂故障保留上次成功结果
 
-## 与 opencode-litellm-provider 的关系
+## 与共享 core 的关系
 
-本仓库是 LiteLLM 自动发现能力的 **pi 宿主适配器**。宿主无关的发现核心（LiteLLM 归一化、models.dev 补缺、能力映射、协议判定、轮询与降级）以单副本方式移植自平级的
-`../opencode-litellm-provider`（`src/core/`、`src/net/`），两者不共享宿主层代码。
+本仓库是 LiteLLM 自动发现能力的 **pi 宿主适配器**。宿主无关的 LiteLLM 归一化、models.dev 补缺、能力映射和协议判定来自独立的
+[`litellm-discovery-core`](https://github.com/rpchen/litellm-discovery-core)。每次更新构建固定一次 core `main` SHA，把它编译进提交的 `dist/`；用户安装或运行时不需要平级仓库、core 缓存、GitHub 网络或现场编译。
 
 决策背景见 `docs/decisions.md`。
 
@@ -166,11 +166,14 @@ API Key 不会写入日志、错误信息或模型定义；错误信息中的 Ke
 
 ```bash
 npm ci
+bun run build:dist      # 获取并固定本次构建使用的 core SHA，生成 dist/ 与 provenance
 bun run typecheck
 bun test
 npm run validate:spec   # OpenSpec 规格校验
-bun run test:package    # 校验 pi.extensions 与 npm 打包内容
+bun run test:package    # 禁用 lifecycle scripts 验证隔离安装后的入口与打包内容
 ```
+
+已生成产物的复验可设置 `LITELLM_CORE_SHA=<40位SHA>`，或运行 `bun scripts/prepare-core.ts --from-provenance`；这样不会跟随 core `main` 后续更新。`dist/core-provenance.json` 记录本次产物使用的仓库、分支和准确 SHA。
 
 在真实 pi 中加载（单次运行，不写入 settings）：
 
