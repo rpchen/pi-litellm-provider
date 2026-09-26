@@ -45,4 +45,4 @@
 - [x] 6\.6 修复 m3：未连接与 401/403 分支的空清单持久化前先做指纹比较（与已持久化清单一致时不写入）；验证：discovery 测试连续两次相同空结果只 publish 一次
 - [x] 6\.7 修复 i6：给 `test/extension.test.ts`"重复 session_start 不叠加轮询"补真实断言（验证轮询刷新只被触发一次的等价行为，或直接断言 stopPolling 幂等状态）；验证：测试含非零断言
 - [x] 6.8 修复 m5：清理 `docs/research/acceptance-notes.md` 陈旧待办（4.4 已完成，§4 待办区改为仅存真实未竟项）；验证：文档无已完成的 `[ ]` 条目
-- [ ] 6.9 全量门禁与治理：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿 → 功能分支 → PR（`CI` 绿）→ squash merge；合并后回到 5.1 待用户确认归档
+- [x] 6\.9 全量门禁与治理：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿 → 功能分支 → PR（`CI` 绿）→ squash merge；合并后回到 5.1 待用户确认归档
