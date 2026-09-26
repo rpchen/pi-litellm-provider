@@ -4,7 +4,7 @@ node_modules/
 # Temporary workspace (safe to clear; not committed)
 .tmp/
 
-# Tool-local scratch state (openspec-generated skills under .pi/skills ARE committed)
+# Tool-local scratch state (agent skills live only in .agents/skills)
 .pi/fabric/
 .claude/worktrees/
 
