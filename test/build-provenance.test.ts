@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { assertCleanCheckout, prepareCore } from "../scripts/prepare-core.ts"
 
 const root = process.cwd()
 
@@ -23,5 +24,17 @@ describe("dist provenance", () => {
     expect(entry).not.toContain("litellm-discovery-core")
     expect(entry).not.toContain(".tmp/discovery-core")
     expect(entry).toContain("../core/index.js")
+  })
+
+  test("拒绝带未跟踪修改的 core 缓存", () => {
+    const sha = process.env.LITELLM_CORE_SHA ?? JSON.parse(readFileSync(path.join(root, "dist", "core-provenance.json"), "utf8")).sha
+    const selection = prepareCore({ sha })
+    const marker = path.join(selection.cachePath, ".dirty-cache-review-marker")
+    writeFileSync(marker, "dirty\n", "utf8")
+    try {
+      expect(() => assertCleanCheckout(selection.cachePath)).toThrow("不干净")
+    } finally {
+      rmSync(marker, { force: true })
+    }
   })
 })

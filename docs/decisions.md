@@ -34,5 +34,7 @@
 
 - 更新构建：`bun run build:dist` 读取当时 `litellm-discovery-core/main` 的实际 SHA，获取到 `.tmp/discovery-core/<sha>/`，用同一份生成缓存完成编译，并提交 `dist/` 与 `dist/core-provenance.json`。
 - 固定 SHA 复验：设置 `LITELLM_CORE_SHA=<40位SHA>`，或使用 `bun scripts/prepare-core.ts --from-provenance`，不会因为 core `main` 后续更新而改变既有产物的输入。
+- 提交产物验收：`bun run verify:dist` 读取已提交 provenance 的 SHA，在临时目录重建并用 `git diff --no-index --exit-code` 与 `dist/` 比较；CI 不再用最新 `main` 覆盖后只检查“能否编译”。
+- 缓存完整性：复制 core 前检查 checkout 的 `git status --porcelain --untracked-files=all`；发现未暂存、已暂存或未跟踪修改即失败，避免 provenance SHA 与实际源码不一致。
 - `bun run typecheck` 与 `bun test` 会复用当前已准备的 SHA；首次运行时才解析 `main`。运行时入口 `extensions/index.ts` 只转发到 `dist/extension/index.js`，不访问 GitHub、平级仓库或本机缓存。
 - PR2 只迁移 Pi；OpenCode 的适配层留在 PR3，跨仓库联动验证留在 PR4。

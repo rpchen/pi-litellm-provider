@@ -167,6 +167,7 @@ API Key 不会写入日志、错误信息或模型定义；错误信息中的 Ke
 ```bash
 npm ci
 bun run build:dist      # 获取并固定本次构建使用的 core SHA，生成 dist/ 与 provenance
+bun run verify:dist     # 按已提交 provenance SHA 重建，并校验 dist/ 零差异
 bun run typecheck
 bun test
 npm run validate:spec   # OpenSpec 规格校验

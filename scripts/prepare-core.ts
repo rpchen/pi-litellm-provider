@@ -33,13 +33,20 @@ function isSHA(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value)
 }
 
-function readProvenanceSHA(): string | undefined {
+export function readProvenanceSHA(): string | undefined {
   if (!existsSync(PROVENANCE_PATH)) return undefined
   try {
     const parsed = JSON.parse(readFileSync(PROVENANCE_PATH, "utf8")) as { sha?: unknown }
     return typeof parsed.sha === "string" && isSHA(parsed.sha) ? parsed.sha.toLowerCase() : undefined
   } catch {
     return undefined
+  }
+}
+
+export function assertCleanCheckout(cachePath: string): void {
+  const status = runGit(["status", "--porcelain", "--untracked-files=all"], cachePath)
+  if (status) {
+    throw new Error(`core 缓存工作区不干净，拒绝使用：${cachePath}`)
   }
 }
 
@@ -65,6 +72,7 @@ function ensureCheckout(sha: string): string {
   }
   const verified = runGit(["rev-parse", "HEAD"], cachePath).toLowerCase()
   if (verified !== sha) throw new Error(`core checkout SHA 校验失败：期望 ${sha}，实际 ${verified}`)
+  assertCleanCheckout(cachePath)
   if (!existsSync(path.join(cachePath, "src", "core"))) {
     throw new Error(`core checkout 缺少 src/core：${sha}`)
   }

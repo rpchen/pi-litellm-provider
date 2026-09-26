@@ -35,8 +35,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build distributable artifact
-        run: bun run build:dist
+      - name: Verify committed distributable artifact
+        run: bun run verify:dist
 
       - name: Typecheck
         run: bun run typecheck
