@@ -102,6 +102,8 @@ $env:LITELLM_API_KEY = "sk-xxx"          # PowerShell
 }
 ```
 
+> **修改配置后需 `/reload` 或重启 pi 生效**：配置在 pi 启动与会话加载（`session_start`）时读取一次，与 pi-ollama-cloud 行为一致。若在 pi 运行中才创建/修改 `litellm.json`，请在会话内执行 `/reload`（或重启 pi），否则扩展会继续使用旧快照（表现为"未配置地址"告警）。
+
 ## 使用
 
 配置完成后（快速开始第 1–2 步），日常使用：

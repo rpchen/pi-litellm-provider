@@ -177,6 +177,12 @@ export async function getModelsDevCatalog(options: ModelsDevOptions = {}): Promi
       return value
     })
     .catch((error: unknown) => {
+      // A host-cancelled refresh aborts this fetch too: degrade silently without
+      // touching the cache state or poisoning the retry backoff (whatever a previous
+      // real failure scheduled still holds; the next refresh fetches normally).
+      if (options.signal?.aborted) {
+        return {}
+      }
       const failedAt = options.now?.() ?? Date.now()
       catalogCache.value = undefined
       catalogCache.expiresAt = 0

@@ -113,6 +113,13 @@ export async function refreshProviderModels(
     await publishIfChanged(context, stored, outcome.models)
     return outcome.models
   } catch (error) {
+    // Host cancellation (a newer refresh superseded this one, the model selector's 15s
+    // catalog budget expired, or the session is shutting down) aborts in-flight requests.
+    // That is normal lifecycle, not a failure: replay the persisted baseline silently;
+    // the host discards this refresh's result anyway once the signal is aborted.
+    if (context.signal?.aborted) {
+      return stored?.models ?? []
+    }
     if (error instanceof DiscoveryError && error.kind === "auth") {
       logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`)
       await publishIfChanged(context, stored, [])
@@ -131,6 +138,12 @@ export async function refreshProviderModels(
     logger.warn(`LiteLLM 发现失败，保留上次结果：${messageOf(error)}`)
     throw error
   }
+}
+
+/** Whether the error is a host-side cancellation (AbortError / "…aborted" reason). */
+function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.name === "AbortError" || /aborted/i.test(error.message)
 }
 
 /** Whether the failure came from address normalization (config error, not transport). */
@@ -191,9 +204,15 @@ function modelsFingerprint(models: readonly ProviderModelConfigLike[] | undefine
 /** Persist the given model list into the host catalog; failures must not fail the refresh. */
 async function publish(context: RefreshModelsContextLike, models: ProviderModelConfigLike[]): Promise<void> {
   if (!context.publish) return
+  // A cancelled refresh must not write the store: skip before racing the abort.
+  if (context.signal?.aborted) return
   try {
     await context.publish({ persist: { models, checkedAt: Date.now() } })
   } catch (error) {
+    // The host's publish rejects with an abort reason when cancellation lands during the
+    // write (supersede / 15s catalog timeout / shutdown) — normal lifecycle, not a
+    // persistence failure. Only real store errors (disk, permissions) are worth a warning.
+    if (context.signal?.aborted || isAbortError(error)) return
     // Persistence failure must not prevent this refresh's result from taking effect.
     const message = error instanceof Error ? error.message : String(error)
     console.warn(`LiteLLM 目录持久化失败（不影响本次结果）：${message}`)

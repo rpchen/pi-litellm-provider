@@ -182,4 +182,30 @@ describe("models.dev 缓存", () => {
     expect(await getModelsDevCatalog(options)).toEqual({ anthropic: {} })
     expect(calls).toBe(2)
   })
+
+  test("signal 中止的请求静默降级，且不设退避", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const warnings: string[] = []
+    const logger = { warn: (message: string) => warnings.push(message) }
+
+    const abortedFetch: FetchLike = async (_input, init) => {
+      if (init?.signal?.aborted) throw new DOMException("This operation was aborted", "AbortError")
+      return response(200, '{"never":{}}')
+    }
+    const degraded = await getModelsDevCatalog({ fetchImpl: abortedFetch, signal: controller.signal, logger })
+    expect(degraded).toEqual({})
+    expect(warnings).toEqual([])
+
+    // The abort must not have scheduled a retry backoff: the very next fetch proceeds.
+    let okCalls = 0
+    const okFetch: FetchLike = async () => {
+      okCalls += 1
+      return response(200, '{"openai":{}}')
+    }
+    const recovered = await getModelsDevCatalog({ fetchImpl: okFetch, signal: new AbortController().signal, logger })
+    expect(recovered).toEqual({ openai: {} })
+    expect(okCalls).toBe(1)
+    expect(warnings).toEqual([])
+  })
 })
