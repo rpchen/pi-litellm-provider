@@ -96,7 +96,7 @@ provider `baseUrl` = 规范化根地址 + `/v1`。pi-ai 客户端拼路径（核
 `ModelSpec` 的 variants（core 输出，宿主中立）在 `map.ts` 翻译为 pi 的 `thinkingLevelMap`。pi 的档位集固定为 `off/minimal/low/medium/high/xhigh/max`，规则（核实自 pi-ai `models.js` 的 `getSupportedThinkingLevels` 与各 API 实现）：
 
 - **effort 类（chat / responses）**：记录的每个取值直接映射到同名 pi 档位（`none → off`）；**未出现在记录中的档位显式置 `null` 隐藏**（官方内置模型同款写法，如 `minimal: null`）。例如 values `[none, low, medium, high, xhigh]` → `{ off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null }`。`reasoning: true`。请求侧由 pi-ai 写入 `reasoning_effort`（chat）/ `reasoning.effort`（responses）。
-- **budget_tokens 类（仅 Messages 协议）**：生成 `high`；记录声明最大值时额外生成 `max`。两者在 pi 的预算路径下按档位名映射预算数值——**pi 从自身的 `thinkingBudgets` 表推导**（`adjustMaxTokensForThinking`），`thinkingLevelMap` 的值不参与数值计算（源码核实）。因此记录的 64000 预算无法经注册配置注入。`off` 不写键（可选用，选择后 pi 发送 `thinking: {type: "disabled"}`）；`minimal/low/medium` 与未声明的 `max` 置 `null` 隐藏。`reasoning: true`。
+- **budget_tokens 类（仅 Messages 协议）**：生成 `high`；记录声明的最大值超过 16000 时额外生成 `max`（不超过则只生成 `high`）。两者在 pi 的预算路径下按档位名映射预算数值——**pi 从自身的 `thinkingBudgets` 表推导**（`adjustMaxTokensForThinking`），`thinkingLevelMap` 的值不参与数值计算（源码核实）。因此记录的 64000 预算无法经注册配置注入。`off` 不写键（可选用，选择后 pi 发送 `thinking: {type: "disabled"}`）；`minimal/low/medium` 与未声明的 `max` 置 `null` 隐藏。`reasoning: true`。
 - **toggle 类 / 无 reasoning_options / 无选中记录**：`reasoning: false`，不写 `thinkingLevelMap`。
 - **与上位仓库差异**：variants（档位列表 + 每档 settings）被 pi 的固定档位集取代；OpenCode 侧 budget 档位的显式 token 数值（16000 / 记录声明的 64000）在 pi 侧无法保留——档位可选用性保留，数值改由宿主推导。**这是宿主 API 的硬限制**（`ProviderModelConfig` 无 per-model thinkingBudgets 入口），不是实现取舍。design 规则表在 map.ts 注释中固化。
 
