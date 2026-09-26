@@ -31,7 +31,7 @@
 
 ## 5. 收尾
 
-- [ ] 5.1 走治理流程合入 main：功能分支 → PR（`CI` 绿）→ squash merge；`openspec validate --all --strict` 通过；确认本 tasks 全部勾选后按流程归档 change（`openspec-archive-change`，**归档须经用户审核确认后执行**）
+- [x] 5.1 走治理流程合入 main：功能分支 → PR（`CI` 绿）→ squash merge；`openspec validate --all --strict` 通过；确认本 tasks 全部勾选后按流程归档 change（`openspec-archive-change`，**归档须经用户审核确认后执行**）
 
 ## 6. 独立评审修复（2026-09-26 评审报告）
 
