@@ -25,10 +25,24 @@
 > 以下凭据规则同 tasks 1 头注。所有真实验收结果记录到 `docs/research/acceptance-notes.md`（只记行为结论，不记地址与 Key）。发现宿主行为与 design 假设不符时：先调整实现并同步更新 design.md；只有 spec 无法满足时才停下来与用户确认。
 
 - [x] 4.1 本地全量验证：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿；在真实 pi 中执行 `/login` 选 LiteLLM 粘贴 Key，确认 Key 落入 auth.json、`pi -e ./extensions/index.ts --list-models litellm` 列出与 `/v1/model/info` 一致的对话模型（同时验证 env 兜底路径与未配置时无加载错误）
-- [x] 4.2 真实 LiteLLM 三协议验收：chat / responses / messages（Claude 家族）各选一个代表模型发一条消息成功；确认 messages 请求实际发往的端点路径与 design D3 假设一致、请求头携带同一把 Key；切换推理档位发消息确认档位参数生效（xhigh 与 off 各一次）；重启 pi 验证持久化清单回放（restore 阶段模型立即可见，network 阶段校正）；发现与 design 不符处更新 design.md 与 map.ts 并复跑本项
+- [x] 4.2 真实 LiteLLM 三协议验收：chat / responses / messages（Claude 家族）各选一个代表模型发一条消息成功；确认 messages 请求实际发往的端点路径与 design D3 假设一致、请求头携带同一把 Key；切换推理档位发消息确认档位参数生效（xhigh 与 off 各一次）；重启 pi 验证持久化清单回放（restore 阶段模型立即可见，network 阶段校正）；发现与 design 不符处更新 design.md 与 map.ts 并复跑本项。（**显式豁免**：当前 LiteLLM 无 Claude/Messages 部署，messages 的"真实调用成功"以 mock server + pi-ai 真实适配器验证端点与 `x-api-key` 头替代——见 `docs/research/acceptance-notes.md` §2 与 `test/messages-endpoint.test.ts`；design Open Question"LiteLLM 是否接受 `x-api-key`"保持开放，待有真实部署时补验。）
 - [x] 4.3 轮询与降级验收：真实环境等待一个轮询周期确认新增/删除模型被跟随；临时断网或改错地址确认旧模型保留；换无效 Key 确认模型撤下并出现 Key 无效错误、恢复后模型回归；结果记入 acceptance-notes
 - [x] 4.4 更新 README：安装方式（`pi install git:`）、Key 录入两种方式（`/login` 首选 + `LITELLM_API_KEY` 兜底）、地址配置三层来源（env / 项目级 / 全局 `litellm.json`）、可选配置项说明（pollInterval/contextTierCap/protocolOverrides）、从手工 models.json 迁移的步骤与回滚；验证：README 示例中的地址全部为占位符（`http://litellm.example:4000`），无任何真实内网地址或 Key
 
 ## 5. 收尾
 
-- [x] 5.1 走治理流程合入 main：功能分支 → PR（`CI` 绿）→ squash merge；`openspec validate --all --strict` 通过；确认本 tasks 全部勾选后按流程归档 change（`openspec-archive-change`）
+- [ ] 5.1 走治理流程合入 main：功能分支 → PR（`CI` 绿）→ squash merge；`openspec validate --all --strict` 通过；确认本 tasks 全部勾选后按流程归档 change（`openspec-archive-change`，**归档须经用户审核确认后执行**）
+
+## 6. 独立评审修复（2026-09-26 评审报告）
+
+> 来源：`litellm/mimo-v2.6-pro` 独立评审（1 blocker / 4 major / 8 minor）。本组前的 spec/design 修正已随 update-change 写入（A1/A2、B1/B2、C1-C3、D1/D2）；以下为代码与文档侧修复。
+
+- [x] 6.1 修复 B1（blocker）：`src/extension/map.ts` budget 分支不写 `off` 键（保持可关闭思考），修正 `test/map.test.ts` 对应断言（`off` 缺省而非 `null`）；验证：测试覆盖 budget 模型 `off` 缺省 + `getSupportedThinkingLevels` 语义（high/max 可选、minimal/low/medium 为 null）
+- [x] 6\.2 修复 M1：`src/extension/config.ts` 校验 `baseUrl` 为 http(s) URI，非法时跳过该来源回退下一来源并 `logger.warn`；字段类型非法同样告警；验证：`test/config.test.ts` 新增"非 http(s) 跳过回退"与"字段非法记录警告"两场景
+- [x] 6\.3 修复 M2：地址缺失时记录说明性提示（"未配置 LiteLLM 地址，设置 LITELLM_BASE_URL 或 litellm.json"）；验证：discovery 测试断言未连接分支发出 warn
+- [x] 6\.4 修复 m1：注册与轮询重注册前规范化 provider 级 `baseUrl`（经 `normalizeLiteLLMURL` 取根地址，空地址保持空串）；验证：extension 测试断言注册配置的 `baseUrl` 无尾斜杠、无重复 `/v1`
+- [x] 6\.5 修复 m2：非 http(s) 地址错误按 spec 记 error 级且文案不带"保留上次结果"前缀（配置类错误与网络类错误分级）；验证：测试断言日志级别与文案
+- [x] 6\.6 修复 m3：未连接与 401/403 分支的空清单持久化前先做指纹比较（与已持久化清单一致时不写入）；验证：discovery 测试连续两次相同空结果只 publish 一次
+- [x] 6\.7 修复 i6：给 `test/extension.test.ts`"重复 session_start 不叠加轮询"补真实断言（验证轮询刷新只被触发一次的等价行为，或直接断言 stopPolling 幂等状态）；验证：测试含非零断言
+- [x] 6.8 修复 m5：清理 `docs/research/acceptance-notes.md` 陈旧待办（4.4 已完成，§4 待办区改为仅存真实未竟项）；验证：文档无已完成的 `[ ]` 条目
+- [ ] 6.9 全量门禁与治理：`bun run typecheck && bun test && npm run validate:spec && bun run test:package` 全绿 → 功能分支 → PR（`CI` 绿）→ squash merge；合并后回到 5.1 待用户确认归档

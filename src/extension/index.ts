@@ -13,12 +13,28 @@
  *  - `session_shutdown`: idempotent teardown.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { normalizeLiteLLMURL } from "../core/litellm.ts"
 import { loadConfig, type ExtensionConfig } from "./config.ts"
 import { refreshProviderModels, type DiscoveryDeps } from "./discovery.ts"
 import { PROVIDER_ID } from "./provider-id.ts"
 import type { ProviderConfigLike, RefreshModelsContextLike } from "./types.ts"
 
 export { PROVIDER_ID }
+
+/**
+ * Normalize an address for provider-level registration (spec: 注册的配置包含规范化的
+ * baseUrl). Unnormalizable input (non-http(s), userinfo, malformed) registers as an
+ * empty baseUrl: discovery separately reports the configuration error and registers no
+ * models, so the host never sees a provider pointing at a dead scheme.
+ */
+export function normalizedProviderBaseUrl(raw: string): string {
+  if (raw.length === 0) return ""
+  try {
+    return normalizeLiteLLMURL(raw).rootURL
+  } catch {
+    return ""
+  }
+}
 
 /** Build the provider config for the current config snapshot. */
 export function buildProviderConfig(
@@ -27,7 +43,7 @@ export function buildProviderConfig(
 ): ProviderConfigLike {
   return {
     name: "LiteLLM",
-    baseUrl: getConfig().baseUrl,
+    baseUrl: normalizedProviderBaseUrl(getConfig().baseUrl),
     // The host resolves this reference through its own auth chain: a `/login` stored
     // credential wins, then the LITELLM_API_KEY environment variable.
     apiKey: "$LITELLM_API_KEY",

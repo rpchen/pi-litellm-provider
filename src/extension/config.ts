@@ -56,30 +56,65 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/** Keep only known keys with valid types; drop everything else silently. */
-function sanitizeFileConfig(raw: Record<string, unknown>): FileConfig {
+/** True when the value parses as an http(s) URL (spec: 地址必须是 http 或 https). */
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === "http:" || url.protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Keep only known keys with valid types. Type-invalid known fields are dropped with a
+ * warning (spec: 配置文件字段非法时记录警告); unknown keys are ignored silently.
+ */
+function sanitizeFileConfig(raw: Record<string, unknown>, source: string, logger: ConfigLogger): FileConfig {
   const out: FileConfig = {}
 
-  if (typeof raw.baseUrl === "string" && raw.baseUrl.trim().length > 0) {
-    out.baseUrl = raw.baseUrl.trim()
-  }
-
-  if (typeof raw.pollInterval === "number" && Number.isFinite(raw.pollInterval) && raw.pollInterval > 0) {
-    out.pollInterval = raw.pollInterval
-  }
-
-  if (typeof raw.contextTierCap === "boolean") {
-    out.contextTierCap = raw.contextTierCap
-  }
-
-  if (isRecord(raw.protocolOverrides)) {
-    const overrides: Record<string, ConfigProtocol> = {}
-    for (const [model, protocol] of Object.entries(raw.protocolOverrides)) {
-      if (typeof protocol === "string" && PROTOCOLS.has(protocol as ConfigProtocol)) {
-        overrides[model] = protocol as ConfigProtocol
-      }
+  if ("baseUrl" in raw) {
+    const value = raw.baseUrl
+    if (typeof value === "string" && value.trim().length > 0 && isHttpUrl(value.trim())) {
+      out.baseUrl = value.trim()
+    } else {
+      // Spec: 非字符串或非 http(s) URI 的 baseUrl → 跳过该来源，记录警告。
+      logger.warn(`LiteLLM 配置 ${source} 的 baseUrl 非法（需要非空的 http(s) 地址），已跳过该来源`)
     }
-    if (Object.keys(overrides).length > 0) out.protocolOverrides = overrides
+  }
+
+  if ("pollInterval" in raw) {
+    const value = raw.pollInterval
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      out.pollInterval = value
+    } else {
+      logger.warn(`LiteLLM 配置 ${source} 的 pollInterval 非法（需要正数秒），已忽略`)
+    }
+  }
+
+  if ("contextTierCap" in raw) {
+    const value = raw.contextTierCap
+    if (typeof value === "boolean") {
+      out.contextTierCap = value
+    } else {
+      logger.warn(`LiteLLM 配置 ${source} 的 contextTierCap 非法（需要布尔值），已忽略`)
+    }
+  }
+
+  if ("protocolOverrides" in raw) {
+    if (isRecord(raw.protocolOverrides)) {
+      const overrides: Record<string, ConfigProtocol> = {}
+      for (const [model, protocol] of Object.entries(raw.protocolOverrides)) {
+        if (typeof protocol === "string" && PROTOCOLS.has(protocol as ConfigProtocol)) {
+          overrides[model] = protocol as ConfigProtocol
+        } else {
+          logger.warn(`LiteLLM 配置 ${source} 的 protocolOverrides.${model} 非法（需要 chat/responses/messages），已忽略`)
+        }
+      }
+      if (Object.keys(overrides).length > 0) out.protocolOverrides = overrides
+    } else {
+      logger.warn(`LiteLLM 配置 ${source} 的 protocolOverrides 非法（需要对象），已忽略`)
+    }
   }
 
   return out
@@ -94,7 +129,7 @@ function readConfigFile(path: string, logger: ConfigLogger): FileConfig {
       logger.warn(`LiteLLM 配置 ${path} 不是对象，已忽略`)
       return {}
     }
-    return sanitizeFileConfig(parsed)
+    return sanitizeFileConfig(parsed, path, logger)
   } catch (error) {
     logger.warn(`LiteLLM 配置 ${path} 解析失败，已忽略：${error instanceof Error ? error.message : String(error)}`)
     return {}
@@ -119,9 +154,24 @@ export function loadConfig(
   const globalFile = readConfigFile(globalConfigPath, logger)
   const projectFile = readConfigFile(projectConfigPath, logger)
 
-  // Address precedence: env > project > global.
-  const envBaseUrl = env.LITELLM_BASE_URL?.trim()
-  const baseUrl = envBaseUrl && envBaseUrl.length > 0 ? envBaseUrl : (projectFile.baseUrl ?? globalFile.baseUrl ?? "")
+  // Address precedence: env > project > global. Every source must yield a non-empty,
+  // valid http(s) address (spec: 非空且合法); invalid sources are skipped with a warning
+  // so a bad value never blocks a lower-priority valid one.
+  const candidates: Array<{ source: string; value: string | undefined }> = [
+    { source: "环境变量 LITELLM_BASE_URL", value: env.LITELLM_BASE_URL?.trim() },
+    { source: projectConfigPath, value: projectFile.baseUrl },
+    { source: globalConfigPath, value: globalFile.baseUrl },
+  ]
+  let baseUrl = ""
+  for (const candidate of candidates) {
+    const value = candidate.value
+    if (value === undefined || value.length === 0) continue
+    if (isHttpUrl(value)) {
+      baseUrl = value
+      break
+    }
+    logger.warn(`LiteLLM 地址来源 ${candidate.source} 非法（需要 http(s) 地址），已跳过该来源`)
+  }
 
   // Tuning precedence mirrors the address sources so a project can override the global
   // defaults; `pollInterval` is clamped to the documented minimum.

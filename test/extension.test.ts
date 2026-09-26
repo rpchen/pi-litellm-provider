@@ -58,6 +58,21 @@ describe("扩展工厂注册形态", () => {
     expect(registrations[0]!.config.baseUrl).toBe("")
   })
 
+  test("注册的 baseUrl 是规范化后的根地址（m1）", () => {
+    const { api, registrations } = fakePi()
+    piLitellmProvider(api, { config: config({ baseUrl: "http://litellm.example:4000/v1/" }), deps: silentDeps })
+    expect(registrations[0]!.config.baseUrl).toBe("http://litellm.example:4000")
+    // No trailing slash, no duplicate /v1 — normalization happens before registration.
+    expect(registrations[0]!.config.baseUrl!.endsWith("/")).toBeFalse()
+    expect(registrations[0]!.config.baseUrl!.endsWith("/v1")).toBeFalse()
+  })
+
+  test("无法规范化的地址注册为空 baseUrl 而不抛错", () => {
+    const { api, registrations } = fakePi()
+    piLitellmProvider(api, { config: config({ baseUrl: "ftp://litellm.example" }), deps: silentDeps })
+    expect(registrations[0]!.config.baseUrl).toBe("")
+  })
+
   test("refreshModels 委托给发现入口", async () => {
     const { api, registrations } = fakePi()
     piLitellmProvider(api, { config: config({ baseUrl: "" }), deps: silentDeps })
@@ -110,16 +125,53 @@ describe("轮询生命周期", () => {
     await handlers.get("session_shutdown")![0]!({ type: "session_shutdown", reason: "quit" }, ctx)
   })
 
-  test("重复 session_start 不叠加轮询", async () => {
+  test("重复 session_start 不叠加轮询，shutdown 幂等清理", async () => {
     const { api, handlers } = fakePi()
     piLitellmProvider(api, { config: config({ pollInterval: 30 }), deps: silentDeps })
-    const ctx = {
-      cwd: process.cwd(),
-      modelRegistry: { async refresh() { return { aborted: false, errors: new Map() } } },
+
+    // Spy on the timer lifecycle: each startPolling call creates one interval; stacked
+    // timers from repeated session_start would show as multiple live intervals.
+    interface FakeTimer {
+      unref?: () => void
+      live: boolean
     }
-    await handlers.get("session_start")![0]!({ type: "session_start", reason: "startup" }, ctx)
-    await handlers.get("session_start")![0]!({ type: "session_start", reason: "reload" }, ctx)
-    await handlers.get("session_shutdown")![0]!({ type: "session_shutdown", reason: "reload" }, ctx)
+    const timers: FakeTimer[] = []
+    const originalSet = globalThis.setInterval
+    const originalClear = globalThis.clearInterval
+    ;(globalThis as unknown as { setInterval: unknown }).setInterval = () => {
+      const timer: FakeTimer = { live: true, unref: () => {} }
+      timers.push(timer)
+      return timer
+    }
+    ;(globalThis as unknown as { clearInterval: unknown }).clearInterval = (timer: FakeTimer) => {
+      timer.live = false
+    }
+
+    try {
+      const ctx = {
+        cwd: process.cwd(),
+        modelRegistry: { async refresh() { return { aborted: false, errors: new Map() } } },
+      }
+      await handlers.get("session_start")![0]!({ type: "session_start", reason: "startup" }, ctx)
+      await handlers.get("session_start")![0]!({ type: "session_start", reason: "reload" }, ctx)
+      // Two starts must not stack timers.
+      expect(timers.filter((timer) => timer.live)).toHaveLength(1)
+
+      await handlers.get("session_shutdown")![0]!({ type: "session_shutdown", reason: "reload" }, ctx)
+      expect(timers.filter((timer) => timer.live)).toHaveLength(0)
+
+      // Second shutdown is a no-op and must not clear anything twice or throw.
+      await handlers.get("session_shutdown")![0]!({ type: "session_shutdown", reason: "quit" }, ctx)
+      expect(timers.filter((timer) => timer.live)).toHaveLength(0)
+
+      // A start after shutdown starts a fresh timer (session replacement flow).
+      await handlers.get("session_start")![0]!({ type: "session_start", reason: "startup" }, ctx)
+      expect(timers.filter((timer) => timer.live)).toHaveLength(1)
+      await handlers.get("session_shutdown")![0]!({ type: "session_shutdown", reason: "quit" }, ctx)
+    } finally {
+      ;(globalThis as unknown as { setInterval: unknown }).setInterval = originalSet
+      ;(globalThis as unknown as { clearInterval: unknown }).clearInterval = originalClear
+    }
   })
 
   test("startPolling 返回幂等停止函数且 unref 定时器", async () => {

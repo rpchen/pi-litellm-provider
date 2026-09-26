@@ -5,7 +5,7 @@
 ## ADDED Requirements
 
 ### Requirement: 刷新触发
-扩展 SHALL 在以下时机执行发现：pi 宿主调用 `refreshModels` 且允许网络访问时（宿主在启动、打开模型选择器、`pi update --models` 等时机触发）；此外扩展 SHALL 在自身生命周期内按轮询间隔周期触发一次宿主刷新并等待其完成。轮询间隔 SHALL 默认 5 分钟，可通过扩展配置调整，最小 30 秒。`refreshModels` 收到的 abort signal SHALL 被传递给所有阻塞网络 IO。
+扩展 SHALL 在以下时机执行发现：pi 宿主调用 `refreshModels` 且允许网络访问时（宿主在启动、打开模型选择器等时机触发）；此外扩展 SHALL 在自身生命周期内按轮询间隔周期触发一次宿主刷新并等待其完成。轮询间隔 SHALL 默认 5 分钟，可通过扩展配置调整，最小 30 秒。`refreshModels` 收到的 abort signal SHALL 被传递给所有阻塞网络 IO。
 
 #### Scenario: 管理员新增模型
 - **WHEN** LiteLLM 管理员新增一个对话模型部署，且用户的 Key 有权访问
@@ -20,7 +20,7 @@
 - **THEN** 网络请求随 signal 中止，注册结果保持不变，不发布半成品清单
 
 ### Requirement: 宿主两阶段刷新语义
-`refreshModels` 的 restore 阶段（不允许网络）SHALL 返回宿主持久化的上次成功清单（`context.stored`）；network 阶段（凭据解析成功才进入）SHALL 执行真实发现，成功结果经 `context.publish({ persist })` 交宿主 models store 持久化。发现成功但结果为空清单时 SHALL NOT 持久化空清单（防止一次异常空结果跨会话传播），此时撤下内存中的模型即可。持久化写入失败 MUST NOT 阻止本次发现结果生效。
+`refreshModels` 的 restore 阶段（不允许网络）SHALL 返回宿主持久化的上次成功清单（`context.stored`）；network 阶段（凭据解析成功才进入）SHALL 执行真实发现，成功结果（包括空清单）经 `context.publish({ persist })` 交宿主 models store 持久化，使空结果与撤下状态跨重启保持。持久化写入失败 MUST NOT 阻止本次发现结果生效。
 
 #### Scenario: 重启后先回放再校正
 - **WHEN** 上次会话成功发现 8 个模型并已持久化，本次启动 LiteLLM 暂不可达
