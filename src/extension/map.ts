@@ -1,14 +1,14 @@
 /**
  * Translation seam between the host-independent discovery core and pi's provider config.
  *
- * The core (shared with ../opencode-litellm-provider) produces host-neutral model specs.
+ * The independent litellm-discovery-core produces host-neutral model specs.
  * This module owns the only host-specific mapping:
  *  - LiteLLM protocol → pi-ai API id
  *  - ModelSpec → ProviderModelConfig, including thinkingLevelMap translation
  *  - per-model baseUrl: chat/responses use `{root}/v1`, messages uses `{root}` because
  *    `@anthropic-ai/sdk` appends `/v1/messages` itself (see design D3).
  */
-import type { ModelSpec } from "../core/build.ts"
+import type { ModelSpec } from "../core/index.ts"
 import type { ProviderModelConfigLike, ThinkingLevel } from "./types.ts"
 
 /** LiteLLM protocol → pi-ai API id. */

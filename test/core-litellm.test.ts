@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import fixture from "./fixtures/litellm-model-info.json" with { type: "json" }
-import { groupLiteLLMDeployments, normalizeLiteLLMURL } from "../src/core/litellm.ts"
+import { groupLiteLLMDeployments, normalizeLiteLLMURL } from "../src/core/index.ts"
 
 describe("normalizeLiteLLMURL", () => {
   test.each([

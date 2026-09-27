@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+src/core/
+.tmp/discovery-core/
 
 # Temporary workspace (safe to clear; not committed)
 .tmp/

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import litellm from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
-import { mapCapabilities } from "../src/core/capabilities.ts"
-import { groupLiteLLMDeployments } from "../src/core/litellm.ts"
-import { selectModelsDevRecord } from "../src/core/modelsdev.ts"
+import { mapCapabilities } from "../src/core/index.ts"
+import { groupLiteLLMDeployments } from "../src/core/index.ts"
+import { selectModelsDevRecord } from "../src/core/index.ts"
 
 const groups = groupLiteLLMDeployments(litellm)
 function mapped(modelName: string, contextTierCap = true) {

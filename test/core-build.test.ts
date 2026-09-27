@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import litellm from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
-import { buildModelSpecs, modelFingerprint } from "../src/core/build.ts"
+import { buildModelSpecs, modelFingerprint } from "../src/core/index.ts"
 
 const options = { contextTierCap: true, protocolOverrides: {} }
 

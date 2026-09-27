@@ -35,11 +35,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify committed distributable artifact
+        run: bun run verify:dist
+
       - name: Typecheck
         run: bun run typecheck
 
       - name: Run tests
-        run: bun test
+        run: bun run test
 
       - name: Validate OpenSpec
         run: npm run validate:spec

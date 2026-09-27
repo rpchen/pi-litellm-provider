@@ -12,8 +12,8 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildModelSpecs, modelFingerprint, type ModelSpec } from "../core/build.ts"
-import { normalizeLiteLLMURL } from "../core/litellm.ts"
+import { buildModelSpecs, modelFingerprint, type ModelSpec } from "../core/index.ts"
+import { normalizeLiteLLMURL } from "../core/index.ts"
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog, type FetchLike } from "../net/fetch.ts"
 import type { ExtensionConfig } from "./config.ts"
 import { toProviderModels } from "./map.ts"
