@@ -243,5 +243,68 @@ describe("Core refresh coordinator 接入", () => {
     expect(stale.map((model) => model.id)).toEqual(["coordinated-model"])
     expect(warnings.some((message) => message.includes("last-known-good"))).toBeTrue()
   })
+  test("持久化 snapshot 只在 endpoint fingerprint 兼容时恢复", async () => {
+    let persisted: unknown
+    const built = buildProviderConfig(() => config(), {
+      fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
+      loadModelsDevCatalog: async () => ({}),
+      logger: { warn: () => {}, error: () => {} },
+    })
+    const networkContext: RefreshModelsContextLike = {
+      ...context(true),
+      publish: async (publication) => {
+        persisted = publication.persist
+        return true
+      },
+    }
+    expect((await built.refreshModels!(networkContext)).map((model) => model.id)).toEqual(["coordinated-model"])
+
+    const stored = persisted as NonNullable<RefreshModelsContextLike["stored"]>
+    expect(stored.snapshot).toBeDefined()
+    expect((await built.refreshModels!({
+      allowNetwork: false,
+      credential: { key: "sk-coordinator" },
+      stored,
+    })).map((model) => model.id)).toEqual(["coordinated-model"])
+
+    expect(await built.refreshModels!({
+      allowNetwork: false,
+      credential: { key: "sk-other" },
+      stored,
+    })).toEqual([])
+  })
+
+  test("相同模型但 endpoint 变化仍会重写 snapshot", async () => {
+    let persisted: unknown
+    const first = buildProviderConfig(() => config(), {
+      fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
+      loadModelsDevCatalog: async () => ({}),
+      logger: { warn: () => {}, error: () => {} },
+    })
+    await first.refreshModels!({
+      ...context(true),
+      publish: async (publication) => {
+        persisted = publication.persist
+        return true
+      },
+    })
+
+    let publishes = 0
+    const second = buildProviderConfig(() => config({ baseUrl: "http://other.example:4000" }), {
+      fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
+      loadModelsDevCatalog: async () => ({}),
+      logger: { warn: () => {}, error: () => {} },
+    })
+    await second.refreshModels!({
+      ...context(true),
+      stored: persisted as NonNullable<RefreshModelsContextLike["stored"]>,
+      publish: async () => {
+        publishes += 1
+        return true
+      },
+    })
+    expect(publishes).toBe(1)
+  })
+
 })
 
