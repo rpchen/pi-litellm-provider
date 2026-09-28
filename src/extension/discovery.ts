@@ -61,6 +61,7 @@ interface PersistedCatalog {
   models: ProviderModelConfigLike[]
   checkedAt: number
   snapshot?: DiscoverySnapshot
+  restoreFingerprint?: string
 }
 
 /**
@@ -106,9 +107,17 @@ export async function refreshProviderModels(
 
   const apiKey = context.credential?.key
   const expectedEndpoint = snapshotEndpointFingerprint(config, apiKey)
+  const restoreFingerprint = snapshotRestoreScopeFingerprint(config)
+  const storedEndpoint = stored?.snapshot && typeof stored.snapshot.endpointFingerprint === "string"
+    ? stored.snapshot.endpointFingerprint
+    : undefined
   const restored = expectedEndpoint
     ? inspectDiscoverySnapshot(stored?.snapshot, expectedEndpoint)
-    : { compatible: false as const, reason: "missing" as const }
+    : restoreFingerprint !== undefined &&
+        stored?.restoreFingerprint === restoreFingerprint &&
+        storedEndpoint !== undefined
+      ? inspectDiscoverySnapshot(stored.snapshot, storedEndpoint)
+      : { compatible: false as const, reason: "missing" as const }
 
   const restoreCompatibleModels = (): ProviderModelConfigLike[] => {
     if (!restored.compatible || !restored.snapshot) return []
@@ -184,7 +193,7 @@ export async function refreshProviderModels(
         )
       }
     }
-    await publishIfChanged(context, stored, outcome.models, snapshot)
+    await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint)
     return outcome.models
   } catch (error) {
     // Host cancellation (a newer refresh superseded this one, the model selector's 15s
@@ -218,6 +227,24 @@ export async function refreshProviderModels(
 function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.name === "AbortError" || /aborted/i.test(error.message)
+}
+
+const PI_RESTORE_SCOPE_CREDENTIAL = "pi-restore-scope-v1"
+
+function snapshotRestoreScopeFingerprint(config: ExtensionConfig): string | undefined {
+  if (config.baseUrl.length === 0) return undefined
+  try {
+    return endpointFingerprint({
+      baseUrl: config.baseUrl,
+      credentialKey: PI_RESTORE_SCOPE_CREDENTIAL,
+      buildOptions: {
+        contextTierCap: config.contextTierCap,
+        protocolOverrides: config.protocolOverrides,
+      },
+    })
+  } catch {
+    return undefined
+  }
 }
 
 function snapshotEndpointFingerprint(
@@ -266,21 +293,26 @@ async function publishIfChanged(
   stored: PersistedCatalog | undefined,
   models: ProviderModelConfigLike[],
   snapshot?: DiscoverySnapshot,
+  restoreFingerprint?: string,
 ): Promise<void> {
   const sameModels = modelsFingerprint(stored?.models) === modelsFingerprint(models)
   const sameSnapshot = snapshot === undefined
-    ? stored?.snapshot === undefined
+    ? stored?.snapshot === undefined && stored?.restoreFingerprint === undefined
     : stored?.snapshot?.endpointFingerprint === snapshot.endpointFingerprint &&
-      stored.snapshot.modelFingerprint === snapshot.modelFingerprint
+      stored.snapshot.modelFingerprint === snapshot.modelFingerprint &&
+      stored.restoreFingerprint === restoreFingerprint
   if (sameModels && sameSnapshot) return
-  await publish(context, models, snapshot)
+  await publish(context, models, snapshot, restoreFingerprint)
 }
 
 function asStoredCatalog(stored: RefreshModelsContextLike["stored"]): PersistedCatalog | undefined {
   if (!stored || !Array.isArray(stored.models)) return undefined
   const models = stored.models as ProviderModelConfigLike[]
   const snapshot = "snapshot" in stored ? stored.snapshot as DiscoverySnapshot | undefined : undefined
-  return { models, checkedAt: 0, snapshot }
+  const restoreFingerprint = "restoreFingerprint" in stored && typeof stored.restoreFingerprint === "string"
+    ? stored.restoreFingerprint
+    : undefined
+  return { models, checkedAt: 0, snapshot, restoreFingerprint }
 }
 
 /** Stable fingerprint over the registered model list, for change detection against `stored`. */
@@ -306,12 +338,13 @@ async function publish(
   context: RefreshModelsContextLike,
   models: ProviderModelConfigLike[],
   snapshot?: DiscoverySnapshot,
+  restoreFingerprint?: string,
 ): Promise<void> {
   if (!context.publish) return
   // A cancelled refresh must not write the store: skip before racing the abort.
   if (context.signal?.aborted) return
   try {
-    await context.publish({ persist: { models, checkedAt: Date.now(), snapshot } })
+    await context.publish({ persist: { models, checkedAt: Date.now(), snapshot, restoreFingerprint } })
   } catch (error) {
     // The host's publish rejects with an abort reason when cancellation lands during the
     // write (supersede / 15s catalog timeout / shutdown) — normal lifecycle, not a
