@@ -217,7 +217,13 @@ describe("refreshProviderModels 两阶段", () => {
       first.specs,
       "2026-09-28T00:00:00.000Z",
     )
-    const { published, context } = fakeContext({ stored: { models: first.models, snapshot: storedSnapshot } })
+    const { published, context } = fakeContext({
+      stored: {
+        models: first.models,
+        snapshot: storedSnapshot,
+        restoreFingerprint: restoreFingerprintFor(),
+      },
+    })
     const models = await refreshProviderModels(config(), context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
