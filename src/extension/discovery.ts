@@ -105,25 +105,23 @@ export async function refreshProviderModels(
   const stored = asStoredCatalog(context.stored)
 
   const apiKey = context.credential?.key
-  const expectedEndpoint = config.baseUrl.length > 0 && apiKey
-    ? endpointFingerprint({
-        baseUrl: config.baseUrl,
-        credentialKey: apiKey,
-        buildOptions: {
-          contextTierCap: config.contextTierCap,
-          protocolOverrides: config.protocolOverrides,
-        },
-      })
-    : undefined
+  const expectedEndpoint = snapshotEndpointFingerprint(config, apiKey)
   const restored = expectedEndpoint
     ? inspectDiscoverySnapshot(stored?.snapshot, expectedEndpoint)
     : { compatible: false as const, reason: "missing" as const }
 
+  const restoreCompatibleModels = (): ProviderModelConfigLike[] => {
+    if (!restored.compatible || !restored.snapshot) return []
+    try {
+      return toProviderModels(restored.snapshot.models, normalizeLiteLLMURL(config.baseUrl).rootURL)
+    } catch {
+      return []
+    }
+  }
+
   // Restore phase, or an aborted request: only replay an endpoint-compatible snapshot.
   if (context.allowNetwork === false || context.signal?.aborted) {
-    if (!restored.compatible || !restored.snapshot) return []
-    const rootURL = normalizeLiteLLMURL(config.baseUrl).rootURL
-    return toProviderModels(restored.snapshot.models, rootURL)
+    return restoreCompatibleModels()
   }
 
   // Not connected: no address resolved. Tell the user how to configure one (spec:
@@ -160,13 +158,21 @@ export async function refreshProviderModels(
         },
       },
     )
-    if (context.signal?.aborted) return stored?.models ?? []
+    if (context.signal?.aborted) return restoreCompatibleModels()
     if (coordinated.source === "stale") {
       logger.warn(`LiteLLM 发现失败，使用 last-known-good：${messageOf(coordinated.error)}`)
     }
     const outcome = coordinated.value
+    const successfulEndpoint = expectedEndpoint ?? endpointFingerprint({
+      baseUrl: config.baseUrl,
+      credentialKey: apiKey,
+      buildOptions: {
+        contextTierCap: config.contextTierCap,
+        protocolOverrides: config.protocolOverrides,
+      },
+    })
     const snapshot = createDiscoverySnapshot(
-      expectedEndpoint!,
+      successfulEndpoint,
       outcome.specs,
       new Date(coordinated.refreshedAt).toISOString(),
     )
@@ -186,7 +192,7 @@ export async function refreshProviderModels(
     // That is normal lifecycle, not a failure: replay the persisted baseline silently;
     // the host discards this refresh's result anyway once the signal is aborted.
     if (context.signal?.aborted) {
-      return stored?.models ?? []
+      return restoreCompatibleModels()
     }
     if (error instanceof DiscoveryError && error.kind === "auth") {
       logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`)
@@ -212,6 +218,25 @@ export async function refreshProviderModels(
 function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.name === "AbortError" || /aborted/i.test(error.message)
+}
+
+function snapshotEndpointFingerprint(
+  config: ExtensionConfig,
+  apiKey: string | undefined,
+): string | undefined {
+  if (config.baseUrl.length === 0 || !apiKey) return undefined
+  try {
+    return endpointFingerprint({
+      baseUrl: config.baseUrl,
+      credentialKey: apiKey,
+      buildOptions: {
+        contextTierCap: config.contextTierCap,
+        protocolOverrides: config.protocolOverrides,
+      },
+    })
+  } catch {
+    return undefined
+  }
 }
 
 /** Whether the failure came from address normalization (config error, not transport). */
@@ -243,10 +268,11 @@ async function publishIfChanged(
   snapshot?: DiscoverySnapshot,
 ): Promise<void> {
   const sameModels = modelsFingerprint(stored?.models) === modelsFingerprint(models)
-  const sameSnapshot = snapshot !== undefined &&
-    stored?.snapshot?.endpointFingerprint === snapshot.endpointFingerprint &&
-    stored.snapshot.modelFingerprint === snapshot.modelFingerprint
-  if (sameModels && (snapshot === undefined || sameSnapshot)) return
+  const sameSnapshot = snapshot === undefined
+    ? stored?.snapshot === undefined
+    : stored?.snapshot?.endpointFingerprint === snapshot.endpointFingerprint &&
+      stored.snapshot.modelFingerprint === snapshot.modelFingerprint
+  if (sameModels && sameSnapshot) return
   await publish(context, models, snapshot)
 }
 
