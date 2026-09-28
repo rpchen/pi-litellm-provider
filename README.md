@@ -1,80 +1,41 @@
 # pi-litellm-provider
 
-Pi 扩展：填写 LiteLLM 地址并登录 API Key 后，自动发现并同步当前 Key 实际可用的对话模型。
+Pi 扩展：连接 LiteLLM 后，自动发现当前 API Key 可用的对话模型，并同步到 Pi 的模型选择器。
 
-- 以**用户自己的 Key** 请求 LiteLLM `/v1/model/info`，只注册真实存在且有权访问的对话模型
-- 按 LiteLLM 的 `supported_endpoints` / `mode` / 上游家族判定协议，逐模型映射到 pi 的内置 API 实现
-- 映射上下文窗口、输出上限、输入输出模态、工具调用与价格
-- 从 models.dev 补充模型元数据并生成推理档位（pi 的 thinking levels）
-- 默认按 LiteLLM 的阶梯价格起点截断上下文窗口
-- 启动、打开模型选择器与定时轮询时同步模型清单；短暂故障保留上次成功结果
-- 提供 `/litellm-diagnostics`，查看发现状态、缓存来源、models.dev 匹配、协议 fallback 和固定 Core provenance，不产生额外模型调用
+它会自动处理：
 
-## 与共享 core 的关系
+- 从 LiteLLM `/v1/model/info` 发现当前 Key 可见的对话模型
+- 自动选择 Chat Completions、Responses 或 Anthropic Messages
+- 映射上下文窗口、输出上限、工具调用、模态和价格
+- 用 models.dev 补充元数据和 thinking levels
+- 启动、打开模型选择器和定时轮询时刷新模型
+- 短暂故障时保留上次成功结果，认证失败时撤下旧模型
 
-本仓库是 LiteLLM 自动发现能力的 **pi 宿主适配器**。宿主无关的 LiteLLM 归一化、models.dev 补缺、能力映射和协议判定来自独立的
-[`litellm-discovery-core`](https://github.com/rpchen/litellm-discovery-core)。每次更新构建固定一次 core `main` SHA，把它编译进提交的 `dist/`；用户安装或运行时不需要平级仓库、core 缓存、GitHub 网络或现场编译。
+## 快速开始
 
-决策背景见 `docs/decisions.md`。
+### 1. 安装
 
-## 要求
-
-- pi `>=0.87.1`
-- LiteLLM 地址必须使用 `http://` 或 `https://`
-- API Key 必须有权访问 `/v1/model/info`（旧版部署自动回退 `/model/info`）及要调用的模型
-
-## 安装
+安装并跟随仓库 `main`：
 
 ```bash
 pi install git:github.com/rpchen/pi-litellm-provider
 ```
 
-指定版本：`pi install git:github.com/rpchen/pi-litellm-provider#v0.2.0`
-本地试跑（不安装）：`pi -e ./extensions/index.ts`
-
-安装会 clone 到 `~/.pi/agent/git/github.com/rpchen/pi-litellm-provider` 并写入全局 settings（`pi list` 可查看）。卸载（settings 条目即刻清除，`git/` 目录可能残留空壳，可手动删除）：
+锁定当前发行版：
 
 ```bash
-pi remove git:github.com/rpchen/pi-litellm-provider
+pi install git:github.com/rpchen/pi-litellm-provider#v0.2.0
 ```
 
-## 快速开始
+要求：
 
-1. **配置 LiteLLM 地址**（二选一，见下文"LiteLLM 地址"）：写 `~/.pi/agent/litellm.json`，或 `export LITELLM_BASE_URL="http://litellm.example:4000"`
-2. **打开 pi 并录入 API Key**：会话内 `/login` → 选 LiteLLM → 粘贴 Key
-3. **打开 `/model` 选模型开聊**：选择器每次打开都会实时向 LiteLLM 发起发现，几秒内模型即出现（pi 启动时也会后台自动发现一次）；Key 用环境变量方式的话，开 pi 后模型会自动就绪
+- Pi `>=0.87.1`
+- LiteLLM 地址使用 `http://` 或 `https://`
+- API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型
 
-## 配置
+### 2. 配置 LiteLLM 地址
 
-### 1. API Key
-
-首选在 pi 中登录（凭据存入 `~/.pi/agent/auth.json`，`/logout` 可移除）：
-
-```
-/login   →   选择 LiteLLM   →   粘贴 API Key
-```
-
-无交互环境（CI、脚本）可用环境变量：
-
-```bash
-export LITELLM_API_KEY="sk-xxx"          # bash / zsh
-$env:LITELLM_API_KEY = "sk-xxx"          # PowerShell
-```
-
-两者同时存在时，`/login` 保存的凭据优先。发现与模型调用始终使用同一把 Key。
-
-### 2. LiteLLM 地址
-
-按优先级从高到低：
-
-1. 环境变量 `LITELLM_BASE_URL`
-
-   ```bash
-   export LITELLM_BASE_URL="http://litellm.example:4000"   # bash / zsh
-   $env:LITELLM_BASE_URL = "http://litellm.example:4000"   # PowerShell
-   ```
-2. 项目级配置文件 `<项目目录>/.pi/litellm.json`
-3. 全局配置文件 `~/.pi/agent/litellm.json`
+推荐写入全局配置：
 
 ```jsonc
 // ~/.pi/agent/litellm.json
@@ -83,116 +44,182 @@ $env:LITELLM_API_KEY = "sk-xxx"          # PowerShell
 }
 ```
 
-地址可以带或不带 `/v1`、带或不带末尾斜杠，扩展会规范化。
+也可以使用环境变量：
 
-### 3. 可选配置
+```bash
+export LITELLM_BASE_URL="http://litellm.example:4000"
+```
 
-同上两个配置文件位置均可写入；项目级优先于全局。未配置时使用默认值，非法值会被忽略并回落到默认值。
+PowerShell：
 
-| 配置项 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `pollInterval` | number | `300` | 轮询间隔（秒），最小 `30`；用于跟随 LiteLLM 端增删模型 |
-| `contextTierCap` | boolean | `true` | 是否按阶梯价格起点截断上下文窗口（避免越过价格阶梯） |
-| `protocolOverrides` | object | `{}` | 按模型名强制指定协议：`"chat"` / `"responses"` / `"messages"` |
+```powershell
+$env:LITELLM_BASE_URL = "http://litellm.example:4000"
+```
+
+地址带不带 `/v1`、带不带末尾斜杠都可以，扩展会自动规范化。
+
+地址优先级：
+
+1. `LITELLM_BASE_URL`
+2. 项目级 `<项目>/.pi/litellm.json`
+3. 全局 `~/.pi/agent/litellm.json`
+
+### 3. 登录 API Key
+
+在 Pi 会话中：
+
+```text
+/login → 选择 LiteLLM → 粘贴 API Key
+```
+
+也可以使用环境变量：
+
+```bash
+export LITELLM_API_KEY="sk-xxx"
+```
+
+PowerShell：
+
+```powershell
+$env:LITELLM_API_KEY = "sk-xxx"
+```
+
+两者同时存在时，`/login` 保存的凭据优先。发现模型和实际调用始终使用同一把 Key。
+
+### 4. 选择模型
+
+会话内执行：
+
+```text
+/model
+```
+
+LiteLLM 下显示的就是当前 Key 可访问的对话模型。
+
+## 常用操作
+
+### 选择模型
+
+`/model` 打开模型选择器。每次打开时 Pi 都会触发一次实时发现。
+
+### 调整推理档位
+
+`/thinking` 打开 thinking level 选择器；CLI 也可以使用：
+
+```bash
+pi -p "总结这个仓库的结构" --model litellm/gpt-6-sol --thinking high
+```
+
+可用档位由 models.dev 中该模型的记录决定。没有 reasoning metadata 的模型只提供普通模式。
+
+### 查看诊断
+
+会话内执行：
+
+```text
+/litellm-diagnostics
+```
+
+会显示：
+
+- 当前发现状态
+- 已注册模型数
+- 缓存来源：`snapshot` / `network` / `memory-cache` / `stale`
+- models.dev 命中情况
+- 协议 fallback 数量
+- 当前插件编入的 Core SHA
+
+该命令只读取已有状态，**不会发起模型请求，也不会产生额外 token 消耗**。输出不会包含 API Key、LiteLLM 地址或原始传输错误。
+
+### 查看已发现模型
+
+```bash
+pi --list-models litellm
+```
+
+这个命令只读取上次发现结果，**不会主动联网刷新**。全新安装尚未完成首次发现时显示为空属正常；需要实时刷新时打开 `/model`。
+
+### 重新读取配置
+
+如果在 Pi 运行期间修改了 `litellm.json`，执行：
+
+```text
+/reload
+```
+
+或者重启 Pi。
+
+## 可选配置
+
+项目级和全局 `litellm.json` 都支持：
+
+| 配置项 | 默认值 | 说明 |
+|---|---:|---|
+| `pollInterval` | `300` | 模型发现轮询间隔，单位秒；最小 30 |
+| `contextTierCap` | `true` | 按第一个非零输入价格阶梯截断上下文窗口 |
+| `protocolOverrides` | `{}` | 按 LiteLLM `model_name` 覆盖协议 |
+
+示例：
 
 ```jsonc
 {
   "pollInterval": 300,
   "contextTierCap": true,
-  "protocolOverrides": { "glm-5.3": "chat" }
+  "protocolOverrides": {
+    "glm-5.3": "chat"
+  }
 }
 ```
 
-> **修改配置后需 `/reload` 或重启 pi 生效**：配置在 pi 启动与会话加载（`session_start`）时读取一次，与 pi-ollama-cloud 行为一致。若在 pi 运行中才创建/修改 `litellm.json`，请在会话内执行 `/reload`（或重启 pi），否则扩展会继续使用旧快照（表现为"未配置地址"告警）。
+`protocolOverrides` 只在自动协议判断与真实 LiteLLM 路由不一致时使用。值只能是 `chat`、`responses` 或 `messages`。
 
-## 使用
+## 模型发现与故障行为
 
-配置完成后（快速开始第 1–2 步），日常使用：
-
-**选择模型**：会话内 `/model` 打开模型选择器，LiteLLM 下列出的即当前 Key 可见的对话模型。
-
-**单次调用**（不进会话）：
-
-```bash
-pi -p "总结这个仓库的结构" --model litellm/gpt-6-sol
-```
-
-**推理档位**：会话内 `/thinking` 打开档位选择器，或 CLI 用 `--thinking xhigh` / `--thinking off`。
-
-- 档位由 models.dev 记录声明，因模型而异：声明了哪些档位选择器就只显示哪些；未声明 `reasoning` 的模型只有 `off`
-- 实测示例：`gpt-6-sol` 的 `xhigh` / `medium` / `off` 会分别把 `reasoning.effort` 置为 `xhigh` / `medium` / `none` 写入请求
-
-**凭据管理**：`/login` 重新录入或切换 Key；`/logout` 移除已存凭据（环境变量方式不受影响）。
-
-**自检**：`pi --list-models litellm` 可随时查看已发现的模型清单（地址、Key、发现、映射全链路正常时非空）。注意它**只回放上次发现的结果、不主动联网**——全新安装后首次发现前显示为空属正常，请以打开 `/model`（每次打开实时发现）为准；列不出模型再按下方"故障行为"排查。
-
-**诊断**：会话内执行：
-
-```
-/litellm-diagnostics
-```
-
-会显示当前发现状态、已注册模型数、缓存来源（例如 `snapshot` / `network` / `memory-cache` / `stale`）、models.dev 命中情况、协议 fallback 数量以及当前插件编入的 Core SHA。该命令只读取插件已有状态并通过 Pi UI 展示，**不会发起模型请求，也不会产生额外模型 token 消耗**；输出不会包含 API Key、LiteLLM 地址或原始传输错误。
-
-## 刷新时机
-
-模型清单在以下时机刷新（pi 宿主机制）：
-
-- pi 启动时（交互式会话）
-- 打开模型选择器（`/model`）时
-- 扩展的轮询定时器到点时
-- 会话内 `/reload` 后
-
-发现结果会缓存到 pi 的 `models-store.json`，并携带 endpoint-bound discovery snapshot。重启时会先恢复与当前地址/配置兼容的上次清单，再联网校正；诊断状态会把这段阶段标记为 `snapshot` / restored。
-
-> 注意：`pi update --models` 只刷新 `models.json` 中配置的模型，不加载扩展，因此不会刷新本扩展的清单。
-
-## 故障行为
-
-| 情况 | 行为 |
+| 情况 | 扩展行为 |
 |---|---|
-| LiteLLM 暂时不可达 / 超时 / 5xx / 429 | 保留上次成功清单，下个周期重试 |
-| Key 无效（401 / 403） | 撤下全部模型，提示 Key 无效；恢复后自动回来 |
-| models.dev 不可达 | 继续用 LiteLLM 数据注册（无推理档位、缺省字段不补充），后续重试 |
-| 地址未配置 | 不注册模型，不发起请求，日志给出配置提示 |
-| 地址非法（非 http(s) 或无法解析） | 跳过该来源回退下一来源并告警；已采用地址不可用时不发起请求、撤下模型并记错误 |
+| Pi 启动 | 如果有兼容 snapshot，先恢复上次模型，再联网校正 |
+| 打开 `/model` | 触发实时发现 |
+| 轮询到点 | 后台刷新模型清单 |
+| LiteLLM 暂时不可达 / 超时 / 429 / 5xx | 保留 last-known-good，后续重试；诊断显示 `stale` |
+| models.dev 不可达 | 继续使用 LiteLLM 数据；部分补充元数据/thinking levels 暂缺 |
+| Key 无效（401 / 403） | 撤下当前模型 |
+| 地址未配置或不可用 | 不发起无效请求，不注册模型，并给出日志提示 |
 
-API Key 不会写入日志、错误信息或模型定义；错误信息中的 Key 会被脱敏。
+> `pi update --models` 只处理 `models.json`，不会加载扩展，因此不会刷新本插件的模型清单。
 
-## 从手工 models.json 迁移
+## 从手工 `models.json` 迁移
 
-若此前在 `~/.pi/agent/models.json` 手工配置过 litellm provider：
+如果以前在 `~/.pi/agent/models.json` 手工配置过 `litellm` provider：
 
-1. 按上文完成 Key 登录与地址配置，确认模型出现在 `/model` 中
-2. 删除 `models.json` 中手工的 litellm provider 块——若文件里只剩该块，**直接删除整个 `models.json`** 即可（pi 对文件缺失不报错、按空配置处理）。**不要把文件清空成 0 字节**：pi 对空文件每次启动都会报 `Failed to parse models.json: Unexpected end of JSON input`，而写 `{}` 也会因缺少 `providers` 字段报 schema 错误
-3. 回滚：`pi remove git:github.com/rpchen/pi-litellm-provider`，恢复手工配置；如已 `/login`，用 `/logout` 移除凭据
+1. 按上面的方式配置地址并通过 `/login` 或 `LITELLM_API_KEY` 提供凭据
+2. 确认模型已经出现在 `/model`
+3. 删除 `models.json` 中手工的 `litellm` provider 块
 
-扩展不读写你的 `models.json`。
+如果文件里只有这一块，直接删除整个 `models.json` 即可；不要留下 0 字节空文件。
 
-> **共存行为**：扩展与 `models.json` 中的同名 `litellm` 块**不会合并**——扩展激活期间由扩展整体接管该 provider（模型清单、`baseUrl`、`apiKey` 均以扩展为准）。**手工块里的 Key 不再生效**：扩展的认证来源是 `/login` 或 `LITELLM_API_KEY`，未配置则该 provider 视为未登录、模型不可见。扩展不修改 `models.json` 文件；移除扩展后手工块原样恢复（实测见 `docs/research/acceptance-notes.md` §6）。
+扩展激活时会整体接管同名 `litellm` provider，不会与手工配置合并；手工块中的 Key 也不会被扩展采用。扩展不会修改 `models.json` 文件，移除扩展后原手工配置仍可恢复使用。
 
-## 开发
-
-```bash
-npm ci                # registry 使用用户/系统 npm 配置；仓库不再覆盖 registry
-bun run build:dist      # 获取并固定本次构建使用的 core SHA，生成 dist/ 与 provenance
-bun run verify:dist     # 按已提交 provenance SHA 重建，并校验 dist/ 零差异
-bun run typecheck
-bun test
-npm run validate:spec   # OpenSpec 规格校验
-bun run test:package    # 禁用 lifecycle scripts 验证隔离安装后的入口与打包内容
-```
-
-已生成产物的复验可设置 `LITELLM_CORE_SHA=<40位SHA>`，或运行 `bun scripts/prepare-core.ts --from-provenance`；这样不会跟随 core `main` 后续更新。`dist/core-provenance.json` 记录本次产物使用的仓库、分支和准确 SHA。
-
-在真实 pi 中加载（单次运行，不写入 settings）：
+## 卸载
 
 ```bash
-pi -e ./extensions/index.ts
+pi remove git:github.com/rpchen/pi-litellm-provider
 ```
 
-`pi -e` 可指定本地文件或目录；改完代码在会话内执行 `/reload`。
+如曾通过 `/login` 保存 LiteLLM 凭据，可再使用 `/logout` 移除。
 
-## OpenSpec
+## 隐私与安全
 
-本项目使用 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 管理规格变更：`openspec/changes/` 存放在途变更，`openspec/specs/` 存放已落地能力规格。
+- API Key 不会写入日志、模型定义、diagnostics 或持久化 discovery snapshot
+- diagnostics 不显示 LiteLLM 地址、Key 或原始传输错误
+- models.dev 只用于补充元数据，不会把 LiteLLM 没返回的模型添加进清单
+- `/v1/model/info` 是模型发现的事实来源
+
+## 开发与架构
+
+普通用户不需要安装共享 Core、运行构建脚本或维护 provenance。Core 已在构建时编译进插件的 `dist`，运行时不会下载 Core。
+
+开发、构建、测试、OpenSpec 和共享 Core 说明请看：
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [litellm-discovery-core](https://github.com/rpchen/litellm-discovery-core)
+- [验收记录](docs/research/acceptance-notes.md)
