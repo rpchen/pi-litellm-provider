@@ -66,6 +66,12 @@ describe("toProviderModels", () => {
     expect(sol.maxTokens).toBe(128000)
   })
 
+  test("PR8 的总 context 语义贯穿 Core 到 Pi 模型配置", () => {
+    const glm = byID.get("glm-5.3")!
+    expect(glm.contextWindow).toBe(200000)
+    expect(glm.maxTokens).toBe(131072)
+  })
+
   test("id 与 display name 均为 model_name", () => {
     expect(byID.get("gpt-6-sol")?.name).toBe("gpt-6-sol")
   })

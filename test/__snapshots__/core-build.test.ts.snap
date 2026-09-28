@@ -203,8 +203,8 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
     },
     "id": "glm-5.3",
     "limit": {
-      "context": 1000000,
-      "input": 1000000,
+      "context": 200000,
+      "input": 200000,
       "output": 131072,
     },
     "name": "glm-5.3",
