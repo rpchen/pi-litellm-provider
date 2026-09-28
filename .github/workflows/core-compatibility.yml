@@ -42,8 +42,8 @@ jobs:
           LITELLM_CORE_SHA: ${{ env.CORE_SHA }}
         run: |
           bun run typecheck
-          bun run test
           bun run build:dist
+          bun run test
           bun run test:package
       - name: Publish Core provenance
         shell: bash
