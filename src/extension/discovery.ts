@@ -13,20 +13,23 @@
  * is treated as "not configured": no network request, empty list.
  */
 import {
-  buildModelSpecs,
   compareDiscoverySnapshots,
+  createDiscoveryCacheDiagnostics,
   createDiscoveryCoordinator,
   createDiscoverySnapshot,
+  diagnoseModelSpecs,
   endpointFingerprint,
   inspectDiscoverySnapshot,
   modelFingerprint,
   normalizeLiteLLMURL,
   type DiscoveryCoordinator,
+  type DiscoveryDiagnostics,
   type DiscoverySnapshot,
   type ModelSpec,
 } from "../core/index.ts"
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog, type FetchLike } from "../net/fetch.ts"
 import type { ExtensionConfig } from "./config.ts"
+import { setProviderDiagnostics, type ProviderDiagnosticsState } from "./diagnostics.ts"
 import { toProviderModels } from "./map.ts"
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "./types.ts"
 
@@ -47,6 +50,7 @@ export interface DiscoveryOutcome {
   models: ProviderModelConfigLike[]
   specs: ModelSpec[]
   fingerprint: string
+  diagnostics: DiscoveryDiagnostics
 }
 
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>
@@ -79,14 +83,15 @@ export async function discoverModels(
   const catalog = deps.loadModelsDevCatalog
     ? await deps.loadModelsDevCatalog(signal)
     : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal })
-  const specs = buildModelSpecs(litellmResponse, catalog, {
+  const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, {
     contextTierCap: config.contextTierCap,
     protocolOverrides: config.protocolOverrides,
   })
   return {
-    specs,
-    models: toProviderModels(specs, addresses.rootURL),
-    fingerprint: modelFingerprint(specs),
+    specs: diagnosed.models,
+    models: toProviderModels(diagnosed.models, addresses.rootURL),
+    fingerprint: modelFingerprint(diagnosed.models),
+    diagnostics: diagnosed.diagnostics,
   }
 }
 
@@ -101,6 +106,7 @@ export async function refreshProviderModels(
   context: RefreshModelsContextLike,
   deps: DiscoveryDeps = {},
   coordinator: ProviderRefreshCoordinator = createProviderRefreshCoordinator(),
+  diagnosticsState?: ProviderDiagnosticsState,
 ): Promise<ProviderModelConfigLike[]> {
   const logger = deps.logger ?? console
   const stored = asStoredCatalog(context.stored)
@@ -130,7 +136,18 @@ export async function refreshProviderModels(
 
   // Restore phase, or an aborted request: only replay an endpoint-compatible snapshot.
   if (context.allowNetwork === false || context.signal?.aborted) {
-    return restoreCompatibleModels()
+    const models = restoreCompatibleModels()
+    setProviderDiagnostics(diagnosticsState, {
+      status: models.length > 0 ? "restored" : "idle",
+      modelCount: models.length,
+      cache: createDiscoveryCacheDiagnostics({
+        source: models.length > 0 ? "snapshot" : "none",
+        refreshedAt: restored.snapshot ? Date.parse(restored.snapshot.discoveredAt) : undefined,
+      }),
+      lastSuccessfulDiscoveryAt: restored.snapshot?.discoveredAt,
+      note: models.length > 0 ? "当前结果来自 endpoint-compatible 持久化快照。" : undefined,
+    })
+    return models
   }
 
   // Not connected: no address resolved. Tell the user how to configure one (spec:
@@ -140,6 +157,12 @@ export async function refreshProviderModels(
       "LiteLLM 未配置地址：请设置 LITELLM_BASE_URL，或在 ~/.pi/agent/litellm.json / 项目 .pi/litellm.json 中填写 baseUrl",
     )
     await publishIfChanged(context, stored, [])
+    setProviderDiagnostics(diagnosticsState, {
+      status: "unconfigured",
+      modelCount: 0,
+      cache: createDiscoveryCacheDiagnostics({ source: "none" }),
+      note: "请配置 LiteLLM 地址后重新刷新。",
+    })
     return []
   }
 
@@ -148,6 +171,12 @@ export async function refreshProviderModels(
     // key defensively as unconfigured rather than sending an unauthenticated request.
     logger.warn("LiteLLM Key 未配置，跳过发现（请使用 /login 或设置 LITELLM_API_KEY）")
     await publishIfChanged(context, stored, [])
+    setProviderDiagnostics(diagnosticsState, {
+      status: "unconfigured",
+      modelCount: 0,
+      cache: createDiscoveryCacheDiagnostics({ source: "none" }),
+      note: "请使用 /login 或 LITELLM_API_KEY 配置凭据。",
+    })
     return []
   }
 
@@ -194,6 +223,24 @@ export async function refreshProviderModels(
       }
     }
     await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint)
+    setProviderDiagnostics(diagnosticsState, {
+      status: coordinated.source === "stale"
+        ? "stale"
+        : outcome.models.length === 0 ? "empty" : "ready",
+      modelCount: outcome.models.length,
+      discovery: outcome.diagnostics,
+      cache: createDiscoveryCacheDiagnostics({
+        source: coordinated.source === "cache"
+          ? "memory-cache"
+          : coordinated.source,
+        stale: coordinated.stale,
+        refreshedAt: coordinated.refreshedAt,
+        failureCount: coordinated.failureCount,
+        nextRetryAt: coordinated.nextRetryAt,
+      }),
+      lastSuccessfulDiscoveryAt: new Date(coordinated.refreshedAt).toISOString(),
+      note: coordinated.source === "stale" ? "刷新失败，保留上次成功结果。" : undefined,
+    })
     return outcome.models
   } catch (error) {
     // Host cancellation (a newer refresh superseded this one, the model selector's 15s
@@ -206,6 +253,12 @@ export async function refreshProviderModels(
     if (error instanceof DiscoveryError && error.kind === "auth") {
       logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`)
       await publishIfChanged(context, stored, [])
+      setProviderDiagnostics(diagnosticsState, {
+        status: "auth-error",
+        modelCount: 0,
+        cache: createDiscoveryCacheDiagnostics({ source: "none" }),
+        note: "LiteLLM 返回 401/403；请检查当前凭据权限。",
+      })
       return []
     }
     if (normalizeLiteLLMURLFailed(error, config.baseUrl)) {
@@ -214,11 +267,34 @@ export async function refreshProviderModels(
       // keeping stale models pointed at a dead address.
       logger.error(`LiteLLM 地址无效（${redactUrl(config.baseUrl)}）：${messageOf(error)}`)
       await publishIfChanged(context, stored, [])
+      setProviderDiagnostics(diagnosticsState, {
+        status: "config-error",
+        modelCount: 0,
+        cache: createDiscoveryCacheDiagnostics({ source: "none" }),
+        note: "LiteLLM 地址无法规范化；未发起发现请求。",
+      })
       return []
     }
     // Network / timeout / 5xx / 429 / parse / redirect / 404-exhausted: keep last good
     // catalog by letting the host record the error.
     logger.warn(`LiteLLM 发现失败，保留上次结果：${messageOf(error)}`)
+    const state = coordinator.state(discoveryKey)
+    setProviderDiagnostics(diagnosticsState, {
+      status: "error",
+      modelCount: restoreCompatibleModels().length,
+      cache: createDiscoveryCacheDiagnostics({
+        source: state.hasValue ? "stale" : "none",
+        stale: state.hasValue,
+        refreshedAt: state.refreshedAt,
+        failureCount: state.failureCount,
+        nextRetryAt: state.nextRetryAt,
+        pending: state.pending,
+      }),
+      lastSuccessfulDiscoveryAt: state.refreshedAt === undefined
+        ? restored.snapshot?.discoveredAt
+        : new Date(state.refreshedAt).toISOString(),
+      note: "发现失败；详细错误已通过宿主日志记录。",
+    })
     throw error
   }
 }
