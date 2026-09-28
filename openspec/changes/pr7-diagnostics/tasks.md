@@ -1,0 +1,8 @@
+- [x] Add per-provider Pi diagnostic state and safe formatter.
+- [x] Use Core diagnostics in the normal discovery build path.
+- [x] Track snapshot/network/memory-cache/stale cache sources.
+- [x] Register /litellm-diagnostics with Pi's native command UI.
+- [x] Include package version and fixed Core provenance without exposing endpoint credentials.
+- [x] Add command registration coverage.
+- [x] Rebuild committed dist against merged PR7 Core SHA.
+- [x] Run Pi verify:dist, typecheck, tests, OpenSpec and package gates.

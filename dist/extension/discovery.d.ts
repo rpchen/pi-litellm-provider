@@ -12,9 +12,10 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { type DiscoveryCoordinator, type ModelSpec } from "../core/index.ts";
+import { type DiscoveryCoordinator, type DiscoveryDiagnostics, type ModelSpec } from "../core/index.ts";
 import { type FetchLike } from "../net/fetch.ts";
 import type { ExtensionConfig } from "./config.ts";
+import { type ProviderDiagnosticsState } from "./diagnostics.ts";
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "./types.ts";
 export interface DiscoveryLogger {
     warn(message: string): void;
@@ -31,6 +32,7 @@ export interface DiscoveryOutcome {
     models: ProviderModelConfigLike[];
     specs: ModelSpec[];
     fingerprint: string;
+    diagnostics: DiscoveryDiagnostics;
 }
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>;
 /** Create one coordinator per registered provider instance. */
@@ -46,4 +48,4 @@ export declare function discoverModels(config: ExtensionConfig, apiKey: string, 
  * Returns the model list the host should register for this provider. See the module
  * comment for the phase/failure semantics.
  */
-export declare function refreshProviderModels(config: ExtensionConfig, context: RefreshModelsContextLike, deps?: DiscoveryDeps, coordinator?: ProviderRefreshCoordinator): Promise<ProviderModelConfigLike[]>;
+export declare function refreshProviderModels(config: ExtensionConfig, context: RefreshModelsContextLike, deps?: DiscoveryDeps, coordinator?: ProviderRefreshCoordinator, diagnosticsState?: ProviderDiagnosticsState): Promise<ProviderModelConfigLike[]>;

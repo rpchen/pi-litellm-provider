@@ -19,6 +19,7 @@ function config(overrides: Partial<ExtensionConfig> = {}): ExtensionConfig {
 /** Minimal fake of the pi ExtensionAPI recording registrations and event handlers. */
 function fakePi() {
   const registrations: Array<{ name: string; config: ProviderConfigLike }> = []
+  const commands: Array<{ name: string; config: { description?: string; handler: (args: string, ctx: any) => Promise<void> } }> = []
   const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => Promise<void>>>();
   const api = {
     registerProvider(name: string, value: ProviderConfigLike) {
@@ -28,6 +29,9 @@ function fakePi() {
       registrations.push({ name, config: merged })
     },
     unregisterProvider() {},
+    registerCommand(name: string, config: { description?: string; handler: (args: string, ctx: any) => Promise<void> }) {
+      commands.push({ name, config })
+    },
     on(event: string, handler: (event: unknown, ctx: unknown) => Promise<void>) {
       const list = handlers.get(event) ?? []
       list.push(handler)
@@ -35,14 +39,14 @@ function fakePi() {
       return () => {}
     },
   } as unknown as ExtensionAPI
-  return { api, registrations, handlers }
+  return { api, registrations, handlers, commands }
 }
 
 const silentDeps = { logger: { warn: () => {}, error: () => {} } }
 
 describe("扩展工厂注册形态", () => {
-  test("注册 id 为 litellm 的 provider 且 apiKey 走宿主引用", () => {
-    const { api, registrations } = fakePi()
+  test("注册 id 为 litellm 的 provider、诊断命令且 apiKey 走宿主引用", () => {
+    const { api, registrations, commands } = fakePi()
     piLitellmProvider(api, { config: config(), deps: silentDeps })
     expect(registrations).toHaveLength(1)
     expect(registrations[0]!.name).toBe("litellm")
@@ -50,6 +54,7 @@ describe("扩展工厂注册形态", () => {
     expect(registrations[0]!.config.apiKey).toBe("$LITELLM_API_KEY")
     expect(registrations[0]!.config.models).toEqual([])
     expect(typeof registrations[0]!.config.refreshModels).toBe("function")
+    expect(commands.map((command) => command.name)).toContain("litellm-diagnostics")
   })
 
   test("未连接时也注册且不抛错", () => {
