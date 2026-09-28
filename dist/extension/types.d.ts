@@ -15,6 +15,8 @@ export interface RefreshModelsContextLike {
     /** Persisted catalog snapshot from a previous successful refresh. */
     readonly stored?: {
         readonly models: readonly ProviderModelConfigLike[];
+        readonly snapshot?: unknown;
+        readonly restoreFingerprint?: unknown;
     };
     /** Whether this refresh phase may perform network access. */
     readonly allowNetwork?: boolean;
