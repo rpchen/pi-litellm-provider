@@ -12,10 +12,13 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildModelSpecs, modelFingerprint } from "../core/index.js";
-import { normalizeLiteLLMURL } from "../core/index.js";
+import { buildModelSpecs, createDiscoveryCoordinator, modelFingerprint, normalizeLiteLLMURL, } from "../core/index.js";
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog } from "../net/fetch.js";
 import { toProviderModels } from "./map.js";
+/** Create one coordinator per registered provider instance. */
+export function createProviderRefreshCoordinator() {
+    return createDiscoveryCoordinator();
+}
 /**
  * Run the network phase: contact LiteLLM, enrich from models.dev, build specs and map to
  * pi provider configs. Throws `DiscoveryError` on degradable failures.
@@ -42,7 +45,7 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
  * Returns the model list the host should register for this provider. See the module
  * comment for the phase/failure semantics.
  */
-export async function refreshProviderModels(config, context, deps = {}) {
+export async function refreshProviderModels(config, context, deps = {}, coordinator = createProviderRefreshCoordinator()) {
     const logger = deps.logger ?? console;
     const stored = asStoredCatalog(context.stored);
     // Restore phase, or an aborted request: replay whatever the host persisted last.
@@ -64,8 +67,26 @@ export async function refreshProviderModels(config, context, deps = {}) {
         await publishIfChanged(context, stored, []);
         return [];
     }
+    const discoveryKey = `${config.baseUrl}\u0000${apiKey}`;
     try {
-        const outcome = await discoverModels(config, apiKey, context.signal, deps);
+        const coordinated = await coordinator.refresh(discoveryKey, () => discoverModels(config, apiKey, context.signal, deps), {
+            forceRefresh: context.force === true,
+            failurePolicy: (error) => {
+                if (context.signal?.aborted)
+                    return "ignore";
+                if (error instanceof DiscoveryError && error.kind === "auth")
+                    return "clear";
+                if (normalizeLiteLLMURLFailed(error, config.baseUrl))
+                    return "clear";
+                return "stale";
+            },
+        });
+        if (context.signal?.aborted)
+            return stored?.models ?? [];
+        if (coordinated.source === "stale") {
+            logger.warn(`LiteLLM 发现失败，使用 last-known-good：${messageOf(coordinated.error)}`);
+        }
+        const outcome = coordinated.value;
         await publishIfChanged(context, stored, outcome.models);
         return outcome.models;
     }
