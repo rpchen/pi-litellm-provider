@@ -1,5 +1,6 @@
 import { normalizeLiteLLMURL } from "../core/index.js";
 import { loadConfig } from "./config.js";
+import { createProviderDiagnosticsState, formatProviderDiagnostics, } from "./diagnostics.js";
 import { createProviderRefreshCoordinator, refreshProviderModels } from "./discovery.js";
 import { PROVIDER_ID } from "./provider-id.js";
 export { PROVIDER_ID };
@@ -20,7 +21,7 @@ export function normalizedProviderBaseUrl(raw) {
     }
 }
 /** Build the provider config for the current config snapshot. */
-export function buildProviderConfig(getConfig, deps) {
+export function buildProviderConfig(getConfig, deps, diagnosticsState = createProviderDiagnosticsState()) {
     const coordinator = createProviderRefreshCoordinator();
     return {
         name: "LiteLLM",
@@ -29,7 +30,7 @@ export function buildProviderConfig(getConfig, deps) {
         // credential wins, then the LITELLM_API_KEY environment variable.
         apiKey: "$LITELLM_API_KEY",
         models: [],
-        refreshModels: (context) => refreshProviderModels(getConfig(), context, deps, coordinator),
+        refreshModels: (context) => refreshProviderModels(getConfig(), context, deps, coordinator, diagnosticsState),
     };
 }
 /**
@@ -66,13 +67,24 @@ function register(pi, config) {
 export default function piLitellmProvider(pi, internals = {}) {
     const resolveConfig = (cwd) => internals.config ?? loadConfig(cwd);
     let config = resolveConfig(internals.cwd ?? process.cwd());
-    register(pi, buildProviderConfig(() => config, internals.deps));
+    const diagnosticsState = createProviderDiagnosticsState();
+    pi.registerCommand("litellm-diagnostics", {
+        description: "显示 LiteLLM 发现、协议、元数据来源、缓存与构建诊断",
+        handler: async (_args, ctx) => {
+            const status = diagnosticsState.current.status;
+            const level = status === "auth-error" || status === "config-error" || status === "error"
+                ? "warning"
+                : "info";
+            ctx.ui.notify(formatProviderDiagnostics(diagnosticsState), level);
+        },
+    });
+    register(pi, buildProviderConfig(() => config, internals.deps, diagnosticsState));
     let stopPolling;
     pi.on("session_start", async (_event, ctx) => {
         // Re-read configuration so config edits and `/reload` are picked up, then keep the
         // registered provider in sync (baseUrl may have changed).
         config = resolveConfig(ctx.cwd);
-        register(pi, buildProviderConfig(() => config, internals.deps));
+        register(pi, buildProviderConfig(() => config, internals.deps, diagnosticsState));
         // Idempotent: a repeated session_start without shutdown must not stack timers.
         if (stopPolling)
             return;

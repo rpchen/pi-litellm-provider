@@ -14,6 +14,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type ExtensionConfig } from "./config.ts";
+import { type ProviderDiagnosticsState } from "./diagnostics.ts";
 import { type DiscoveryDeps } from "./discovery.ts";
 import { PROVIDER_ID } from "./provider-id.ts";
 import type { ProviderConfigLike } from "./types.ts";
@@ -26,7 +27,7 @@ export { PROVIDER_ID };
  */
 export declare function normalizedProviderBaseUrl(raw: string): string;
 /** Build the provider config for the current config snapshot. */
-export declare function buildProviderConfig(getConfig: () => ExtensionConfig, deps?: DiscoveryDeps): ProviderConfigLike;
+export declare function buildProviderConfig(getConfig: () => ExtensionConfig, deps?: DiscoveryDeps, diagnosticsState?: ProviderDiagnosticsState): ProviderConfigLike;
 /**
  * Start a poll loop calling `refresh` every `pollIntervalSeconds`. Returns an idempotent
  * stop function. The timer is unref'd so it never keeps the process alive on its own.
