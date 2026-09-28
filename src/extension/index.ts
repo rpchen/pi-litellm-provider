@@ -15,6 +15,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { normalizeLiteLLMURL } from "../core/index.ts"
 import { loadConfig, type ExtensionConfig } from "./config.ts"
+import {
+  createProviderDiagnosticsState,
+  formatProviderDiagnostics,
+  type ProviderDiagnosticsState,
+} from "./diagnostics.ts"
 import { createProviderRefreshCoordinator, refreshProviderModels, type DiscoveryDeps } from "./discovery.ts"
 import { PROVIDER_ID } from "./provider-id.ts"
 import type { ProviderConfigLike, RefreshModelsContextLike } from "./types.ts"
@@ -40,6 +45,7 @@ export function normalizedProviderBaseUrl(raw: string): string {
 export function buildProviderConfig(
   getConfig: () => ExtensionConfig,
   deps?: DiscoveryDeps,
+  diagnosticsState: ProviderDiagnosticsState = createProviderDiagnosticsState(),
 ): ProviderConfigLike {
   const coordinator = createProviderRefreshCoordinator()
   return {
@@ -49,7 +55,8 @@ export function buildProviderConfig(
     // credential wins, then the LITELLM_API_KEY environment variable.
     apiKey: "$LITELLM_API_KEY",
     models: [],
-    refreshModels: (context: RefreshModelsContextLike) => refreshProviderModels(getConfig(), context, deps, coordinator),
+    refreshModels: (context: RefreshModelsContextLike) =>
+      refreshProviderModels(getConfig(), context, deps, coordinator, diagnosticsState),
   }
 }
 
@@ -97,7 +104,20 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     internals.config ?? loadConfig(cwd)
 
   let config = resolveConfig(internals.cwd ?? process.cwd())
-  register(pi, buildProviderConfig(() => config, internals.deps))
+  const diagnosticsState = createProviderDiagnosticsState()
+
+  pi.registerCommand("litellm-diagnostics", {
+    description: "显示 LiteLLM 发现、协议、元数据来源、缓存与构建诊断",
+    handler: async (_args, ctx) => {
+      const status = diagnosticsState.current.status
+      const level = status === "auth-error" || status === "config-error" || status === "error"
+        ? "warning"
+        : "info"
+      ctx.ui.notify(formatProviderDiagnostics(diagnosticsState), level)
+    },
+  })
+
+  register(pi, buildProviderConfig(() => config, internals.deps, diagnosticsState))
 
   let stopPolling: (() => void) | undefined
 
@@ -105,7 +125,7 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     // Re-read configuration so config edits and `/reload` are picked up, then keep the
     // registered provider in sync (baseUrl may have changed).
     config = resolveConfig(ctx.cwd)
-    register(pi, buildProviderConfig(() => config, internals.deps))
+    register(pi, buildProviderConfig(() => config, internals.deps, diagnosticsState))
 
     // Idempotent: a repeated session_start without shutdown must not stack timers.
     if (stopPolling) return
