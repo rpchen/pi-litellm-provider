@@ -2,4 +2,4 @@
 - [x] Add a Core-to-Pi vertical mapping assertion for the changed context behavior.
 - [x] Update README for the user-visible limit behavior.
 - [x] Rebuild committed dist from merged PR8 Core SHA.
-- [ ] Run verify:dist, typecheck, tests, package test and strict OpenSpec validation.
+- [x] Run verify:dist, typecheck, tests, package test and strict OpenSpec validation.
