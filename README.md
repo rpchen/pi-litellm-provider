@@ -2,7 +2,7 @@
 
 Pi 扩展：连接 LiteLLM 后，自动发现当前 API Key 可用的对话模型，并同步到 Pi 的模型选择器。
 
-它会自动处理模型发现、Chat / Responses / Messages 协议选择、上下文/价格/模态映射、models.dev 元数据补充、thinking levels，以及定时刷新和临时故障降级。
+它会自动处理模型发现、Chat / Responses / Messages 协议选择、context / input / output 上限、价格/模态映射、models.dev 元数据补充、thinking levels，以及定时刷新和临时故障降级。
 
 ## 快速开始
 
@@ -112,6 +112,8 @@ pi --list-models litellm
 | 地址未配置或不可用 | 不发起无效请求，不注册模型，并给出日志提示 |
 
 `/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。
+
+模型上限按 PR8 的发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。models.dev 未命中的私有模型仍会保留。
 
 > `pi update --models` 只处理 `models.json`，不会加载扩展，因此不会刷新本插件的模型清单。
 
