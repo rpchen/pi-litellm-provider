@@ -3,6 +3,8 @@ name: PR6 branch build
 on:
   push:
     branches: [feat/pr6-persisted-snapshot]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
