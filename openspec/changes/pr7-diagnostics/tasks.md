@@ -4,5 +4,5 @@
 - [x] Register /litellm-diagnostics with Pi's native command UI.
 - [x] Include package version and fixed Core provenance without exposing endpoint credentials.
 - [x] Add command registration coverage.
-- [ ] Rebuild committed dist against merged PR7 Core SHA.
+- [x] Rebuild committed dist against merged PR7 Core SHA.
 - [ ] Run Pi verify:dist, typecheck, tests, OpenSpec and package gates.
