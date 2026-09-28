@@ -8,6 +8,7 @@ Pi 扩展：填写 LiteLLM 地址并登录 API Key 后，自动发现并同步�
 - 从 models.dev 补充模型元数据并生成推理档位（pi 的 thinking levels）
 - 默认按 LiteLLM 的阶梯价格起点截断上下文窗口
 - 启动、打开模型选择器与定时轮询时同步模型清单；短暂故障保留上次成功结果
+- 提供 `/litellm-diagnostics`，查看发现状态、缓存来源、models.dev 匹配、协议 fallback 和固定 Core provenance，不产生额外模型调用
 
 ## 与共享 core 的关系
 
@@ -28,7 +29,7 @@ Pi 扩展：填写 LiteLLM 地址并登录 API Key 后，自动发现并同步�
 pi install git:github.com/rpchen/pi-litellm-provider
 ```
 
-指定版本：`pi install git:github.com/rpchen/pi-litellm-provider#v0.1.0`
+指定版本：`pi install git:github.com/rpchen/pi-litellm-provider#v0.2.0`
 本地试跑（不安装）：`pi -e ./extensions/index.ts`
 
 安装会 clone 到 `~/.pi/agent/git/github.com/rpchen/pi-litellm-provider` 并写入全局 settings（`pi list` 可查看）。卸载（settings 条目即刻清除，`git/` 目录可能残留空壳，可手动删除）：
@@ -125,6 +126,14 @@ pi -p "总结这个仓库的结构" --model litellm/gpt-6-sol
 
 **自检**：`pi --list-models litellm` 可随时查看已发现的模型清单（地址、Key、发现、映射全链路正常时非空）。注意它**只回放上次发现的结果、不主动联网**——全新安装后首次发现前显示为空属正常，请以打开 `/model`（每次打开实时发现）为准；列不出模型再按下方"故障行为"排查。
 
+**诊断**：会话内执行：
+
+```
+/litellm-diagnostics
+```
+
+会显示当前发现状态、已注册模型数、缓存来源（例如 `snapshot` / `network` / `memory-cache` / `stale`）、models.dev 命中情况、协议 fallback 数量以及当前插件编入的 Core SHA。该命令只读取插件已有状态并通过 Pi UI 展示，**不会发起模型请求，也不会产生额外模型 token 消耗**；输出不会包含 API Key、LiteLLM 地址或原始传输错误。
+
 ## 刷新时机
 
 模型清单在以下时机刷新（pi 宿主机制）：
@@ -134,7 +143,7 @@ pi -p "总结这个仓库的结构" --model litellm/gpt-6-sol
 - 扩展的轮询定时器到点时
 - 会话内 `/reload` 后
 
-发现结果会缓存到 pi 的 `models-store.json`，重启时会先回放上次清单再联网校正。
+发现结果会缓存到 pi 的 `models-store.json`，并携带 endpoint-bound discovery snapshot。重启时会先恢复与当前地址/配置兼容的上次清单，再联网校正；诊断状态会把这段阶段标记为 `snapshot` / restored。
 
 > 注意：`pi update --models` 只刷新 `models.json` 中配置的模型，不加载扩展，因此不会刷新本扩展的清单。
 
@@ -165,7 +174,7 @@ API Key 不会写入日志、错误信息或模型定义；错误信息中的 Ke
 ## 开发
 
 ```bash
-npm ci
+npm ci                # registry 使用用户/系统 npm 配置；仓库不再覆盖 registry
 bun run build:dist      # 获取并固定本次构建使用的 core SHA，生成 dist/ 与 provenance
 bun run verify:dist     # 按已提交 provenance SHA 重建，并校验 dist/ 零差异
 bun run typecheck

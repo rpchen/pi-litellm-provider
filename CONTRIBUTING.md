@@ -31,6 +31,12 @@ bun test
 - PR 描述提供 `Requirement / Scenario → Test Evidence`，说明破坏某 Scenario 时哪项测试会失败；
 - CI 全绿是必要条件，但不能替代 Scenario 级闭环。
 
+## 用户文档门禁
+
+凡变更会影响用户实际使用方式（安装/升级、配置、命令、默认值、刷新/缓存、错误降级、兼容或迁移流程），必须在**同一个 PR**更新 README，并在 PR 中标明更新章节。若确认没有用户可见变化，则明确写 `No README change: no user-visible behavior`。
+
+OpenSpec 中包含用户可见 Scenario 时，tasks 必须包含 README 更新任务。README 缺失时，即使测试和 CI 全绿也不算完成。
+
 ## 发版
 
 Release 由 tag 触发（`release.yml` 监听 `v*.*.*`，并强校验 tag == `v` + `package.json.version`）：
