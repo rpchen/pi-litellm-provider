@@ -35,6 +35,17 @@ function storedSpec(id: string): ModelSpec {
   }
 }
 
+function restoreFingerprintFor(value = config()) {
+  return endpointFingerprint({
+    baseUrl: value.baseUrl,
+    credentialKey: "pi-restore-scope-v1",
+    buildOptions: {
+      contextTierCap: value.contextTierCap,
+      protocolOverrides: value.protocolOverrides,
+    },
+  })
+}
+
 function snapshotFor(id: string, key = KEY, value = config()) {
   return createDiscoverySnapshot(
     endpointFingerprint({
@@ -146,7 +157,11 @@ describe("discoverModels", () => {
 describe("refreshProviderModels 两阶段", () => {
   test("restore 阶段回放持久化清单且不发请求", async () => {
     let calls = 0
-    const stored = { models: [storedModel("remembered")], snapshot: snapshotFor("remembered") }
+    const stored = {
+      models: [storedModel("remembered")],
+      snapshot: snapshotFor("remembered"),
+      restoreFingerprint: restoreFingerprintFor(),
+    }
     const models = await refreshProviderModels(
       config(),
       { allowNetwork: false, signal: new AbortController().signal, stored, publish: async () => true },
