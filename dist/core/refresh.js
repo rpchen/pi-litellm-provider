@@ -46,13 +46,13 @@ export function createDiscoveryCoordinator(options = {}) {
             return entry.pending;
         const startedAt = now();
         if (!request.forceRefresh) {
-            if (entry.hasValue && startedAt < entry.expiresAt) {
-                return Promise.resolve(resultFromEntry(entry, "cache"));
-            }
             if (entry.retryAt > startedAt) {
                 if (entry.hasValue)
                     return Promise.resolve(resultFromEntry(entry, "stale"));
                 return Promise.reject(entry.lastError ?? new Error("discovery retry is in backoff"));
+            }
+            if (entry.hasValue && startedAt < entry.expiresAt) {
+                return Promise.resolve(resultFromEntry(entry, "cache"));
             }
         }
         let pending;
