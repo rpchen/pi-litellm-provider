@@ -15,7 +15,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { normalizeLiteLLMURL } from "../core/index.ts"
 import { loadConfig, type ExtensionConfig } from "./config.ts"
-import { refreshProviderModels, type DiscoveryDeps } from "./discovery.ts"
+import { createProviderRefreshCoordinator, refreshProviderModels, type DiscoveryDeps } from "./discovery.ts"
 import { PROVIDER_ID } from "./provider-id.ts"
 import type { ProviderConfigLike, RefreshModelsContextLike } from "./types.ts"
 
@@ -41,6 +41,7 @@ export function buildProviderConfig(
   getConfig: () => ExtensionConfig,
   deps?: DiscoveryDeps,
 ): ProviderConfigLike {
+  const coordinator = createProviderRefreshCoordinator()
   return {
     name: "LiteLLM",
     baseUrl: normalizedProviderBaseUrl(getConfig().baseUrl),
@@ -48,7 +49,7 @@ export function buildProviderConfig(
     // credential wins, then the LITELLM_API_KEY environment variable.
     apiKey: "$LITELLM_API_KEY",
     models: [],
-    refreshModels: (context: RefreshModelsContextLike) => refreshProviderModels(getConfig(), context, deps),
+    refreshModels: (context: RefreshModelsContextLike) => refreshProviderModels(getConfig(), context, deps, coordinator),
   }
 }
 
