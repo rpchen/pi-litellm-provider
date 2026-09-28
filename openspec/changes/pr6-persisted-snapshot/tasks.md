@@ -4,5 +4,5 @@
 - [x] Persist a new endpoint-bound snapshot after successful network discovery.
 - [x] Log compatibility drift from Core comparison.
 - [x] Add restore and endpoint-change adapter tests.
-- [ ] Rebuild committed dist against merged PR6 Core SHA.
-- [ ] Run Pi verify:dist, typecheck, tests, OpenSpec, and package gates.
+- [x] Rebuild committed dist against merged PR6 Core SHA.
+- [x] Run Pi verify:dist, typecheck, tests, OpenSpec, and package gates.
