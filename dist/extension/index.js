@@ -1,6 +1,6 @@
 import { normalizeLiteLLMURL } from "../core/index.js";
 import { loadConfig } from "./config.js";
-import { refreshProviderModels } from "./discovery.js";
+import { createProviderRefreshCoordinator, refreshProviderModels } from "./discovery.js";
 import { PROVIDER_ID } from "./provider-id.js";
 export { PROVIDER_ID };
 /**
@@ -21,6 +21,7 @@ export function normalizedProviderBaseUrl(raw) {
 }
 /** Build the provider config for the current config snapshot. */
 export function buildProviderConfig(getConfig, deps) {
+    const coordinator = createProviderRefreshCoordinator();
     return {
         name: "LiteLLM",
         baseUrl: normalizedProviderBaseUrl(getConfig().baseUrl),
@@ -28,7 +29,7 @@ export function buildProviderConfig(getConfig, deps) {
         // credential wins, then the LITELLM_API_KEY environment variable.
         apiKey: "$LITELLM_API_KEY",
         models: [],
-        refreshModels: (context) => refreshProviderModels(getConfig(), context, deps),
+        refreshModels: (context) => refreshProviderModels(getConfig(), context, deps, coordinator),
     };
 }
 /**
