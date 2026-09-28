@@ -12,8 +12,14 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildModelSpecs, modelFingerprint, type ModelSpec } from "../core/index.ts"
-import { normalizeLiteLLMURL } from "../core/index.ts"
+import {
+  buildModelSpecs,
+  createDiscoveryCoordinator,
+  modelFingerprint,
+  normalizeLiteLLMURL,
+  type DiscoveryCoordinator,
+  type ModelSpec,
+} from "../core/index.ts"
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog, type FetchLike } from "../net/fetch.ts"
 import type { ExtensionConfig } from "./config.ts"
 import { toProviderModels } from "./map.ts"
@@ -36,6 +42,13 @@ export interface DiscoveryOutcome {
   models: ProviderModelConfigLike[]
   specs: ModelSpec[]
   fingerprint: string
+}
+
+export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>
+
+/** Create one coordinator per registered provider instance. */
+export function createProviderRefreshCoordinator(): ProviderRefreshCoordinator {
+  return createDiscoveryCoordinator<DiscoveryOutcome>()
 }
 
 /** Persisted payload shape; the host stores it verbatim and replays it in restore phase. */
@@ -80,6 +93,7 @@ export async function refreshProviderModels(
   config: ExtensionConfig,
   context: RefreshModelsContextLike,
   deps: DiscoveryDeps = {},
+  coordinator: ProviderRefreshCoordinator = createProviderRefreshCoordinator(),
 ): Promise<ProviderModelConfigLike[]> {
   const logger = deps.logger ?? console
   const stored = asStoredCatalog(context.stored)
@@ -108,8 +122,27 @@ export async function refreshProviderModels(
     return []
   }
 
+  const discoveryKey = `${config.baseUrl}\u0000${apiKey}`
+
   try {
-    const outcome = await discoverModels(config, apiKey, context.signal, deps)
+    const coordinated = await coordinator.refresh(
+      discoveryKey,
+      () => discoverModels(config, apiKey, context.signal, deps),
+      {
+        forceRefresh: context.force === true,
+        failurePolicy: (error) => {
+          if (context.signal?.aborted) return "ignore"
+          if (error instanceof DiscoveryError && error.kind === "auth") return "clear"
+          if (normalizeLiteLLMURLFailed(error, config.baseUrl)) return "clear"
+          return "stale"
+        },
+      },
+    )
+    if (context.signal?.aborted) return stored?.models ?? []
+    if (coordinated.source === "stale") {
+      logger.warn(`LiteLLM 发现失败，使用 last-known-good：${messageOf(coordinated.error)}`)
+    }
+    const outcome = coordinated.value
     await publishIfChanged(context, stored, outcome.models)
     return outcome.models
   } catch (error) {
