@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createDiscoverySnapshot, endpointFingerprint, type ModelSpec } from "../src/core/index.ts"
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
 import { resetModelsDevCacheForTest, type FetchLike } from "../src/net/fetch.ts"
@@ -18,6 +19,46 @@ function storedModel(id: string): ProviderModelConfigLike {
     contextWindow: 1,
     maxTokens: 1,
   }
+}
+
+function storedSpec(id: string): ModelSpec {
+  return {
+    id,
+    name: id,
+    protocol: "chat",
+    capabilities: { tools: true, input: ["text"], output: ["text"] },
+    variants: [],
+    released: 0,
+    releaseUnit: "none",
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    limit: { context: 1, input: 1, output: 1 },
+  }
+}
+
+function restoreFingerprintFor(value = config()) {
+  return endpointFingerprint({
+    baseUrl: value.baseUrl,
+    credentialKey: "pi-restore-scope-v1",
+    buildOptions: {
+      contextTierCap: value.contextTierCap,
+      protocolOverrides: value.protocolOverrides,
+    },
+  })
+}
+
+function snapshotFor(id: string, key = KEY, value = config()) {
+  return createDiscoverySnapshot(
+    endpointFingerprint({
+      baseUrl: value.baseUrl,
+      credentialKey: key,
+      buildOptions: {
+        contextTierCap: value.contextTierCap,
+        protocolOverrides: value.protocolOverrides,
+      },
+    }),
+    [storedSpec(id)],
+    "2026-09-28T00:00:00.000Z",
+  )
 }
 
 function config(overrides: Partial<ExtensionConfig> = {}): ExtensionConfig {
@@ -116,7 +157,11 @@ describe("discoverModels", () => {
 describe("refreshProviderModels 两阶段", () => {
   test("restore 阶段回放持久化清单且不发请求", async () => {
     let calls = 0
-    const stored = { models: [storedModel("remembered")] }
+    const stored = {
+      models: [storedModel("remembered")],
+      snapshot: snapshotFor("remembered"),
+      restoreFingerprint: restoreFingerprintFor(),
+    }
     const models = await refreshProviderModels(
       config(),
       { allowNetwork: false, signal: new AbortController().signal, stored, publish: async () => true },
@@ -163,7 +208,22 @@ describe("refreshProviderModels 两阶段", () => {
       }),
       logger: silent,
     })
-    const { published, context } = fakeContext({ stored: { models: first.models } })
+    const storedSnapshot = createDiscoverySnapshot(
+      endpointFingerprint({
+        baseUrl: config().baseUrl,
+        credentialKey: KEY,
+        buildOptions: { contextTierCap: true, protocolOverrides: {} },
+      }),
+      first.specs,
+      "2026-09-28T00:00:00.000Z",
+    )
+    const { published, context } = fakeContext({
+      stored: {
+        models: first.models,
+        snapshot: storedSnapshot,
+        restoreFingerprint: restoreFingerprintFor(),
+      },
+    })
     const models = await refreshProviderModels(config(), context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
@@ -388,7 +448,7 @@ describe("refreshProviderModels 失败分类", () => {
   test("已中止的 signal 在 network 阶段直接回放持久化清单", async () => {
     const controller = new AbortController()
     controller.abort()
-    const stored = { models: [storedModel("remembered")] }
+    const stored = { models: [storedModel("remembered")], snapshot: snapshotFor("remembered") }
     const { context } = fakeContext({ signal: controller.signal, stored })
     const models = await refreshProviderModels(config(), context, { logger: silent })
     expect(models.map((model) => model.id)).toEqual(["remembered"])
@@ -439,7 +499,7 @@ describe("refreshProviderModels 失败分类", () => {
     const errors: string[] = []
     const { published, context } = fakeContext({
       signal: controller.signal,
-      stored: { models: [storedModel("remembered")] },
+      stored: { models: [storedModel("remembered")], snapshot: snapshotFor("remembered") },
     })
     const deps = {
       fetchImpl: ((_input: string | URL | Request, init?: RequestInit) =>

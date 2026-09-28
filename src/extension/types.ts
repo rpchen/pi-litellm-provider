@@ -11,7 +11,11 @@ export interface RefreshModelsContextLike {
   /** Resolved credential; when present its key is preferred over any configured reference. */
   readonly credential?: { readonly type?: string; readonly key?: string }
   /** Persisted catalog snapshot from a previous successful refresh. */
-  readonly stored?: { readonly models: readonly ProviderModelConfigLike[] }
+  readonly stored?: {
+    readonly models: readonly ProviderModelConfigLike[]
+    readonly snapshot?: unknown
+    readonly restoreFingerprint?: unknown
+  }
   /** Whether this refresh phase may perform network access. */
   readonly allowNetwork?: boolean
   /** Whether the host asks to bypass freshness checks. */

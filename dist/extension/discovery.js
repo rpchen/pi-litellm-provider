@@ -12,7 +12,7 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildModelSpecs, createDiscoveryCoordinator, modelFingerprint, normalizeLiteLLMURL, } from "../core/index.js";
+import { buildModelSpecs, compareDiscoverySnapshots, createDiscoveryCoordinator, createDiscoverySnapshot, endpointFingerprint, inspectDiscoverySnapshot, modelFingerprint, normalizeLiteLLMURL, } from "../core/index.js";
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog } from "../net/fetch.js";
 import { toProviderModels } from "./map.js";
 /** Create one coordinator per registered provider instance. */
@@ -48,9 +48,32 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
 export async function refreshProviderModels(config, context, deps = {}, coordinator = createProviderRefreshCoordinator()) {
     const logger = deps.logger ?? console;
     const stored = asStoredCatalog(context.stored);
-    // Restore phase, or an aborted request: replay whatever the host persisted last.
+    const apiKey = context.credential?.key;
+    const expectedEndpoint = snapshotEndpointFingerprint(config, apiKey);
+    const restoreFingerprint = snapshotRestoreScopeFingerprint(config);
+    const storedEndpoint = stored?.snapshot && typeof stored.snapshot.endpointFingerprint === "string"
+        ? stored.snapshot.endpointFingerprint
+        : undefined;
+    const restored = expectedEndpoint
+        ? inspectDiscoverySnapshot(stored?.snapshot, expectedEndpoint)
+        : restoreFingerprint !== undefined &&
+            stored?.restoreFingerprint === restoreFingerprint &&
+            storedEndpoint !== undefined
+            ? inspectDiscoverySnapshot(stored.snapshot, storedEndpoint)
+            : { compatible: false, reason: "missing" };
+    const restoreCompatibleModels = () => {
+        if (!restored.compatible || !restored.snapshot)
+            return [];
+        try {
+            return toProviderModels(restored.snapshot.models, normalizeLiteLLMURL(config.baseUrl).rootURL);
+        }
+        catch {
+            return [];
+        }
+    };
+    // Restore phase, or an aborted request: only replay an endpoint-compatible snapshot.
     if (context.allowNetwork === false || context.signal?.aborted) {
-        return stored?.models ?? [];
+        return restoreCompatibleModels();
     }
     // Not connected: no address resolved. Tell the user how to configure one (spec:
     // 记录说明性提示) and drop the catalog so stale models disappear.
@@ -59,7 +82,6 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         await publishIfChanged(context, stored, []);
         return [];
     }
-    const apiKey = context.credential?.key;
     if (!apiKey) {
         // The host only reaches the network phase when a credential resolved; treat a missing
         // key defensively as unconfigured rather than sending an unauthenticated request.
@@ -82,12 +104,27 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
             },
         });
         if (context.signal?.aborted)
-            return stored?.models ?? [];
+            return restoreCompatibleModels();
         if (coordinated.source === "stale") {
             logger.warn(`LiteLLM 发现失败，使用 last-known-good：${messageOf(coordinated.error)}`);
         }
         const outcome = coordinated.value;
-        await publishIfChanged(context, stored, outcome.models);
+        const successfulEndpoint = expectedEndpoint ?? endpointFingerprint({
+            baseUrl: config.baseUrl,
+            credentialKey: apiKey,
+            buildOptions: {
+                contextTierCap: config.contextTierCap,
+                protocolOverrides: config.protocolOverrides,
+            },
+        });
+        const snapshot = createDiscoverySnapshot(successfulEndpoint, outcome.specs, new Date(coordinated.refreshedAt).toISOString());
+        if (restored.compatible && restored.snapshot) {
+            const diff = compareDiscoverySnapshots(restored.snapshot, snapshot);
+            if (diff.drift) {
+                logger.warn(`LiteLLM 发现漂移：added=${diff.added.length}, removed=${diff.removed.length}, protocol=${diff.protocolChanged.length}, capabilities=${diff.capabilityChanged.length}`);
+            }
+        }
+        await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint);
         return outcome.models;
     }
     catch (error) {
@@ -96,7 +133,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         // That is normal lifecycle, not a failure: replay the persisted baseline silently;
         // the host discards this refresh's result anyway once the signal is aborted.
         if (context.signal?.aborted) {
-            return stored?.models ?? [];
+            return restoreCompatibleModels();
         }
         if (error instanceof DiscoveryError && error.kind === "auth") {
             logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`);
@@ -123,6 +160,41 @@ function isAbortError(error) {
         return false;
     return error.name === "AbortError" || /aborted/i.test(error.message);
 }
+const PI_RESTORE_SCOPE_CREDENTIAL = "pi-restore-scope-v1";
+function snapshotRestoreScopeFingerprint(config) {
+    if (config.baseUrl.length === 0)
+        return undefined;
+    try {
+        return endpointFingerprint({
+            baseUrl: config.baseUrl,
+            credentialKey: PI_RESTORE_SCOPE_CREDENTIAL,
+            buildOptions: {
+                contextTierCap: config.contextTierCap,
+                protocolOverrides: config.protocolOverrides,
+            },
+        });
+    }
+    catch {
+        return undefined;
+    }
+}
+function snapshotEndpointFingerprint(config, apiKey) {
+    if (config.baseUrl.length === 0 || !apiKey)
+        return undefined;
+    try {
+        return endpointFingerprint({
+            baseUrl: config.baseUrl,
+            credentialKey: apiKey,
+            buildOptions: {
+                contextTierCap: config.contextTierCap,
+                protocolOverrides: config.protocolOverrides,
+            },
+        });
+    }
+    catch {
+        return undefined;
+    }
+}
 /** Whether the failure came from address normalization (config error, not transport). */
 function normalizeLiteLLMURLFailed(error, _baseUrl) {
     if (error instanceof DiscoveryError)
@@ -143,16 +215,26 @@ function redactUrl(value) {
  * branches too, so repeated identical empty results do not rewrite models-store (spec:
  * 仅在内容变化时更新).
  */
-async function publishIfChanged(context, stored, models) {
-    if (modelsFingerprint(stored?.models) === modelsFingerprint(models))
+async function publishIfChanged(context, stored, models, snapshot, restoreFingerprint) {
+    const sameModels = modelsFingerprint(stored?.models) === modelsFingerprint(models);
+    const sameSnapshot = snapshot === undefined
+        ? stored?.snapshot === undefined && stored?.restoreFingerprint === undefined
+        : stored?.snapshot?.endpointFingerprint === snapshot.endpointFingerprint &&
+            stored.snapshot.modelFingerprint === snapshot.modelFingerprint &&
+            stored.restoreFingerprint === restoreFingerprint;
+    if (sameModels && sameSnapshot)
         return;
-    await publish(context, models);
+    await publish(context, models, snapshot, restoreFingerprint);
 }
 function asStoredCatalog(stored) {
     if (!stored || !Array.isArray(stored.models))
         return undefined;
     const models = stored.models;
-    return { models, checkedAt: 0 };
+    const snapshot = "snapshot" in stored ? stored.snapshot : undefined;
+    const restoreFingerprint = "restoreFingerprint" in stored && typeof stored.restoreFingerprint === "string"
+        ? stored.restoreFingerprint
+        : undefined;
+    return { models, checkedAt: 0, snapshot, restoreFingerprint };
 }
 /** Stable fingerprint over the registered model list, for change detection against `stored`. */
 function modelsFingerprint(models) {
@@ -171,14 +253,14 @@ function modelsFingerprint(models) {
     })));
 }
 /** Persist the given model list into the host catalog; failures must not fail the refresh. */
-async function publish(context, models) {
+async function publish(context, models, snapshot, restoreFingerprint) {
     if (!context.publish)
         return;
     // A cancelled refresh must not write the store: skip before racing the abort.
     if (context.signal?.aborted)
         return;
     try {
-        await context.publish({ persist: { models, checkedAt: Date.now() } });
+        await context.publish({ persist: { models, checkedAt: Date.now(), snapshot, restoreFingerprint } });
     }
     catch (error) {
         // The host's publish rejects with an abort reason when cancellation lands during the

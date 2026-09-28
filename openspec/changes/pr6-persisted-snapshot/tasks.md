@@ -1,0 +1,8 @@
+- [x] Extend Pi persisted catalog payload with the Core snapshot.
+- [x] Reject restore when endpoint fingerprint is incompatible.
+- [x] Rebuild restored provider models from neutral stored ModelSpec data.
+- [x] Persist a new endpoint-bound snapshot after successful network discovery.
+- [x] Log compatibility drift from Core comparison.
+- [x] Add restore and endpoint-change adapter tests.
+- [x] Rebuild committed dist against merged PR6 Core SHA.
+- [x] Run Pi verify:dist, typecheck, tests, OpenSpec, and package gates.
