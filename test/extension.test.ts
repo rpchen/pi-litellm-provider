@@ -184,3 +184,64 @@ describe("轮询生命周期", () => {
     expect(calls).toBe(0)
   })
 })
+
+describe("Core refresh coordinator 接入", () => {
+  const body = {
+    data: [
+      {
+        model_name: "coordinated-model",
+        litellm_params: { model: "openai/coordinated-model" },
+        model_info: { mode: "chat" },
+      },
+    ],
+  }
+
+  function context(force = false): RefreshModelsContextLike {
+    return {
+      allowNetwork: true,
+      force,
+      signal: new AbortController().signal,
+      credential: { key: "sk-coordinator" },
+      publish: async () => true,
+    }
+  }
+
+  test("同一 provider 在短 TTL 内复用结果，force 会绕过缓存", async () => {
+    let calls = 0
+    const built = buildProviderConfig(() => config(), {
+      fetchImpl: async () => {
+        calls += 1
+        return new Response(JSON.stringify(body), { status: 200 })
+      },
+      loadModelsDevCatalog: async () => ({}),
+      logger: { warn: () => {}, error: () => {} },
+    })
+
+    expect((await built.refreshModels!(context())).map((model) => model.id)).toEqual(["coordinated-model"])
+    expect((await built.refreshModels!(context())).map((model) => model.id)).toEqual(["coordinated-model"])
+    expect(calls).toBe(1)
+
+    expect((await built.refreshModels!(context(true))).map((model) => model.id)).toEqual(["coordinated-model"])
+    expect(calls).toBe(2)
+  })
+
+  test("成功后临时失败由 Core 返回 last-known-good", async () => {
+    let fail = false
+    const warnings: string[] = []
+    const built = buildProviderConfig(() => config(), {
+      fetchImpl: async () => {
+        if (fail) throw new Error("temporary outage")
+        return new Response(JSON.stringify(body), { status: 200 })
+      },
+      loadModelsDevCatalog: async () => ({}),
+      logger: { warn: (message) => warnings.push(message), error: () => {} },
+    })
+
+    await built.refreshModels!(context())
+    fail = true
+    const stale = await built.refreshModels!(context(true))
+    expect(stale.map((model) => model.id)).toEqual(["coordinated-model"])
+    expect(warnings.some((message) => message.includes("last-known-good"))).toBeTrue()
+  })
+})
+
