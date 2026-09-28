@@ -21,6 +21,16 @@ bun test
 
 功能与行为变更走 OpenSpec：`openspec/changes/` 下先立提案（proposal / design / specs / tasks），实施完成并验证后 archive。
 
+## 测试完成标准
+
+测试治理以 `litellm-discovery-core/docs/testing-standard.md` 为权威来源。提交行为变更时必须同时满足：
+
+- OpenSpec 每个 Scenario 都能映射到至少一个自动化验收证据；
+- 安全、凭据、持久化、fallback、destructive failure 等边界有真实负向输入；
+- 新增用户可见功能至少有一条纵向自动化链路，Pi 功能应覆盖到 command / UI；
+- PR 描述提供 `Requirement / Scenario → Test Evidence`，说明破坏某 Scenario 时哪项测试会失败；
+- CI 全绿是必要条件，但不能替代 Scenario 级闭环。
+
 ## 发版
 
 Release 由 tag 触发（`release.yml` 监听 `v*.*.*`，并强校验 tag == `v` + `package.json.version`）：
