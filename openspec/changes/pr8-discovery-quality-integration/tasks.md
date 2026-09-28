@@ -1,5 +1,5 @@
 - [x] Update copied Core regression snapshot for PR8 token-limit semantics.
 - [x] Add a Core-to-Pi vertical mapping assertion for the changed context behavior.
 - [x] Update README for the user-visible limit behavior.
-- [ ] Rebuild committed dist from merged PR8 Core SHA.
+- [x] Rebuild committed dist from merged PR8 Core SHA.
 - [ ] Run verify:dist, typecheck, tests, package test and strict OpenSpec validation.
