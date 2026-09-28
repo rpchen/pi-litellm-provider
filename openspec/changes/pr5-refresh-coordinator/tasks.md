@@ -1,0 +1,6 @@
+- [x] Route Pi network discovery through the shared Core coordinator.
+- [x] Keep one coordinator instance per registered provider config.
+- [x] Map force, cancellation, auth/config clear, and degradable stale semantics.
+- [x] Add adapter tests for TTL reuse, force refresh, and last-known-good fallback.
+- [ ] Rebuild committed dist against the merged PR5 Core SHA.
+- [ ] Run Pi typecheck, tests, package checks, dist verification, and OpenSpec validation.
