@@ -9,9 +9,13 @@ Pi SHALL restore persisted discovery data only when Core accepts the stored snap
 - **WHEN** restore runs without network access and the stored snapshot matches the current endpoint, credential, and discovery options
 - **THEN** Pi rebuilds the provider model list from the neutral stored snapshot
 
-#### Scenario: incompatible restore
-- **WHEN** the endpoint fingerprint no longer matches
+#### Scenario: credential-bound incompatible restore
+- **WHEN** the host supplies a credential and the full endpoint fingerprint no longer matches
 - **THEN** Pi returns no restored models rather than replaying the old catalog
+
+#### Scenario: restore phase without credential
+- **WHEN** the host omits the credential during restore-only startup
+- **THEN** Pi restores only when the persisted anonymous URL/options scope matches and Core validates the snapshot's schema and model fingerprint
 
 ### Requirement: snapshot persistence
 A successful network discovery SHALL persist the Core discovery snapshot alongside Pi's host-facing model list.
