@@ -69,9 +69,12 @@ function toPiInput(modalities) {
  * `rootURL` is the normalized LiteLLM root (no `/v1`); each model's baseUrl is derived
  * per protocol.
  */
+export function hasOperationalLimits(spec) {
+    return spec.limit.context > 0 && spec.limit.output > 0;
+}
 export function toProviderModels(specs, rootURL) {
     const apiBase = `${rootURL}/v1`;
-    return specs.map((spec) => {
+    return specs.filter(hasOperationalLimits).map((spec) => {
         const model = {
             id: spec.id,
             name: spec.name,

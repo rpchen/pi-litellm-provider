@@ -27,4 +27,5 @@ export declare function thinkingLevelMapFor(spec: ModelSpec): Partial<Record<Thi
  * `rootURL` is the normalized LiteLLM root (no `/v1`); each model's baseUrl is derived
  * per protocol.
  */
+export declare function hasOperationalLimits(spec: ModelSpec): boolean;
 export declare function toProviderModels(specs: readonly ModelSpec[], rootURL: string): ProviderModelConfigLike[];
