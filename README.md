@@ -56,7 +56,7 @@ legacy 单 endpoint 模式下，地址优先级为：`LITELLM_BASE_URL` → 全�
 }
 ```
 
-endpoint id 是用户定义的稳定 ASCII slug；`default` 保留旧 provider id `litellm`，其他 endpoint 映射为 `litellm-<id>`。legacy 单 endpoint 字段与 `endpoints` 不能同时使用。显式模式不会读取 `LITELLM_BASE_URL`。
+endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-_]*`；`default` 保留旧 provider id `litellm`，其他 endpoint 映射为 `litellm-<id>`。legacy 单 endpoint 字段与 `endpoints` 不能同时使用。显式模式不会读取 `LITELLM_BASE_URL`。
 
 **3. 登录 API Key**
 
