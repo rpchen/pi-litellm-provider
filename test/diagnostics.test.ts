@@ -130,7 +130,7 @@ describe("PR7 Pi diagnostics closure", () => {
       },
     })
 
-    await h.command.handler("", commandContext)
+    await h.command.handler("default", commandContext)
     expect(notifications).toHaveLength(1)
     expect(notifications[0]!.level).toBe("info")
     expect(notifications[0]!.message).toContain("状态：正常")
