@@ -1,0 +1,3 @@
+- [x] Format absolute diagnostics timestamps in the Pi host timezone.
+- [x] Cover local-time conversion, retry time and preservation of the original UTC instant.
+- [x] Update README with the diagnostics timezone behavior.

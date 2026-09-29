@@ -35,6 +35,32 @@ function ageText(ageMs) {
         return `${Math.floor(ageMs / 60_000)}分钟`;
     return `${Math.floor(ageMs / 3_600_000)}小时`;
 }
+function pad2(value) {
+    return String(value).padStart(2, "0");
+}
+/**
+ * Format an instant in the timezone configured on the running host.
+ *
+ * Internal discovery state remains UTC/epoch based. The optional offset is only
+ * for deterministic tests; production callers omit it and use the host timezone.
+ */
+export function formatHostDateTime(value, timezoneOffsetMinutes) {
+    const instant = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    if (!Number.isFinite(instant.getTime()))
+        return String(value);
+    const offset = timezoneOffsetMinutes ?? instant.getTimezoneOffset();
+    const local = new Date(instant.getTime() - offset * 60_000);
+    const displayOffset = -offset;
+    const sign = displayOffset >= 0 ? "+" : "-";
+    const absoluteOffset = Math.abs(displayOffset);
+    const offsetHours = Math.floor(absoluteOffset / 60);
+    const offsetMinutes = absoluteOffset % 60;
+    return [
+        `${local.getUTCFullYear()}-${pad2(local.getUTCMonth() + 1)}-${pad2(local.getUTCDate())}`,
+        `${pad2(local.getUTCHours())}:${pad2(local.getUTCMinutes())}:${pad2(local.getUTCSeconds())}`,
+        `UTC${sign}${pad2(offsetHours)}:${pad2(offsetMinutes)}`,
+    ].join(" ");
+}
 const STATUS_TEXT = {
     idle: "尚未执行发现",
     restored: "已从持久化快照恢复，等待网络确认",
@@ -46,7 +72,7 @@ const STATUS_TEXT = {
     "config-error": "LiteLLM 地址配置无效",
     error: "发现失败",
 };
-export function formatProviderDiagnostics(state, now = Date.now()) {
+export function formatProviderDiagnostics(state, now = Date.now(), timezoneOffsetMinutes) {
     const snapshot = state.current;
     const build = runtimeBuildInfo();
     const lines = [
@@ -55,7 +81,7 @@ export function formatProviderDiagnostics(state, now = Date.now()) {
         `已注册模型：${snapshot.modelCount}`,
     ];
     if (snapshot.lastSuccessfulDiscoveryAt) {
-        lines.push(`最近成功发现：${snapshot.lastSuccessfulDiscoveryAt}`);
+        lines.push(`最近成功发现：${formatHostDateTime(snapshot.lastSuccessfulDiscoveryAt, timezoneOffsetMinutes)}`);
     }
     if (snapshot.cache) {
         const cache = snapshot.cache;
@@ -63,8 +89,9 @@ export function formatProviderDiagnostics(state, now = Date.now()) {
             ? cache.ageMs
             : Math.max(0, now - cache.refreshedAt);
         lines.push(`缓存：${cache.source} · stale=${cache.stale ? "是" : "否"} · age=${ageText(dynamicAge)} · failures=${cache.failureCount}`);
-        if (cache.nextRetryAt !== undefined)
-            lines.push(`下次允许重试：${new Date(cache.nextRetryAt).toISOString()}`);
+        if (cache.nextRetryAt !== undefined) {
+            lines.push(`下次允许重试：${formatHostDateTime(cache.nextRetryAt, timezoneOffsetMinutes)}`);
+        }
     }
     const discovery = snapshot.discovery;
     if (discovery) {

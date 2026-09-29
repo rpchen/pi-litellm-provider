@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
 import {
   createProviderDiagnosticsState,
+  formatHostDateTime,
   formatProviderDiagnostics,
 } from "../src/extension/diagnostics.ts"
 import piLitellmProvider, { buildProviderConfig } from "../src/extension/index.ts"
@@ -71,6 +72,35 @@ function fakePi() {
 }
 
 describe("PR7 Pi diagnostics closure", () => {
+  test("用户可见诊断时间按宿主时区显示，而内部 instant 保持不变", () => {
+    const instant = "2026-09-29T01:07:32.160Z"
+    expect(formatHostDateTime(instant, -480)).toBe("2026-09-29 09:07:32 UTC+08:00")
+
+    const state = createProviderDiagnosticsState()
+    state.current = {
+      status: "stale",
+      modelCount: 1,
+      lastSuccessfulDiscoveryAt: instant,
+      cache: {
+        source: "stale",
+        stale: true,
+        refreshedAt: Date.parse(instant),
+        ageMs: 0,
+        failureCount: 1,
+        nextRetryAt: Date.parse("2026-09-29T01:10:00.000Z"),
+        pending: false,
+      },
+    }
+    const text = formatProviderDiagnostics(
+      state,
+      Date.parse("2026-09-29T01:08:32.160Z"),
+      -480,
+    )
+    expect(text).toContain("最近成功发现：2026-09-29 09:07:32 UTC+08:00")
+    expect(text).toContain("下次允许重试：2026-09-29 09:10:00 UTC+08:00")
+    expect(state.current.lastSuccessfulDiscoveryAt).toBe(instant)
+  })
+
   test("fixture → discovery → diagnostics state → /litellm-diagnostics → ui.notify is one zero-model-turn path", async () => {
     const h = fakePi()
     piLitellmProvider(h.api, {
