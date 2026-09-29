@@ -11,6 +11,7 @@ export type ProviderDiagnosticStatus =
   | "stale"
   | "empty"
   | "unconfigured"
+  | "credential-missing"
   | "auth-error"
   | "config-error"
   | "error"
@@ -115,6 +116,7 @@ const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {
   stale: "网络刷新失败，正在使用 last-known-good",
   empty: "发现成功，但没有可用模型",
   unconfigured: "尚未完成 LiteLLM 配置",
+  "credential-missing": "endpoint 已激活，但尚未配置凭据",
   "auth-error": "认证失败，模型已清空",
   "config-error": "LiteLLM 地址配置无效",
   error: "发现失败",
@@ -168,4 +170,46 @@ export function formatProviderDiagnostics(
   if (snapshot.note) lines.push(`说明：${snapshot.note}`)
   lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)
   return lines.join("\n")
+}
+
+
+export interface EndpointDiagnosticsEntry {
+  readonly id: string
+  readonly active: boolean
+  readonly state: ProviderDiagnosticsState
+}
+
+/**
+ * Sanitized multi-endpoint overview. It deliberately accepts no endpoint URL or
+ * credential material, so callers cannot accidentally surface them.
+ */
+export function formatMultiEndpointDiagnostics(entries: readonly EndpointDiagnosticsEntry[]): string {
+  const build = runtimeBuildInfo()
+  const active = entries.filter((entry) => entry.active)
+  const lines = [
+    `LiteLLM Diagnostics · Pi ${build.pluginVersion}`,
+    `Endpoints：configured=${entries.length} · active=${active.length} · inactive=${entries.length - active.length}`,
+  ]
+  for (const entry of entries) {
+    const snapshot = entry.state.current
+    const activity = entry.active ? "active" : "inactive"
+    lines.push(
+      `${entry.id}：${activity} · ${STATUS_TEXT[snapshot.status]} · models=${snapshot.modelCount}`,
+    )
+  }
+  lines.push("详情：/litellm-diagnostics <endpointId>")
+  lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)
+  return lines.join("\n")
+}
+
+export function formatEndpointDiagnostics(
+  endpointID: string,
+  active: boolean,
+  state: ProviderDiagnosticsState,
+  now = Date.now(),
+  timezoneOffsetMinutes?: number,
+): string {
+  const detail = formatProviderDiagnostics(state, now, timezoneOffsetMinutes).split("\n")
+  detail.splice(1, 0, `Endpoint：${endpointID} · ${active ? "active" : "inactive"}`)
+  return detail.join("\n")
 }
