@@ -15,11 +15,16 @@
 npm ci
 bun run typecheck
 bun test
+npm run validate:spec
+npm run test:openspec-closure
+npm run test:release-metadata
 ```
 
 ## 规格变更
 
 功能与行为变更走 OpenSpec：`openspec/changes/` 下先立提案（proposal / design / specs / tasks），实施完成并验证后 archive。
+
+`npm run test:openspec-closure` 会拒绝 tasks 已全部完成但仍留在 active `openspec/changes/` 的 change。实现完成后必须使用 OpenSpec CLI archive，再执行 strict validation；不得手工移动目录代替 archive。
 
 ## 测试完成标准
 
@@ -42,7 +47,9 @@ OpenSpec 中包含用户可见 Scenario 时，tasks 必须包含 README 更新�
 Release 由 tag 触发（`release.yml` 监听 `v*.*.*`，并强校验 tag == `v` + `package.json.version`）：
 
 1. 用户可见变更（`feat:` / `fix:`）合入 `main` 后，开 PR 提升 `package.json` 的 `version`（`feat:` → minor、`fix:` → patch；纯 `docs:` / `chore:` 不必发版）
-2. 在 `main` 上打 `v<version>` tag 并推送（打 tag 前与维护者确认）
-3. workflow 自动完成全套门禁 → tagged Git 包冒烟 → `npm pack` + SHA256 → 创建 GitHub Release（附 `.tgz` / `.sha256` 与安装命令）
+2. release PR 同时保证 package/lockfile 版本与 README “当前发行版”示例一致，并通过 `test:release-metadata`
+3. 合并后等待同一 main commit 完整 CI 通过，再创建指向该 SHA 的不可移动 tag
+4. 在 `main` 上打 `v<version>` tag 并推送（打 tag 前与维护者确认）
+5. workflow 自动完成全套门禁 → tagged Git 包冒烟 → `npm pack` + SHA256 → 创建 GitHub Release（附 `.tgz` / `.sha256` 与安装命令），发布后核对 tag SHA / Release / 附件
 
 `pi install git:`（无 ref）用户始终跟随 `main`；`#vX.Y.Z` 锁定安装与 Release 附件依赖 tag——合入用户可见变更后记得检查 tag 是否落后于 `main`。
