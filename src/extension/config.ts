@@ -1,39 +1,47 @@
 /**
- * Extension configuration: LiteLLM address resolution and optional tuning knobs.
+ * Extension configuration.
  *
- * Address sources, highest precedence first:
- *   1. `LITELLM_BASE_URL` environment variable
- *   2. project config `.pi/litellm.json` (relative to the current working directory)
- *   3. global config `~/.pi/agent/litellm.json`
+ * Legacy single-endpoint mode keeps the existing precedence:
+ *   LITELLM_BASE_URL > project .pi/litellm.json > global ~/.pi/agent/litellm.json.
  *
- * The API key is intentionally NOT read here: it flows through pi's own auth chain
- * (`/login` stored credential, then `$LITELLM_API_KEY`), so discovery and model calls
- * always resolve the same key via the host.
- *
- * Fault tolerance mirrors `fgrehm/pi-ollama-cloud`'s sanitizeConfig: unknown keys are
- * dropped, values with wrong types are ignored, and malformed JSON never throws.
+ * PR9 explicit multi-endpoint mode is intentionally global-only. It is selected when
+ * the global file declares `endpoints`; legacy address/protocol fields are then not
+ * combined with it and project/env endpoint settings are ignored.
  */
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { getAgentDir } from "@earendil-works/pi-coding-agent"
+import { isEndpointID } from "../core/index.ts"
 
-/** LiteLLM protocol override value accepted by the extension configuration. */
 export type ConfigProtocol = "chat" | "responses" | "messages"
+export type ConfigMode = "legacy" | "multi"
 
-/** Resolved extension configuration. `baseUrl` is empty when no source provided one. */
+export interface EndpointConfig {
+  /** Stable user-defined identity. It is not a display name and must never be rewritten. */
+  readonly id: string
+  readonly baseUrl: string
+  readonly protocolOverrides: Record<string, ConfigProtocol>
+}
+
+/**
+ * Root config plus the optional endpoint identity used by one runtime provider view.
+ *
+ * `mode` remains optional for structural backwards compatibility with existing tests
+ * and downstream helper callers; absence means legacy.
+ */
 export interface ExtensionConfig {
-  /** Raw configured address (not normalized); empty string means "not connected". */
   baseUrl: string
-  /** Seconds between discovery polls. Default 300, clamped to a 30s minimum. */
   pollInterval: number
-  /** Whether to cap context windows at the first pricing tier boundary. Default true. */
   contextTierCap: boolean
-  /** Per-model protocol overrides, keyed by LiteLLM `model_name`. */
   protocolOverrides: Record<string, ConfigProtocol>
-  /** Global config file path, exposed for diagnostics. */
   globalConfigPath: string
-  /** Project config file path, exposed for diagnostics. */
   projectConfigPath: string
+  mode?: ConfigMode
+  endpoints?: readonly EndpointConfig[]
+  /** Set only on an explicit multi-endpoint runtime view. */
+  endpointID?: string
+  /** Sanitized config issues safe to expose in diagnostics (never contains URL/key). */
+  configIssues?: readonly string[]
 }
 
 export const DEFAULT_POLL_INTERVAL_SECONDS = 300
@@ -50,13 +58,15 @@ interface FileConfig {
   pollInterval?: number
   contextTierCap?: boolean
   protocolOverrides?: Record<string, ConfigProtocol>
+  endpoints?: EndpointConfig[]
+  endpointsDeclared: boolean
+  configIssues: string[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/** True when the value parses as an http(s) URL (spec: 地址必须是 http 或 https). */
 function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value)
@@ -66,19 +76,66 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
-/**
- * Keep only known keys with valid types. Type-invalid known fields are dropped with a
- * warning (spec: 配置文件字段非法时记录警告); unknown keys are ignored silently.
- */
-function sanitizeFileConfig(raw: Record<string, unknown>, source: string, logger: ConfigLogger): FileConfig {
-  const out: FileConfig = {}
+function sanitizeProtocolOverrides(
+  raw: unknown,
+  source: string,
+  logger: ConfigLogger,
+): Record<string, ConfigProtocol> | undefined {
+  if (!isRecord(raw)) {
+    logger.warn(`LiteLLM 配置 ${source} 的 protocolOverrides 非法（需要对象），已忽略`)
+    return undefined
+  }
+  const overrides: Record<string, ConfigProtocol> = {}
+  for (const [model, protocol] of Object.entries(raw)) {
+    if (typeof protocol === "string" && PROTOCOLS.has(protocol as ConfigProtocol)) {
+      overrides[model] = protocol as ConfigProtocol
+    } else {
+      logger.warn(
+        `LiteLLM 配置 ${source} 的 protocolOverrides.${model} 非法（需要 chat/responses/messages），已忽略`,
+      )
+    }
+  }
+  return overrides
+}
+
+function sanitizeEndpoint(
+  id: string,
+  value: unknown,
+  source: string,
+  logger: ConfigLogger,
+): EndpointConfig | undefined {
+  if (!isEndpointID(id)) {
+    logger.warn(`LiteLLM 配置 ${source} 的 endpoint id "${id}" 非法（需要 [a-z0-9][a-z0-9-_]*），已跳过`)
+    return undefined
+  }
+  if (!isRecord(value)) {
+    logger.warn(`LiteLLM 配置 ${source} 的 endpoints.${id} 非法（需要对象），已跳过`)
+    return undefined
+  }
+  const baseUrl = typeof value.baseUrl === "string" ? value.baseUrl.trim() : ""
+  if (baseUrl.length === 0 || !isHttpUrl(baseUrl)) {
+    logger.warn(`LiteLLM 配置 ${source} 的 endpoints.${id}.baseUrl 非法（需要非空 http(s) 地址），已跳过`)
+    return undefined
+  }
+  const protocolOverrides = "protocolOverrides" in value
+    ? (sanitizeProtocolOverrides(value.protocolOverrides, `${source} endpoints.${id}`, logger) ?? {})
+    : {}
+  return { id, baseUrl, protocolOverrides }
+}
+
+function sanitizeFileConfig(
+  raw: Record<string, unknown>,
+  source: string,
+  logger: ConfigLogger,
+  allowEndpoints: boolean,
+): FileConfig {
+  const out: FileConfig = { endpointsDeclared: false, configIssues: [] }
 
   if ("baseUrl" in raw) {
     const value = raw.baseUrl
     if (typeof value === "string" && value.trim().length > 0 && isHttpUrl(value.trim())) {
       out.baseUrl = value.trim()
     } else {
-      // Spec: 非字符串或非 http(s) URI 的 baseUrl → 跳过该来源，记录警告。
       logger.warn(`LiteLLM 配置 ${source} 的 baseUrl 非法（需要非空的 http(s) 地址），已跳过该来源`)
     }
   }
@@ -102,46 +159,59 @@ function sanitizeFileConfig(raw: Record<string, unknown>, source: string, logger
   }
 
   if ("protocolOverrides" in raw) {
-    if (isRecord(raw.protocolOverrides)) {
-      const overrides: Record<string, ConfigProtocol> = {}
-      for (const [model, protocol] of Object.entries(raw.protocolOverrides)) {
-        if (typeof protocol === "string" && PROTOCOLS.has(protocol as ConfigProtocol)) {
-          overrides[model] = protocol as ConfigProtocol
-        } else {
-          logger.warn(`LiteLLM 配置 ${source} 的 protocolOverrides.${model} 非法（需要 chat/responses/messages），已忽略`)
-        }
-      }
-      if (Object.keys(overrides).length > 0) out.protocolOverrides = overrides
+    const overrides = sanitizeProtocolOverrides(raw.protocolOverrides, source, logger)
+    if (overrides) out.protocolOverrides = overrides
+  }
+
+  if ("endpoints" in raw) {
+    out.endpointsDeclared = true
+    if (!allowEndpoints) {
+      logger.warn(`LiteLLM 配置 ${source} 的 endpoints 已忽略：多 endpoint 只允许配置在全局 litellm.json`)
+    } else if (!isRecord(raw.endpoints)) {
+      const issue = "全局 endpoints 配置非法：需要对象"
+      logger.warn(`LiteLLM 配置 ${source} 的 endpoints 非法（需要对象）`)
+      out.configIssues.push(issue)
+      out.endpoints = []
     } else {
-      logger.warn(`LiteLLM 配置 ${source} 的 protocolOverrides 非法（需要对象），已忽略`)
+      const endpoints: EndpointConfig[] = []
+      for (const [id, value] of Object.entries(raw.endpoints)) {
+        const endpoint = sanitizeEndpoint(id, value, source, logger)
+        if (endpoint) endpoints.push(endpoint)
+      }
+      out.endpoints = endpoints
+    }
+
+    if (allowEndpoints && ("baseUrl" in raw || "protocolOverrides" in raw)) {
+      const issue = "显式 endpoints 不能与顶层 baseUrl/protocolOverrides 混用"
+      logger.warn(`LiteLLM 配置 ${source} 同时声明 endpoints 与 legacy endpoint 字段；为避免身份混用，显式 endpoints 已禁用`)
+      out.configIssues.push(issue)
     }
   }
 
   return out
 }
 
-/** Read one JSON config file; malformed or non-object content is ignored with a warning. */
-function readConfigFile(path: string, logger: ConfigLogger): FileConfig {
-  if (!existsSync(path)) return {}
+function readConfigFile(path: string, logger: ConfigLogger, allowEndpoints: boolean): FileConfig {
+  if (!existsSync(path)) return { endpointsDeclared: false, configIssues: [] }
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"))
     if (!isRecord(parsed)) {
       logger.warn(`LiteLLM 配置 ${path} 不是对象，已忽略`)
-      return {}
+      return { endpointsDeclared: false, configIssues: [] }
     }
-    return sanitizeFileConfig(parsed, path, logger)
+    return sanitizeFileConfig(parsed, path, logger, allowEndpoints)
   } catch (error) {
     logger.warn(`LiteLLM 配置 ${path} 解析失败，已忽略：${error instanceof Error ? error.message : String(error)}`)
-    return {}
+    return { endpointsDeclared: false, configIssues: [] }
   }
 }
 
-/**
- * Resolve configuration for the given working directory.
- *
- * `env` defaults to `process.env`; `agentDir` defaults to pi's agent directory, both
- * injectable for tests.
- */
+function clampPollInterval(value: number, logger: ConfigLogger): number {
+  if (value >= MIN_POLL_INTERVAL_SECONDS) return value
+  logger.warn(`LiteLLM pollInterval 小于 ${MIN_POLL_INTERVAL_SECONDS} 秒，已钳制`)
+  return MIN_POLL_INTERVAL_SECONDS
+}
+
 export function loadConfig(
   cwd: string,
   logger: ConfigLogger = console,
@@ -151,12 +221,40 @@ export function loadConfig(
   const globalConfigPath = join(agentDir, "litellm.json")
   const projectConfigPath = join(cwd, ".pi", "litellm.json")
 
-  const globalFile = readConfigFile(globalConfigPath, logger)
-  const projectFile = readConfigFile(projectConfigPath, logger)
+  const globalFile = readConfigFile(globalConfigPath, logger, true)
+  const projectFile = readConfigFile(projectConfigPath, logger, false)
 
-  // Address precedence: env > project > global. Every source must yield a non-empty,
-  // valid http(s) address (spec: 非空且合法); invalid sources are skipped with a warning
-  // so a bad value never blocks a lower-priority valid one.
+  // Presence of the global endpoints key intentionally locks mode to explicit multi,
+  // even when its value is invalid. This fail-closed behavior prevents a typo from
+  // silently falling back to a different legacy endpoint or environment variable.
+  if (globalFile.endpointsDeclared) {
+    const mixed = globalFile.configIssues.some((issue) => issue.includes("不能与顶层"))
+    const endpoints = mixed ? [] : (globalFile.endpoints ?? [])
+    if (env.LITELLM_BASE_URL?.trim()) {
+      logger.warn("显式 endpoints 模式已启用，LITELLM_BASE_URL 不参与 endpoint 解析")
+    }
+    if (
+      projectFile.baseUrl !== undefined ||
+      projectFile.protocolOverrides !== undefined ||
+      projectFile.pollInterval !== undefined ||
+      projectFile.contextTierCap !== undefined ||
+      projectFile.endpointsDeclared
+    ) {
+      logger.warn("显式 endpoints 模式为全局配置；项目级 litellm.json 的 endpoint/tuning 字段已忽略")
+    }
+    return {
+      baseUrl: "",
+      pollInterval: clampPollInterval(globalFile.pollInterval ?? DEFAULT_POLL_INTERVAL_SECONDS, logger),
+      contextTierCap: globalFile.contextTierCap ?? true,
+      protocolOverrides: {},
+      globalConfigPath,
+      projectConfigPath,
+      mode: "multi",
+      endpoints,
+      configIssues: globalFile.configIssues,
+    }
+  }
+
   const candidates: Array<{ source: string; value: string | undefined }> = [
     { source: "环境变量 LITELLM_BASE_URL", value: env.LITELLM_BASE_URL?.trim() },
     { source: projectConfigPath, value: projectFile.baseUrl },
@@ -173,25 +271,54 @@ export function loadConfig(
     logger.warn(`LiteLLM 地址来源 ${candidate.source} 非法（需要 http(s) 地址），已跳过该来源`)
   }
 
-  // Tuning precedence mirrors the address sources so a project can override the global
-  // defaults; `pollInterval` is clamped to the documented minimum.
-  const rawPollInterval = projectFile.pollInterval ?? globalFile.pollInterval ?? DEFAULT_POLL_INTERVAL_SECONDS
-  let pollInterval = rawPollInterval
-  if (pollInterval < MIN_POLL_INTERVAL_SECONDS) {
-    logger.warn(`LiteLLM pollInterval 小于 ${MIN_POLL_INTERVAL_SECONDS} 秒，已钳制`)
-    pollInterval = MIN_POLL_INTERVAL_SECONDS
-  }
-
+  const pollInterval = clampPollInterval(
+    projectFile.pollInterval ?? globalFile.pollInterval ?? DEFAULT_POLL_INTERVAL_SECONDS,
+    logger,
+  )
   const contextTierCap = projectFile.contextTierCap ?? globalFile.contextTierCap ?? true
   const protocolOverrides = {
     ...(globalFile.protocolOverrides ?? {}),
     ...(projectFile.protocolOverrides ?? {}),
   }
 
-  return { baseUrl, pollInterval, contextTierCap, protocolOverrides, globalConfigPath, projectConfigPath }
+  return {
+    baseUrl,
+    pollInterval,
+    contextTierCap,
+    protocolOverrides,
+    globalConfigPath,
+    projectConfigPath,
+    mode: "legacy",
+  }
 }
 
-/** True when an address was resolved from any source. */
+export function isExplicitMultiEndpointConfig(config: ExtensionConfig): boolean {
+  return config.mode === "multi"
+}
+
+/** Configured endpoint identities in deterministic JSON/object insertion order. */
+export function configuredEndpoints(config: ExtensionConfig): EndpointConfig[] {
+  if (isExplicitMultiEndpointConfig(config)) return [...(config.endpoints ?? [])]
+  return [{ id: "default", baseUrl: config.baseUrl, protocolOverrides: config.protocolOverrides }]
+}
+
+/** Build the per-provider discovery view while preserving global tuning. */
+export function endpointRuntimeConfig(config: ExtensionConfig, endpoint: EndpointConfig): ExtensionConfig {
+  const explicit = isExplicitMultiEndpointConfig(config)
+  return {
+    baseUrl: endpoint.baseUrl,
+    pollInterval: config.pollInterval,
+    contextTierCap: config.contextTierCap,
+    protocolOverrides: endpoint.protocolOverrides,
+    globalConfigPath: config.globalConfigPath,
+    projectConfigPath: config.projectConfigPath,
+    mode: explicit ? "multi" : "legacy",
+    endpointID: explicit ? endpoint.id : undefined,
+    configIssues: config.configIssues,
+  }
+}
+
 export function isConfigured(config: ExtensionConfig): boolean {
+  if (isExplicitMultiEndpointConfig(config)) return (config.endpoints?.length ?? 0) > 0
   return config.baseUrl.length > 0
 }
