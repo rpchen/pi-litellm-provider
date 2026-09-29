@@ -37,7 +37,8 @@ E2E_PACKAGE_SPEC=git:github.com/rpchen/pi-litellm-provider@<sha> npm run test:e2
 - 安全、凭据、持久化、fallback、destructive failure 等边界有真实负向输入；
 - 新增用户可见功能至少有一条纵向自动化链路，Pi 功能应覆盖到 command / UI；
 - PR 描述提供 `Requirement / Scenario → Test Evidence`，说明破坏某 Scenario 时哪项测试会失败；
-- CI 全绿是必要条件，但不能替代 Scenario 级闭环；\n- 涉及 Pi 宿主 API、provider/model、credential/login、command/UI、插件安装/加载或用户可见宿主行为时，必须通过 `Real Pi 0.87.1 E2E`。该门禁必须用 Pi 自己的 `pi install` 安装固定 Git 候选，并在隔离 agent dir 中验证真实宿主状态；mock/factory/package smoke 不能替代。
+- CI 全绿是必要条件，但不能替代 Scenario 级闭环；
+- 涉及 Pi 宿主 API、provider/model、credential/login、command/UI、插件安装/加载或用户可见宿主行为时，必须通过 `Real Pi 0.87.1 E2E`。该门禁必须用 Pi 自己的 `pi install` 安装固定 Git 候选，并在隔离 agent dir 中验证真实宿主状态；mock/factory/package smoke 不能替代。
 
 ## 用户文档门禁
 
