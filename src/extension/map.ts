@@ -8,7 +8,7 @@
  *  - per-model baseUrl: chat/responses use `{root}/v1`, messages uses `{root}` because
  *    `@anthropic-ai/sdk` appends `/v1/messages` itself (see design D3).
  */
-import type { ModelSpec } from "../core/index.ts"
+import { hasOperationalLimits, type ModelSpec } from "../core/index.ts"
 import type { ProviderModelConfigLike, ThinkingLevel } from "./types.ts"
 
 /** LiteLLM protocol → pi-ai API id. */
@@ -84,7 +84,7 @@ function toPiInput(modalities: readonly string[]): ("text" | "image")[] {
  */
 export function toProviderModels(specs: readonly ModelSpec[], rootURL: string): ProviderModelConfigLike[] {
   const apiBase = `${rootURL}/v1`
-  return specs.map((spec) => {
+  return specs.filter(hasOperationalLimits).map((spec) => {
     const model: ProviderModelConfigLike = {
       id: spec.id,
       name: spec.name,

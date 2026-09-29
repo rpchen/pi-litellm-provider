@@ -1,0 +1,6 @@
+- [x] Add a generic Pi operational-limit publication guard.
+- [x] Add adapter tests for zero context, zero output, and a valid model.
+- [x] Update README behavior and current fixed-version examples to v0.3.0.
+- [x] Update AGENTS with publication and cross-session retrospective rules.
+- [x] Run complete Pi CI and strict OpenSpec validation.
+- [x] Archive the change and re-run strict validation.
