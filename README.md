@@ -111,7 +111,7 @@ pi --list-models litellm
 | Key 无效（401 / 403） | 撤下当前模型 |
 | 地址未配置或不可用 | 不发起无效请求，不注册模型，并给出日志提示 |
 
-`/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。
+`/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。能力补缺优先使用原厂记录；原厂 provider 记录不可用时依次使用 OpenRouter、OpenCode，再考虑全局唯一记录。这样同一模型被多个网关收录时，不会仅因为 provider 多而丢失 context、输出上限或 reasoning 等关键能力。
 
 模型上限按 PR8 的发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。models.dev 未命中的私有模型仍会保留。
 
