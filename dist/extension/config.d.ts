@@ -1,5 +1,7 @@
 export type ConfigProtocol = "chat" | "responses" | "messages";
 export interface ExtensionConfig {
+    /** Present only for explicit multi-endpoint mode; legacy single-endpoint keeps this undefined. */
+    endpointId?: string;
     baseUrl: string;
     pollInterval: number;
     contextTierCap: boolean;

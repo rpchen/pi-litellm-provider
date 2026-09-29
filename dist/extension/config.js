@@ -13,16 +13,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isEndpointID } from "../core/index.js";
 export const DEFAULT_POLL_INTERVAL_SECONDS = 300;
 export const MIN_POLL_INTERVAL_SECONDS = 30;
 export const DEFAULT_ENDPOINT_ID = "default";
 const PROTOCOLS = new Set(["chat", "responses", "messages"]);
-const ENDPOINT_ID = /^[a-z0-9](?:[a-z0-9-]{0,62})$/;
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 export function isEndpointId(value) {
-    return ENDPOINT_ID.test(value);
+    return isEndpointID(value);
 }
 function isHttpUrl(value) {
     try {
@@ -110,7 +110,7 @@ function readGlobalFile(path, logger) {
         const endpoints = {};
         for (const [id, value] of Object.entries(raw.endpoints)) {
             if (!isEndpointId(id)) {
-                logger.warn(`LiteLLM endpoint id ${JSON.stringify(id)} 非法（仅允许小写 ASCII 字母、数字和连字符，最长 63），已跳过`);
+                logger.warn(`LiteLLM endpoint id ${JSON.stringify(id)} 非法（必须匹配 [a-z0-9][a-z0-9-_]*），已跳过`);
                 continue;
             }
             if (!isRecord(value)) {
@@ -136,8 +136,9 @@ function normalizePollInterval(value, logger) {
     }
     return interval;
 }
-function endpointSnapshot(endpoint, global, globalConfigPath, logger) {
+function endpointSnapshot(endpoint, global, globalConfigPath, logger, endpointId) {
     return {
+        endpointId,
         baseUrl: endpoint.baseUrl ?? "",
         pollInterval: normalizePollInterval(global.pollInterval, logger),
         contextTierCap: global.contextTierCap ?? true,
@@ -157,7 +158,7 @@ export function loadEndpointRegistry(_cwd, logger = console, env = process.env, 
             return { mode: "explicit", endpoints: {}, globalConfigPath };
         const endpoints = Object.fromEntries(Object.entries(global.endpoints ?? {}).map(([id, endpoint]) => [
             id,
-            endpointSnapshot(endpoint, global, globalConfigPath, logger),
+            endpointSnapshot(endpoint, global, globalConfigPath, logger, id),
         ]));
         return { mode: "explicit", endpoints, globalConfigPath };
     }
