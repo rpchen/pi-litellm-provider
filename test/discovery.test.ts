@@ -37,6 +37,7 @@ function storedSpec(id: string): ModelSpec {
 
 function restoreFingerprintFor(value = config()) {
   return endpointFingerprint({
+    endpointID: value.endpointId,
     baseUrl: value.baseUrl,
     credentialKey: "pi-restore-scope-v1",
     buildOptions: {
@@ -49,6 +50,7 @@ function restoreFingerprintFor(value = config()) {
 function snapshotFor(id: string, key = KEY, value = config()) {
   return createDiscoverySnapshot(
     endpointFingerprint({
+      endpointID: value.endpointId,
       baseUrl: value.baseUrl,
       credentialKey: key,
       buildOptions: {
@@ -184,6 +186,35 @@ describe("refreshProviderModels 两阶段", () => {
       { logger: silent },
     )
     expect(models).toEqual([])
+  })
+
+  test("显式 endpoint 不恢复同 URL/同凭据的 legacy snapshot", async () => {
+    const stored = {
+      models: [storedModel("remembered")],
+      snapshot: snapshotFor("remembered"),
+      restoreFingerprint: restoreFingerprintFor(),
+    }
+    const models = await refreshProviderModels(
+      config({ endpointId: "company" }),
+      { allowNetwork: false, signal: new AbortController().signal, stored, publish: async () => true },
+      { logger: silent },
+    )
+    expect(models).toEqual([])
+  })
+
+  test("显式 endpoint 只恢复相同 endpoint identity 的 snapshot", async () => {
+    const explicit = config({ endpointId: "company" })
+    const stored = {
+      models: [storedModel("remembered")],
+      snapshot: snapshotFor("remembered", KEY, explicit),
+      restoreFingerprint: restoreFingerprintFor(explicit),
+    }
+    const models = await refreshProviderModels(
+      explicit,
+      { allowNetwork: false, signal: new AbortController().signal, stored, publish: async () => true },
+      { logger: silent },
+    )
+    expect(models.map((model) => model.id)).toEqual(["remembered"])
   })
 
   test("network 阶段成功发现并持久化", async () => {

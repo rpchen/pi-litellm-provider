@@ -33,17 +33,40 @@ pi install git:github.com/rpchen/pi-litellm-provider#v0.3.1
 
 也可以设置 `LITELLM_BASE_URL`。地址带不带 `/v1`、末尾斜杠都可以，扩展会自动规范化。
 
-地址优先级：`LITELLM_BASE_URL` → 项目级 `<项目>/.pi/litellm.json` → 全局 `~/.pi/agent/litellm.json`。
+legacy 单 endpoint 模式下，地址优先级为：`LITELLM_BASE_URL` → 全局 `~/.pi/agent/litellm.json`。PR9 起不再读取项目级 `.pi/litellm.json`，endpoint 定义和 activation 都是全局的。
+
+需要多个 LiteLLM endpoint 时，改用显式 `endpoints`：
+
+```jsonc
+{
+  "pollInterval": 300,
+  "contextTierCap": true,
+  "endpoints": {
+    "default": {
+      "baseUrl": "https://personal.example",
+      "protocolOverrides": {}
+    },
+    "company": {
+      "baseUrl": "https://company.example",
+      "protocolOverrides": {
+        "glm-5.3": "chat"
+      }
+    }
+  }
+}
+```
+
+endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-_]*`；`default` 保留旧 provider id `litellm`，其他 endpoint 映射为 `litellm-<id>`。legacy 单 endpoint 字段与 `endpoints` 不能同时使用。显式模式不会读取 `LITELLM_BASE_URL`。
 
 **3. 登录 API Key**
 
 在 Pi 会话中：
 
 ```text
-/login → 选择 LiteLLM → 粘贴 API Key
+/login → 选择 LiteLLM（或 LiteLLM · <endpoint-id>）→ 粘贴该 endpoint 的 API Key
 ```
 
-无交互环境可设置 `LITELLM_API_KEY`。两者同时存在时，`/login` 保存的凭据优先。
+无交互环境可设置 `LITELLM_API_KEY`，但它只服务 legacy/default endpoint。非 default endpoint 必须使用 Pi 的宿主凭据存储（`/login`）；不存在 `LITELLM_API_KEY_<ENDPOINT>` 之类的动态环境变量。两者同时存在时，default endpoint 上 `/login` 保存的凭据优先。
 
 **4. 选择模型**
 
@@ -55,7 +78,8 @@ pi install git:github.com/rpchen/pi-litellm-provider#v0.3.1
 |---|---|
 | `/model` | 打开模型选择器并实时刷新 LiteLLM 模型 |
 | `/thinking` | 切换当前模型的 thinking level |
-| `/litellm-diagnostics` | 查看发现状态、缓存来源、models.dev 命中、协议 fallback 和 Core SHA |
+| `/litellm-diagnostics [endpoint-id]` | 无参数查看 endpoint 总览；传 id 查看该 endpoint 的发现、缓存、models.dev、协议和 Core 诊断 |
+| `/litellm-endpoints` | 打开全局 endpoint activation 管理；也支持 `all` / `none` / `<endpoint-id>` 参数 |
 | `/login` / `/logout` | 保存、切换或移除 LiteLLM 凭据 |
 | `/reload` | 修改 `litellm.json` 后重新读取配置 |
 
@@ -77,13 +101,13 @@ pi --list-models litellm
 
 ## 配置
 
-可选项写在项目级或全局 `litellm.json`：
+可选项只写在全局 `~/.pi/agent/litellm.json`：
 
 | 配置项 | 默认值 | 说明 |
 |---|---:|---|
 | `pollInterval` | `300` | 模型发现轮询间隔，单位秒；最小 30 |
 | `contextTierCap` | `true` | 按第一个非零输入价格阶梯截断上下文窗口 |
-| `protocolOverrides` | `{}` | 按 LiteLLM `model_name` 覆盖协议 |
+| `protocolOverrides` | `{}` | legacy 单 endpoint 时按 LiteLLM `model_name` 覆盖协议；显式模式改为每个 endpoint 内配置 |
 
 ```jsonc
 {
@@ -97,7 +121,15 @@ pi --list-models litellm
 
 `protocolOverrides` 仅在自动协议判断与真实 LiteLLM 路由不一致时使用；值只能是 `chat`、`responses` 或 `messages`。
 
-在 Pi 运行期间修改配置后，执行 `/reload` 或重启 Pi。
+在 Pi 运行期间修改 endpoint 定义后，执行 `/reload` 或重启 Pi。
+
+### Endpoint activation
+
+`/litellm-endpoints` 只管理“哪些已配置 endpoint 当前激活”，不负责新增、改名或删除 endpoint。PR9 的完整 CRUD UI 不在本次范围内；endpoint 定义仍由全局配置文件维护。
+
+activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全部启用；也可以选择任意子集，包含“零个激活 endpoint”。停用 endpoint 会立即撤下对应 provider 并停止其发现/轮询，但不会删除 endpoint 定义、宿主凭据或已保存 snapshot；再次启用后会继续使用这些状态。
+
+每个 endpoint 是独立 provider、独立凭据、独立发现/缓存/snapshot/故障域。插件不会跨 endpoint 聚合模型、负载均衡或自动故障切换。
 
 ## 模型发现与故障行为
 

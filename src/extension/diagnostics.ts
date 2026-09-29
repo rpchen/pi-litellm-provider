@@ -11,6 +11,8 @@ export type ProviderDiagnosticStatus =
   | "stale"
   | "empty"
   | "unconfigured"
+  | "inactive"
+  | "credential-missing"
   | "auth-error"
   | "config-error"
   | "error"
@@ -115,6 +117,8 @@ const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {
   stale: "网络刷新失败，正在使用 last-known-good",
   empty: "发现成功，但没有可用模型",
   unconfigured: "尚未完成 LiteLLM 配置",
+  inactive: "未激活",
+  "credential-missing": "缺少 endpoint 凭据",
   "auth-error": "认证失败，模型已清空",
   "config-error": "LiteLLM 地址配置无效",
   error: "发现失败",

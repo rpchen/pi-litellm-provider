@@ -154,7 +154,7 @@ export async function refreshProviderModels(
   // 记录说明性提示) and drop the catalog so stale models disappear.
   if (config.baseUrl.length === 0) {
     logger.warn(
-      "LiteLLM 未配置地址：请设置 LITELLM_BASE_URL，或在 ~/.pi/agent/litellm.json / 项目 .pi/litellm.json 中填写 baseUrl",
+      "LiteLLM 未配置地址：请设置 LITELLM_BASE_URL，或在全局 ~/.pi/agent/litellm.json 中填写 baseUrl",
     )
     await publishIfChanged(context, stored, [])
     setProviderDiagnostics(diagnosticsState, {
@@ -180,7 +180,7 @@ export async function refreshProviderModels(
     return []
   }
 
-  const discoveryKey = `${config.baseUrl}\u0000${apiKey}`
+  const discoveryKey = `${config.endpointId ?? ""}\u0000${config.baseUrl}\u0000${apiKey}`
 
   try {
     const coordinated = await coordinator.refresh(
@@ -202,6 +202,7 @@ export async function refreshProviderModels(
     }
     const outcome = coordinated.value
     const successfulEndpoint = expectedEndpoint ?? endpointFingerprint({
+      endpointID: config.endpointId,
       baseUrl: config.baseUrl,
       credentialKey: apiKey,
       buildOptions: {
@@ -311,6 +312,7 @@ function snapshotRestoreScopeFingerprint(config: ExtensionConfig): string | unde
   if (config.baseUrl.length === 0) return undefined
   try {
     return endpointFingerprint({
+      endpointID: config.endpointId,
       baseUrl: config.baseUrl,
       credentialKey: PI_RESTORE_SCOPE_CREDENTIAL,
       buildOptions: {
@@ -330,6 +332,7 @@ function snapshotEndpointFingerprint(
   if (config.baseUrl.length === 0 || !apiKey) return undefined
   try {
     return endpointFingerprint({
+      endpointID: config.endpointId,
       baseUrl: config.baseUrl,
       credentialKey: apiKey,
       buildOptions: {

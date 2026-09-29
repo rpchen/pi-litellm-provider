@@ -1,5 +1,5 @@
 import type { DiscoveryCacheDiagnostics, DiscoveryDiagnostics } from "../core/index.ts";
-export type ProviderDiagnosticStatus = "idle" | "restored" | "ready" | "stale" | "empty" | "unconfigured" | "auth-error" | "config-error" | "error";
+export type ProviderDiagnosticStatus = "idle" | "restored" | "ready" | "stale" | "empty" | "unconfigured" | "inactive" | "credential-missing" | "auth-error" | "config-error" | "error";
 export interface ProviderDiagnosticSnapshot {
     readonly status: ProviderDiagnosticStatus;
     readonly modelCount: number;
