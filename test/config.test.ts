@@ -184,3 +184,90 @@ describe("可选配置解析", () => {
     expect(config.protocolOverrides).toEqual({ good: "chat" })
   })
 })
+
+
+describe("PR9 显式多 endpoint 配置", () => {
+  test("只从全局 endpoints 解析，允许相同 URL，并忽略 env/项目 legacy 来源", () => {
+    const { cwd, agentDir } = makeDirs()
+    writeJson(join(agentDir, "litellm.json"), {
+      pollInterval: 45,
+      contextTierCap: false,
+      endpoints: {
+        company: {
+          baseUrl: "http://same.example:4000/v1",
+          protocolOverrides: { "model-a": "responses" },
+        },
+        personal: { baseUrl: "http://same.example:4000" },
+      },
+    })
+    writeJson(join(cwd, ".pi", "litellm.json"), {
+      baseUrl: "http://project.example:4000",
+      pollInterval: 99,
+    })
+    const { warnings, logger } = collectingLogger()
+    const config = loadConfig(cwd, logger, { LITELLM_BASE_URL: "http://env.example:4000" }, agentDir)
+
+    expect(config.mode).toBe("multi")
+    expect(config.baseUrl).toBe("")
+    expect(config.pollInterval).toBe(45)
+    expect(config.contextTierCap).toBeFalse()
+    expect(config.endpoints).toEqual([
+      {
+        id: "company",
+        baseUrl: "http://same.example:4000/v1",
+        protocolOverrides: { "model-a": "responses" },
+      },
+      {
+        id: "personal",
+        baseUrl: "http://same.example:4000",
+        protocolOverrides: {},
+      },
+    ])
+    expect(isConfigured(config)).toBeTrue()
+    expect(warnings.some((message) => message.includes("LITELLM_BASE_URL"))).toBeTrue()
+    expect(warnings.some((message) => message.includes("项目级"))).toBeTrue()
+  })
+
+  test("endpoints 与顶层 legacy endpoint 字段混用时 fail closed", () => {
+    const { cwd, agentDir } = makeDirs()
+    writeJson(join(agentDir, "litellm.json"), {
+      baseUrl: "http://legacy.example:4000",
+      endpoints: { company: { baseUrl: "http://company.example:4000" } },
+    })
+    const { warnings, logger } = collectingLogger()
+    const config = loadConfig(cwd, logger, {}, agentDir)
+
+    expect(config.mode).toBe("multi")
+    expect(config.endpoints).toEqual([])
+    expect(isConfigured(config)).toBeFalse()
+    expect(config.configIssues).toContain("显式 endpoints 不能与顶层 baseUrl/protocolOverrides 混用")
+    expect(warnings.some((message) => message.includes("身份混用"))).toBeTrue()
+  })
+
+  test("endpoint id 采用共享 ASCII slug 契约，非法项只影响自己", () => {
+    const { cwd, agentDir } = makeDirs()
+    writeJson(join(agentDir, "litellm.json"), {
+      endpoints: {
+        "team-1": { baseUrl: "http://valid.example:4000" },
+        Team: { baseUrl: "http://invalid.example:4000" },
+        "团队": { baseUrl: "http://invalid2.example:4000" },
+      },
+    })
+    const { warnings, logger } = collectingLogger()
+    const config = loadConfig(cwd, logger, {}, agentDir)
+    expect(config.endpoints?.map((endpoint) => endpoint.id)).toEqual(["team-1"])
+    expect(warnings.filter((message) => message.includes("endpoint id")).length).toBe(2)
+  })
+
+  test("项目级 endpoints 不会开启 multi 模式", () => {
+    const { cwd, agentDir } = makeDirs()
+    writeJson(join(cwd, ".pi", "litellm.json"), {
+      endpoints: { project: { baseUrl: "http://project.example:4000" } },
+    })
+    const { warnings, logger } = collectingLogger()
+    const config = loadConfig(cwd, logger, {}, agentDir)
+    expect(config.mode).toBe("legacy")
+    expect(config.baseUrl).toBe("")
+    expect(warnings.some((message) => message.includes("只允许配置在全局"))).toBeTrue()
+  })
+})
