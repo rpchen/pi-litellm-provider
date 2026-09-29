@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import litellm from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
-import { buildModelSpecs, type ModelSpec } from "../src/core/index.ts"
+import { buildModelSpecs, hasOperationalLimits, type ModelSpec } from "../src/core/index.ts"
 import { PROTOCOL_API, thinkingLevelMapFor, toProviderModels } from "../src/extension/map.ts"
 
 const specs = buildModelSpecs(litellm, modelsDev, { contextTierCap: true, protocolOverrides: {} })
@@ -36,8 +36,10 @@ describe("protocol -> pi-ai api mapping", () => {
 })
 
 describe("toProviderModels", () => {
-  test("每个 spec 都映射出模型且数量一致", () => {
-    expect(models).toHaveLength(specs.length)
+  test("只发布具备正数 context/output 的 operational spec", () => {
+    const operational = specs.filter(hasOperationalLimits)
+    expect(models).toHaveLength(operational.length)
+    expect(models.map((model) => model.id)).toEqual(operational.map((item) => item.id))
   })
 
   test("api 按协议逐模型设置", () => {
