@@ -172,7 +172,7 @@ export async function refreshProviderModels(
     logger.warn("LiteLLM Key 未配置，跳过发现（请使用 /login 或设置 LITELLM_API_KEY）")
     await publishIfChanged(context, stored, [])
     setProviderDiagnostics(diagnosticsState, {
-      status: "unconfigured",
+      status: "credential-missing",
       modelCount: 0,
       cache: createDiscoveryCacheDiagnostics({ source: "none" }),
       note: "请使用 /login 或 LITELLM_API_KEY 配置凭据。",
@@ -180,7 +180,7 @@ export async function refreshProviderModels(
     return []
   }
 
-  const discoveryKey = `${config.baseUrl}\u0000${apiKey}`
+  const discoveryKey = `${config.endpointID ?? "legacy"}\u0000${config.baseUrl}\u0000${apiKey}`
 
   try {
     const coordinated = await coordinator.refresh(
@@ -202,6 +202,7 @@ export async function refreshProviderModels(
     }
     const outcome = coordinated.value
     const successfulEndpoint = expectedEndpoint ?? endpointFingerprint({
+      endpointID: config.endpointID,
       baseUrl: config.baseUrl,
       credentialKey: apiKey,
       buildOptions: {
@@ -311,6 +312,7 @@ function snapshotRestoreScopeFingerprint(config: ExtensionConfig): string | unde
   if (config.baseUrl.length === 0) return undefined
   try {
     return endpointFingerprint({
+      endpointID: config.endpointID,
       baseUrl: config.baseUrl,
       credentialKey: PI_RESTORE_SCOPE_CREDENTIAL,
       buildOptions: {
@@ -330,6 +332,7 @@ function snapshotEndpointFingerprint(
   if (config.baseUrl.length === 0 || !apiKey) return undefined
   try {
     return endpointFingerprint({
+      endpointID: config.endpointID,
       baseUrl: config.baseUrl,
       credentialKey: apiKey,
       buildOptions: {
