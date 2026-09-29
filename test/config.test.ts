@@ -101,13 +101,15 @@ describe("PR9 全局 endpoint 配置", () => {
     writeJson(join(agentDir, "litellm.json"), {
       endpoints: {
         "team-a": { baseUrl: "https://a.example" },
+        "team_2": { baseUrl: "https://b.example" },
         "Team A": { baseUrl: "https://bad.example" },
         "中文": { baseUrl: "https://bad2.example" },
       },
     })
     const registry = loadEndpointRegistry(cwd, silentLogger, {}, agentDir)
-    expect(Object.keys(registry.endpoints)).toEqual(["team-a"])
+    expect(Object.keys(registry.endpoints)).toEqual(["team-a", "team_2"])
     expect(isEndpointId("team-a")).toBeTrue()
+    expect(isEndpointId("team_2")).toBeTrue()
     expect(isEndpointId("Team-A")).toBeFalse()
   })
 
