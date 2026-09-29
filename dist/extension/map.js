@@ -1,3 +1,14 @@
+/**
+ * Translation seam between the host-independent discovery core and pi's provider config.
+ *
+ * The independent litellm-discovery-core produces host-neutral model specs.
+ * This module owns the only host-specific mapping:
+ *  - LiteLLM protocol → pi-ai API id
+ *  - ModelSpec → ProviderModelConfig, including thinkingLevelMap translation
+ *  - per-model baseUrl: chat/responses use `{root}/v1`, messages uses `{root}` because
+ *    `@anthropic-ai/sdk` appends `/v1/messages` itself (see design D3).
+ */
+import { hasOperationalLimits } from "../core/index.js";
 /** LiteLLM protocol → pi-ai API id. */
 export const PROTOCOL_API = {
     chat: "openai-completions",
@@ -71,7 +82,7 @@ function toPiInput(modalities) {
  */
 export function toProviderModels(specs, rootURL) {
     const apiBase = `${rootURL}/v1`;
-    return specs.map((spec) => {
+    return specs.filter(hasOperationalLimits).map((spec) => {
         const model = {
             id: spec.id,
             name: spec.name,

@@ -18,3 +18,14 @@ Pi SHALL preserve non-zero Core token limits selected through models.dev provide
 #### Scenario: hy4-preview original provider record is unavailable
 - **WHEN** Core selects the OpenRouter hy4-preview enrichment record and returns positive context/output limits
 - **THEN** Pi maps them to positive `contextWindow` and `maxTokens` values while preserving explicit LiteLLM prices
+
+### Requirement: Pi publishes only operational model limits
+Pi SHALL NOT register a Core ModelSpec as a usable provider model when its context or output token limit is non-positive.
+
+#### Scenario: neutral private model has unknown limits
+- **WHEN** Core returns a neutral ModelSpec with context or output equal to zero
+- **THEN** Pi omits it from provider model registration while Core diagnostics remain able to report the discovered model
+
+#### Scenario: valid model accompanies an invalid model
+- **WHEN** one Core ModelSpec has positive operational limits and another does not
+- **THEN** Pi registers the valid model and omits only the non-operational model

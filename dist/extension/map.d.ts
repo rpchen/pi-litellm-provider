@@ -8,7 +8,7 @@
  *  - per-model baseUrl: chat/responses use `{root}/v1`, messages uses `{root}` because
  *    `@anthropic-ai/sdk` appends `/v1/messages` itself (see design D3).
  */
-import type { ModelSpec } from "../core/index.ts";
+import { type ModelSpec } from "../core/index.ts";
 import type { ProviderModelConfigLike, ThinkingLevel } from "./types.ts";
 /** LiteLLM protocol → pi-ai API id. */
 export declare const PROTOCOL_API: Readonly<Record<"chat" | "responses" | "messages", string>>;
