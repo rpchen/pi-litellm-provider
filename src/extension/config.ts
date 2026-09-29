@@ -13,10 +13,13 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { getAgentDir } from "@earendil-works/pi-coding-agent"
+import { isEndpointID } from "../core/index.ts"
 
 export type ConfigProtocol = "chat" | "responses" | "messages"
 
 export interface ExtensionConfig {
+  /** Present only for explicit multi-endpoint mode; legacy single-endpoint keeps this undefined. */
+  endpointId?: string
   baseUrl: string
   pollInterval: number
   contextTierCap: boolean
@@ -37,7 +40,6 @@ export const MIN_POLL_INTERVAL_SECONDS = 30
 export const DEFAULT_ENDPOINT_ID = "default"
 
 const PROTOCOLS = new Set<ConfigProtocol>(["chat", "responses", "messages"])
-const ENDPOINT_ID = /^[a-z0-9](?:[a-z0-9-]{0,62})$/
 
 export interface ConfigLogger {
   warn(message: string): void
@@ -60,7 +62,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isEndpointId(value: string): boolean {
-  return ENDPOINT_ID.test(value)
+  return isEndpointID(value)
 }
 
 function isHttpUrl(value: string): boolean {
@@ -152,7 +154,7 @@ function readGlobalFile(path: string, logger: ConfigLogger): GlobalFileConfig {
     const endpoints: Record<string, EndpointFileConfig> = {}
     for (const [id, value] of Object.entries(raw.endpoints)) {
       if (!isEndpointId(id)) {
-        logger.warn(`LiteLLM endpoint id ${JSON.stringify(id)} 非法（仅允许小写 ASCII 字母、数字和连字符，最长 63），已跳过`)
+        logger.warn(`LiteLLM endpoint id ${JSON.stringify(id)} 非法（必须匹配 [a-z0-9][a-z0-9-_]*），已跳过`)
         continue
       }
       if (!isRecord(value)) {
@@ -185,8 +187,10 @@ function endpointSnapshot(
   global: GlobalFileConfig,
   globalConfigPath: string,
   logger: ConfigLogger,
+  endpointId?: string,
 ): ExtensionConfig {
   return {
+    endpointId,
     baseUrl: endpoint.baseUrl ?? "",
     pollInterval: normalizePollInterval(global.pollInterval, logger),
     contextTierCap: global.contextTierCap ?? true,
@@ -213,7 +217,7 @@ export function loadEndpointRegistry(
     const endpoints = Object.fromEntries(
       Object.entries(global.endpoints ?? {}).map(([id, endpoint]) => [
         id,
-        endpointSnapshot(endpoint, global, globalConfigPath, logger),
+        endpointSnapshot(endpoint, global, globalConfigPath, logger, id),
       ]),
     )
     return { mode: "explicit", endpoints, globalConfigPath }
