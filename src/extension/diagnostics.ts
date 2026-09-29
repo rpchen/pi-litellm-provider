@@ -11,6 +11,8 @@ export type ProviderDiagnosticStatus =
   | "stale"
   | "empty"
   | "unconfigured"
+  | "inactive"
+  | "credential-missing"
   | "auth-error"
   | "config-error"
   | "error"
