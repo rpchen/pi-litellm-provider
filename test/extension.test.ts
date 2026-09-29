@@ -313,3 +313,63 @@ describe("Core refresh coordinator 接入", () => {
 
 })
 
+
+
+describe("PR9 多 endpoint provider 编排", () => {
+  test("active endpoint 独立映射 provider id/name，非 default 不读取动态 env key", () => {
+    const { api, registrations, commands } = fakePi()
+    piLitellmProvider(api, {
+      registry: {
+        mode: "explicit",
+        globalConfigPath: "unused",
+        endpoints: {
+          default: config({ baseUrl: "https://default.example" }),
+          company: config({ baseUrl: "https://company.example" }),
+        },
+      },
+      activation: { mode: "all" },
+      deps: silentDeps,
+    })
+    expect(registrations.map((entry) => entry.name)).toEqual(["litellm", "litellm-company"])
+    expect(registrations[0]!.config.name).toBe("LiteLLM")
+    expect(registrations[1]!.config.name).toBe("LiteLLM · company")
+    expect(registrations[0]!.config.apiKey).toBe("$LITELLM_API_KEY")
+    expect(registrations[1]!.config.apiKey).toBe("")
+    expect(commands.map((command) => command.name)).toContain("litellm-endpoints")
+  })
+
+  test("selected activation 只注册被选 endpoint", () => {
+    const { api, registrations } = fakePi()
+    piLitellmProvider(api, {
+      registry: {
+        mode: "explicit",
+        globalConfigPath: "unused",
+        endpoints: {
+          default: config({ baseUrl: "https://default.example" }),
+          company: config({ baseUrl: "https://company.example" }),
+        },
+      },
+      activation: { mode: "selected", endpointIds: ["company"] },
+      deps: silentDeps,
+    })
+    expect(registrations.map((entry) => entry.name)).toEqual(["litellm-company"])
+  })
+
+  test("非 default endpoint 无 credential 时不联网发现", async () => {
+    let calls = 0
+    const built = buildProviderConfig(
+      () => config({ baseUrl: "https://company.example" }),
+      {
+        fetchImpl: async () => {
+          calls++
+          return new Response(JSON.stringify({ data: [] }), { status: 200 })
+        },
+        logger: { warn: () => {}, error: () => {} },
+      },
+      undefined,
+      "company",
+    )
+    expect(await built.refreshModels!({ allowNetwork: true })).toEqual([])
+    expect(calls).toBe(0)
+  })
+})
