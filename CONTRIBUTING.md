@@ -43,6 +43,13 @@ Release 由 tag 触发（`release.yml` 监听 `v*.*.*`，并强校验 tag == `v`
 
 1. 用户可见变更（`feat:` / `fix:`）合入 `main` 后，开 PR 提升 `package.json` 的 `version`（`feat:` → minor、`fix:` → patch；纯 `docs:` / `chore:` 不必发版）
 2. 在 `main` 上打 `v<version>` tag 并推送（打 tag 前与维护者确认）
-3. workflow 自动完成全套门禁 → tagged Git 包冒烟 → `npm pack` + SHA256 → 创建 GitHub Release（附 `.tgz` / `.sha256` 与安装命令）
+3. release PR 同时保证 package/lockfile 版本与 README “当前发行版”示例一致，并通过 `test:release-metadata`
+4. 合并后等待同一 main commit 完整 CI 通过，再创建指向该 SHA 的不可移动 tag
+5. workflow 自动完成全套门禁 → tagged Git 包冒烟 → `npm pack` + SHA256 → 创建 GitHub Release（附 `.tgz` / `.sha256` 与安装命令），发布后核对 tag SHA / Release / 附件
 
 `pi install git:`（无 ref）用户始终跟随 `main`；`#vX.Y.Z` 锁定安装与 Release 附件依赖 tag——合入用户可见变更后记得检查 tag 是否落后于 `main`。
+
+
+## OpenSpec 完成门禁
+
+`npm run test:openspec-closure` 会拒绝 tasks 已全部完成但仍留在 active `openspec/changes/` 的 change。实现完成后必须使用 OpenSpec CLI archive，再执行 strict validation；不得手工移动目录代替 archive。
