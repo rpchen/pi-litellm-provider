@@ -18,4 +18,11 @@ export declare function runtimeBuildInfo(): {
     coreSHA: string;
     coreBranch: string;
 };
-export declare function formatProviderDiagnostics(state: ProviderDiagnosticsState, now?: number): string;
+/**
+ * Format an instant in the timezone configured on the running host.
+ *
+ * Internal discovery state remains UTC/epoch based. The optional offset is only
+ * for deterministic tests; production callers omit it and use the host timezone.
+ */
+export declare function formatHostDateTime(value: string | number | Date, timezoneOffsetMinutes?: number): string;
+export declare function formatProviderDiagnostics(state: ProviderDiagnosticsState, now?: number, timezoneOffsetMinutes?: number): string;
