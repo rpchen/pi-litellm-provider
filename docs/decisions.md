@@ -38,3 +38,15 @@
 - 缓存完整性：复制 core 前检查 checkout 的 `git status --porcelain --untracked-files=all`；发现未暂存、已暂存或未跟踪修改即失败，避免 provenance SHA 与实际源码不一致。
 - `bun run typecheck` 与 `bun test` 会复用当前已准备的 SHA；首次运行时才解析 `main`。运行时入口 `extensions/index.ts` 只转发到 `dist/extension/index.js`，不访问 GitHub、平级仓库或本机缓存。
 - PR2 只迁移 Pi；OpenCode 的适配层留在 PR3，跨仓库联动验证留在 PR4。
+## Discovery quality 与宿主发布边界（2026-09-29）
+
+- 插件的核心目标是让 Pi 正确使用模型能力，不承担计费职责。protocol、context/output、modalities、tools、reasoning/thinking 的正确性优先于价格完整性。
+- models.dev provider 选择由共享 Core 统一维护：显式 provider → canonical 原厂 → legacy family compatibility → OpenRouter → OpenCode → unique；Pi 不复制这套算法。
+- OpenRouter/OpenCode 若仅作为能力 fallback，其价格不得冒充 LiteLLM deployment price；LiteLLM 显式价格优先。
+- Core 可以保留缺少 limit 的 neutral model 用于 diagnostics，但 Pi 不得把 `contextWindow <= 0` 或 `maxTokens <= 0` 的模型注册给宿主。
+- 任何这类边界修改必须有 Core 测试和 Core → Pi 纵向映射测试。
+
+## Release 与会话收尾（2026-09-29）
+
+用户可见 feat/fix 完成后检查 tag/Release 是否落后于 main。Release PR 同步 manifest/lockfile 版本与 README 当前 tag 示例；合并后的同一 main commit 完整 CI 通过后才能创建不可移动 tag。发布后核对 Release、附件/checksum，并清理一次性 workflow/branch。OpenSpec change archive 后才算 Closed。
+
