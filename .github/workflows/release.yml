@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Allows maintainers/automation to explicitly run the verified release for an existing tag.
+  workflow_dispatch:
 
 permissions:
   contents: write
