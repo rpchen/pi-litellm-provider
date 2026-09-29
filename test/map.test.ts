@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import litellm from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
 import { buildModelSpecs, type ModelSpec } from "../src/core/index.ts"
-import { PROTOCOL_API, thinkingLevelMapFor, toProviderModels } from "../src/extension/map.ts"
+import { hasOperationalLimits, PROTOCOL_API, thinkingLevelMapFor, toProviderModels } from "../src/extension/map.ts"
 
 const specs = buildModelSpecs(litellm, modelsDev, { contextTierCap: true, protocolOverrides: {} })
 const ROOT = "http://litellm.example:4000"
@@ -119,6 +119,31 @@ describe("toProviderModels", () => {
 
   test("id 与 display name 均为 model_name", () => {
     expect(byID.get("gpt-6-sol")?.name).toBe("gpt-6-sol")
+  })
+
+  test("通用 operational-limit guard 不发布 context/output 非正数模型", () => {
+    const invalidContext = spec([])
+    invalidContext.id = "zero-context"
+    invalidContext.name = "zero-context"
+    invalidContext.limit = { context: 0, input: 0, output: 100 }
+
+    const invalidOutput = spec([])
+    invalidOutput.id = "zero-output"
+    invalidOutput.name = "zero-output"
+    invalidOutput.limit = { context: 1000, input: 1000, output: 0 }
+
+    const valid = spec([])
+    valid.id = "valid"
+    valid.name = "valid"
+
+    expect(hasOperationalLimits(invalidContext)).toBeFalse()
+    expect(hasOperationalLimits(invalidOutput)).toBeFalse()
+    expect(hasOperationalLimits(valid)).toBeTrue()
+
+    const mapped = toProviderModels([invalidContext, invalidOutput, valid], ROOT)
+    expect(mapped.map((model) => model.id)).toEqual(["valid"])
+    expect(mapped[0]!.contextWindow).toBeGreaterThan(0)
+    expect(mapped[0]!.maxTokens).toBeGreaterThan(0)
   })
 })
 
