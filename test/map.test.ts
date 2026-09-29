@@ -72,6 +72,51 @@ describe("toProviderModels", () => {
     expect(glm.maxTokens).toBe(131072)
   })
 
+  test("hy4-preview 通过 OpenRouter 能力 fallback 映射为可用 Pi 模型", () => {
+    const discovered = buildModelSpecs({
+      data: [{
+        model_name: "hy4-preview",
+        litellm_params: { model: "openai/hy4-preview" },
+        model_info: {
+          mode: "chat",
+          input_cost_per_token: 0.000000834,
+          output_cost_per_token: 0.000002501,
+          cache_read_input_token_cost: 0.000000042,
+        },
+      }],
+    }, {
+      openrouter: {
+        models: {
+          "hy4-preview": {
+            id: "hy4-preview",
+            canonical_model_id: "tencent/hy4-preview",
+            tool_call: true,
+            reasoning: true,
+            modalities: { input: ["text"], output: ["text"] },
+            limit: { context: 1024000, output: 64000 },
+          },
+        },
+      },
+      opencode: {
+        models: {
+          "hy4-preview": {
+            id: "hy4-preview",
+            canonical_model_id: "tencent/hy4-preview",
+            limit: { context: 1000000, output: 32000 },
+          },
+        },
+      },
+    }, { contextTierCap: true, protocolOverrides: {} })
+    const mapped = toProviderModels(discovered, ROOT)[0]!
+    expect(mapped.id).toBe("hy4-preview")
+    expect(mapped.contextWindow).toBe(1024000)
+    expect(mapped.maxTokens).toBe(64000)
+    expect(mapped.contextWindow).toBeGreaterThan(0)
+    expect(mapped.maxTokens).toBeGreaterThan(0)
+    expect(mapped.cost.input).toBeCloseTo(0.834)
+    expect(mapped.cost.output).toBeCloseTo(2.501)
+  })
+
   test("id 与 display name 均为 model_name", () => {
     expect(byID.get("gpt-6-sol")?.name).toBe("gpt-6-sol")
   })
