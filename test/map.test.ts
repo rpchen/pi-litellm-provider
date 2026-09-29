@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import litellm from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
-import { buildModelSpecs, type ModelSpec } from "../src/core/index.ts"
-import { hasOperationalLimits, PROTOCOL_API, thinkingLevelMapFor, toProviderModels } from "../src/extension/map.ts"
+import { buildModelSpecs, hasOperationalLimits, type ModelSpec } from "../src/core/index.ts"
+import { PROTOCOL_API, thinkingLevelMapFor, toProviderModels } from "../src/extension/map.ts"
 
 const specs = buildModelSpecs(litellm, modelsDev, { contextTierCap: true, protocolOverrides: {} })
 const ROOT = "http://litellm.example:4000"
