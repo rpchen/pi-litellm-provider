@@ -23,7 +23,7 @@
 3. **依赖**：运行时只允许 peer 依赖 `@earendil-works/pi-ai` 与 `@earendil-works/pi-coding-agent`（声明为 `"*"`，不打包、不 import 打包产物）；新增运行时依赖须在 openspec design.md 说明理由。
 4. **真实环境测试凭据**：凡需连接真实 LiteLLM 的验证，统一使用 `~/.agents/skills/opencode-litellm-config-sync/.env` 中的 `LITELLM_BASE_URL` / `LITELLM_API_KEY`。只在运行时读取、只在内存中使用；地址与 Key 不得写入仓库、fixtures、日志或文档。**不要**读取 `~/.config/opencode` 下用户自己的 Key。
 5. **共享 core**：宿主无关逻辑来自独立仓库 `https://github.com/rpchen/litellm-discovery-core`。更新构建由 `scripts/prepare-core.ts` 解析 `main` 的实际 SHA，在被忽略的 `.tmp/discovery-core/<sha>/` 缓存并生成临时 `src/core/`；该目录不得手工修改、不得提交，也不得在运行时读取。`dist/` 是按固定 SHA 编译并提交的插件产物，适配层不得引用平级 `../opencode-litellm-provider/src/core/` 或本机缓存。
-6. **验证**：更新 core 后运行 `bun run build:dist` 生成产物；提交前必须运行 `bun run verify:dist && bun run typecheck && bun test && bun run test:package`。`verify:dist` 按已提交 `dist/core-provenance.json` 的 SHA 重建并要求 `dist/` 零差异；构建产物须包含 core 仓库、分支和完整 SHA。
+6. **验证**：更新 core 后运行 `bun run build:dist` 生成产物；提交前必须运行 `bun run verify:dist && bun run typecheck && bun test && bun run test:package`。`verify:dist` 按已提交 `dist/core-provenance.json` 的 SHA 重建并要求 `dist/` 零差异；构建产物须包含 core 仓库、分支和完整 SHA。涉及宿主契约的变更还必须通过 `npm run test:e2e:pi`；本地运行该命令时必须安装真实 Pi 0.87.1，并把 `E2E_PACKAGE_SPEC` 指向待验证的不可变 Git commit/tag。
 7. **提交**：conventional commits（`feat:` / `fix:` / `chore:` / `docs:`）；openspec 在途变更随实施一起提交，完成后 archive。
 8. **agent skills 单副本**：skill 只维护在 `.agents/skills/`。若 `openspec init`/`update` 又为 Pi 生成了 `.pi/skills/`，删掉它（否则会出现同名 skill collision 提示）；日常刷新用 `openspec update --force`，它只重写 `.agents/skills/`。
 9. **测试完成标准**：共享规范以 `rpchen/litellm-discovery-core/docs/testing-standard.md` 为权威来源。本仓库每个 OpenSpec Scenario 必须有可追踪自动化证据；安全/失败边界必须有真实负向输入；新增用户可见能力至少有一条贯穿 Core → Pi state → command/UI 的纵向测试。禁止仅因 CI 全绿就宣称 Scenario 已闭环。
@@ -31,3 +31,4 @@
 
 11. **模型发布边界**：必须遵守共享 testing-standard 的 Discovery 不变量。Core 可以保留 limit 未知的模型用于 diagnostics，但 `toProviderModels` 不得向 Pi 注册 `contextWindow <= 0` 或 `maxTokens <= 0` 的模型；此规则必须有通用 adapter 测试，不得只针对某个具体模型。
 12. **跨会话事实基线**：开始新会话/新规划前重新核对 main、Release/tag、README 当前固定版本、`dist/core-provenance.json`、active OpenSpec 和共享 testing-standard；结束前执行 retrospective，发现“规范已写但代码未通用保证”时不得宣称完成。
+13. **真实 Pi 宿主门禁**：凡涉及 `ExtensionAPI` / `ExtensionContext`、`registerProvider` / `unregisterProvider` / `refreshModels`、credential/login、command/UI、插件安装/加载或其他用户可见宿主行为的变更，CI 的 **Real Pi 0.87.1 E2E** 必须通过。该门禁使用 Pi 自己的 `pi install` 安装固定 Git commit、隔离 `HOME` / XDG / `PI_CODING_AGENT_DIR`、两个本地 fake LiteLLM endpoint 和独立宿主凭据；必须验证真实命令注册、provider/model 可见性、operational limits、endpoint credential 隔离与 activation。模拟 `ExtensionAPI`、直接调用 extension factory、package smoke 或单纯检查入口文件存在都不能替代真实宿主验收。Pi 0.87.1 声明 Node `>=22.19.0`，CI/Release 不得使用更低 Node 版本。

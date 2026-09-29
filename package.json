@@ -30,7 +30,8 @@
     "test:package": "bun scripts/test-package.ts",
     "validate:spec": "openspec validate --all --strict --no-interactive",
     "test:openspec-closure": "node scripts/check-openspec-closure.mjs",
-    "test:release-metadata": "node scripts/check-release-metadata.mjs"
+    "test:release-metadata": "node scripts/check-release-metadata.mjs",
+    "test:e2e:pi": "node scripts/e2e-real-pi.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

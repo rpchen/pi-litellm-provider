@@ -33,7 +33,7 @@ rules:
     - 必须说明协议判定结果如何映射到 pi-ai 的内置 API 实现，以及 variants 与 pi thinkingLevelMap 的对应或取舍
   tasks:
     - 每个变更必须包含针对 LiteLLM /v1/model/info 固定样本（test/fixtures）的单元测试任务
-    - 涉及宿主集成的变更必须包含在真实 pi 中加载验证的任务（pi -e ./extensions/index.ts 或 pi install）
+    - 涉及宿主集成的变更必须包含永久 Real Pi 0.87.1 E2E 的验收任务：使用 Pi 自己的 pi install 安装固定 Git commit/tag，在隔离 HOME/XDG/PI_CODING_AGENT_DIR 与本地 fake LiteLLM 中验证真实 provider/model、credential、command/UI 或生命周期行为；pi -e、mock、直接 factory 调用和 package smoke 只能作为补充，不能替代该门禁
 
 # Per-operation guidance.
 operations:
