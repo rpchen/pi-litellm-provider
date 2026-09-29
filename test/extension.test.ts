@@ -196,7 +196,7 @@ describe("Core refresh coordinator 接入", () => {
       {
         model_name: "coordinated-model",
         litellm_params: { model: "openai/coordinated-model" },
-        model_info: { mode: "chat" },
+        model_info: { mode: "chat", max_input_tokens: 1000, max_output_tokens: 100 },
       },
     ],
   }
