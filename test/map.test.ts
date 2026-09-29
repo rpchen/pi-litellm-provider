@@ -36,8 +36,11 @@ describe("protocol -> pi-ai api mapping", () => {
 })
 
 describe("toProviderModels", () => {
-  test("每个 spec 都映射出模型且数量一致", () => {
-    expect(models).toHaveLength(specs.length)
+  test("只映射具有 operational limits 的 spec", () => {
+    const operational = specs.filter(hasOperationalLimits)
+    expect(models).toHaveLength(operational.length)
+    expect(models.map((model) => model.id)).toEqual(operational.map((spec) => spec.id))
+    expect(specs.some((spec) => !hasOperationalLimits(spec))).toBeTrue()
   })
 
   test("api 按协议逐模型设置", () => {
