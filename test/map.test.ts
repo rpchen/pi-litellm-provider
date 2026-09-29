@@ -120,6 +120,28 @@ describe("toProviderModels", () => {
   test("id 与 display name 均为 model_name", () => {
     expect(byID.get("gpt-6-sol")?.name).toBe("gpt-6-sol")
   })
+  test("非正数 operational limits 不会发布给 Pi，且不影响有效模型", () => {
+    const valid = spec([])
+    valid.id = "valid"
+    valid.name = "valid"
+    valid.limit = { context: 128000, input: 128000, output: 32000 }
+
+    const zeroContext = spec([])
+    zeroContext.id = "zero-context"
+    zeroContext.name = "zero-context"
+    zeroContext.limit = { context: 0, input: 0, output: 32000 }
+
+    const zeroOutput = spec([])
+    zeroOutput.id = "zero-output"
+    zeroOutput.name = "zero-output"
+    zeroOutput.limit = { context: 128000, input: 128000, output: 0 }
+
+    const mapped = toProviderModels([zeroContext, valid, zeroOutput], ROOT)
+    expect(mapped.map((model) => model.id)).toEqual(["valid"])
+    expect(mapped[0]!.contextWindow).toBe(128000)
+    expect(mapped[0]!.maxTokens).toBe(32000)
+  })
+
 })
 
 describe("thinkingLevelMap", () => {
