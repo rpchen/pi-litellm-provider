@@ -2,8 +2,9 @@
 
 本文件是 AI 编码代理在本仓库工作时必须遵守的约定。变更流程由 openspec 管理（见 `openspec/config.yaml`）。
 
-> 本仓库是独立 git 仓库（remote: `rpchen/pi-litellm-provider`），物理上嵌套在 LiteLLM 部署仓库目录下，
-> 但两者历史互不相干：在本目录内执行的 git 命令只作用于本仓库。
+> 本仓库是独立 git 仓库（remote: `rpchen/pi-litellm-provider`），可独立 clone 与开发，
+> 不要求与 core、OpenCode 或任何其他仓库保持平级/嵌套布局（作为多仓库工作区的成员检出时同样适用）：
+> 在本目录内执行的 git 命令只作用于本仓库。
 
 ## 目录结构
 
