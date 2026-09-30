@@ -27,7 +27,7 @@ E2E_PACKAGE_SPEC=git:github.com/rpchen/pi-litellm-provider@<sha> npm run test:e2
 
 功能与行为变更走 OpenSpec：`openspec/changes/` 下先立提案（proposal / design / specs / tasks），实施完成并验证后 archive。
 
-`npm run test:openspec-closure` 会拒绝 tasks 已全部完成但仍留在 active `openspec/changes/` 的 change。实现完成后必须使用 OpenSpec CLI archive，再执行 strict validation；不得手工移动目录代替 archive。
+`npm run test:openspec-closure` 会拒绝 tasks 已全部完成但仍留在 active `openspec/changes/` 的 change，并核对所有 archived delta 是否已同步到 canonical `openspec/specs/`；实现完成后必须使用 OpenSpec CLI archive，再执行 strict validation 与新的 closure gate；不得手工移动目录代替 archive。
 
 ## 测试完成标准
 
