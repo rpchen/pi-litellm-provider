@@ -1,0 +1,11 @@
+{
+  "requirementAliases": [
+    {
+      "capability": "litellm-connection",
+      "from": "LiteLLM 地址经配置文件或环境变量提供",
+      "to": "LiteLLM 地址经全局配置文件或环境变量提供",
+      "reason": "Historical archive changed the title without an explicit RENAMED operation",
+      "archive": "2026-09-30-sync-pr9-canonical-specs"
+    }
+  ]
+}
