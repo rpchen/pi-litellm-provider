@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
-import { mkdirSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import { getAgentDir } from "@earendil-works/pi-coding-agent"
+import { atomicWriteFile } from "./fs-lock.ts"
 
 export type EndpointActivation =
   | { readonly mode: "all" }
@@ -37,8 +37,7 @@ export function saveActivation(
   value: EndpointActivation,
   path: string = activationPath(),
 ): void {
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(value, null, 2) + "\n", "utf8")
+  atomicWriteFile(path, JSON.stringify(value, null, 2) + "\n")
 }
 
 export function activeEndpointIds(

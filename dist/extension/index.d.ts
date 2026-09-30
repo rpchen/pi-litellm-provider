@@ -22,6 +22,10 @@ export interface FactoryInternals {
     registry?: EndpointRegistryConfig;
     activation?: EndpointActivation;
     activationFile?: string;
+    /** Agent state directory (litellm.json / auth.json / models-store.json); defaults to Pi's agent dir. */
+    agentDir?: string;
+    /** Environment used for legacy LITELLM_* resolution; defaults to process.env. */
+    env?: Record<string, string | undefined>;
     deps?: DiscoveryDeps;
     cwd?: string;
 }

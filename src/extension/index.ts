@@ -14,6 +14,9 @@ import {
   toggleEndpoint,
   type EndpointActivation,
 } from "./activation.ts"
+import { getAgentDir } from "@earendil-works/pi-coding-agent"
+import { join } from "node:path"
+import { createEndpointManager } from "./endpoint-management.ts"
 import {
   DEFAULT_ENDPOINT_ID,
   loadEndpointRegistry,
@@ -94,6 +97,10 @@ export interface FactoryInternals {
   registry?: EndpointRegistryConfig
   activation?: EndpointActivation
   activationFile?: string
+  /** Agent state directory (litellm.json / auth.json / models-store.json); defaults to Pi's agent dir. */
+  agentDir?: string
+  /** Environment used for legacy LITELLM_* resolution; defaults to process.env. */
+  env?: Record<string, string | undefined>
   deps?: DiscoveryDeps
   cwd?: string
 }
@@ -114,12 +121,16 @@ function registryFromLegacy(config: ExtensionConfig): EndpointRegistryConfig {
 }
 
 export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryInternals = {}): void {
+  const agentDir = internals.agentDir ?? getAgentDir()
+  const env = internals.env ?? process.env
   const resolveRegistry = (cwd: string): EndpointRegistryConfig =>
     internals.registry ??
-    (internals.config ? registryFromLegacy(internals.config) : loadEndpointRegistry(cwd))
+    (internals.config
+      ? registryFromLegacy(internals.config)
+      : loadEndpointRegistry(cwd, internals.deps?.logger ?? console, env, agentDir))
 
   let registry = resolveRegistry(internals.cwd ?? process.cwd())
-  const activationFile = internals.activationFile ?? activationPath()
+  const activationFile = internals.activationFile ?? activationPath(agentDir)
   let activation = internals.activation ?? loadActivation(activationFile)
   const diagnostics = new Map<string, ProviderDiagnosticsState>()
   const registered = new Set<string>()
@@ -205,47 +216,31 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     },
   })
 
-  pi.registerCommand("litellm-endpoints", {
-    description: "管理全局 LiteLLM endpoint activation",
-    handler: async (args, ctx) => {
-      const ids = Object.keys(registry.endpoints)
-      if (ids.length === 0) {
-        ctx.ui.notify("当前没有已配置的 LiteLLM endpoint", "warning")
-        return
-      }
-
-      let action = args.trim()
-      if (!action) {
-        const active = new Set(activeIds())
-        const options = [
-          "全部启用",
-          "全部停用",
-          ...ids.map((id) => `${active.has(id) ? "✓" : "○"} ${id}`),
-        ]
-        action = await ctx.ui.select("LiteLLM endpoints", options) ?? ""
-      }
-      if (!action) return
-
-      if (action === "all" || action === "全部启用") {
-        persistActivation({ mode: "all" })
-      } else if (action === "none" || action === "全部停用") {
-        persistActivation({ mode: "selected", endpointIds: [] })
-      } else {
-        const endpointId = action.replace(/^[✓○]\s+/, "")
-        if (!ids.includes(endpointId)) {
-          ctx.ui.notify(`未知 LiteLLM endpoint：${endpointId}`, "warning")
-          return
-        }
-        persistActivation(toggleEndpoint(ids, activation, endpointId))
-      }
-
+  const manager = createEndpointManager({
+    agentDir,
+    configPath: join(agentDir, "litellm.json"),
+    env,
+    reload: () => {
+      if (internals.registry || internals.config) return
+      registry = resolveRegistry(internals.cwd ?? process.cwd())
+      if (!internals.activation) activation = loadActivation(activationFile, internals.deps?.logger ?? console)
+    },
+    registry: () => registry,
+    activation: () => activation,
+    persistActivation,
+    sync: (ctx) => {
       syncProviders()
       startActivePolling(ctx)
-      const providers = activeIds().map(providerIdForEndpoint)
-      if (providers.length > 0) {
-        await ctx.modelRegistry.refresh({ providers, force: true })
-      }
-      ctx.ui.notify(`已激活 endpoint：${activeIds().join(", ") || "无"}`, "info")
+    },
+    forget: (endpointId) => {
+      diagnostics.delete(endpointId)
+    },
+  })
+
+  pi.registerCommand("litellm-endpoints", {
+    description: "管理全局 LiteLLM endpoint：新增、修改、删除、启用/停用、凭据",
+    handler: async (args, ctx) => {
+      await manager.run(args, ctx)
     },
   })
 
