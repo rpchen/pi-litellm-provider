@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process"
 const EXPECTED_PI_VERSION = process.env.E2E_PI_VERSION ?? "0.87.1"
 const PACKAGE_SPEC = process.env.E2E_PACKAGE_SPEC?.trim()
 const PI_BIN = process.env.PI_BIN?.trim() || (process.platform === "win32" ? "pi.cmd" : "pi")
-const TIMEOUT_MS = 30_000
+const TIMEOUT_MS = Number(process.env.E2E_TIMEOUT_MS ?? 30_000)
 
 if (!PACKAGE_SPEC) {
   throw new Error("E2E_PACKAGE_SPEC is required and must point at an immutable Git commit or tag")
@@ -166,14 +166,19 @@ class RpcClient {
     })
   }
 
-  async request(command) {
+  async request(command, options = {}) {
     const id = command.id ?? `e2e-${Date.now()}-${Math.random().toString(16).slice(2)}`
     const after = this.records.length
     this.child.stdin.write(JSON.stringify({ ...command, id }) + "\n")
-    const response = await this.waitFor(
-      (record) => record?.type === "response" && record.id === id,
-      { after },
-    )
+    let response
+    try {
+      response = await this.waitFor(
+        (record) => record?.type === "response" && record.id === id,
+        { after, timeoutMs: options.timeoutMs },
+      )
+    } catch (error) {
+      throw new Error(`RPC ${command.type} (${command.message ?? ""}) got no response; exit=${JSON.stringify(this.exit)}; last records:\n${this.records.slice(-5).map((r) => JSON.stringify(r).slice(0, 300)).join("\n")}\n${error.message}`)
+    }
     assert(response.success === true, `RPC command ${command.type} failed: ${response.error ?? JSON.stringify(response)}`)
     return { response, after }
   }
@@ -194,10 +199,16 @@ class RpcClient {
     this.child.stdin.write(JSON.stringify({ type: "prompt", message, id }) + "\n")
     const seen = []
     for (const [index, step] of steps.entries()) {
-      const request = await this.waitFor(
-        (record) => record?.type === "extension_ui_request" && ["select", "input", "confirm"].includes(record.method),
-        { after: cursor },
-      )
+      let request
+      try {
+        request = await this.waitFor(
+          (record) => record?.type === "extension_ui_request" && ["select", "input", "confirm"].includes(record.method),
+          { after: cursor },
+        )
+      } catch (error) {
+        const tail = this.records.slice(start).map((r) => JSON.stringify(r).slice(0, 300)).join("\n")
+        throw new Error(`${message} step ${index}: no host dialog arrived. records since command:\n${tail}\n${error.message}`)
+      }
       cursor = this.records.indexOf(request) + 1
       seen.push({ method: request.method, title: request.title, options: request.options, message: request.message })
       const kind = "select" in step ? "select" : "input" in step ? "input" : "confirm"
@@ -220,7 +231,13 @@ class RpcClient {
       }
       this.child.stdin.write(JSON.stringify({ type: "extension_ui_response", id: request.id, ...reply }) + "\n")
     }
-    const response = await this.waitFor((record) => record?.type === "response" && record.id === id, { after: start })
+    let response
+    try {
+      response = await this.waitFor((record) => record?.type === "response" && record.id === id, { after: start })
+    } catch (error) {
+      const tail = this.records.slice(start).map((r) => JSON.stringify(r).slice(0, 400)).join("\n")
+      throw new Error(`${message}: prompt never completed after ${steps.length} scripted dialogs. records:\n${tail}\nstderr=${this.stderr}`)
+    }
     assert(response.success === true, `${message} failed: ${response.error ?? JSON.stringify(response)}`)
     return { seen, notices: this.records.slice(start).filter((r) => r?.type === "extension_ui_request" && r.method === "notify") }
   }
@@ -230,9 +247,20 @@ class RpcClient {
     this.child.stdin.end()
     await Promise.race([
       new Promise((resolve) => this.child.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 3_000)),
+      // Give Pi time to flush and release its own proper-lockfile locks: a force-killed holder leaves a
+      // models-store.json.lock that the next Pi only reclaims after the 30s stale window.
+      new Promise((resolve) => setTimeout(resolve, 15_000)),
     ])
-    if (this.child.exitCode === null) this.child.kill("SIGTERM")
+    if (this.child.exitCode === null) this.killTree()
+  }
+
+  /** On Windows the shell wrapper is not the Pi process: kill the whole tree so no orphan contends for the agent dir. */
+  killTree() {
+    if (process.platform === "win32" && this.child.pid) {
+      spawnSync("taskkill", ["/pid", String(this.child.pid), "/T", "/F"], { stdio: "ignore" })
+    } else {
+      this.child.kill("SIGTERM")
+    }
   }
 }
 
@@ -510,15 +538,33 @@ export default function bootstrapProbe(pi) {
       for (const secret of secrets) assert(!blob.includes(secret), "an API key was echoed to the host UI")
     }
     const startMgmtPi = () => {
+      const began = Date.now()
       const child = spawn(PI_BIN, ["--mode", "rpc", "--no-session", "--extension", probeExtensionPath, "--model", "e2e-bootstrap/bootstrap"], {
         cwd: workDir,
         env: { ...isolatedEnv, NODE_OPTIONS: nodeOptionsValue },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       })
-      return new RpcClient(child)
+      const client = new RpcClient(child)
+      client.startedAt = began
+      return client
     }
-    const litellmModels = async (client) => pluginModels((await client.request({ type: "get_available_models" })).response)
+    const readyWithin = async (client, label) => {
+      const began = Date.now()
+      // A Pi stopped mid-refresh can leave the host's models-store.json.lock until its 30s stale window
+      // passes (host behaviour, not ours); allow for it instead of failing the restart check.
+      await client.request({ type: "get_commands" }, { timeoutMs: 90_000 })
+      console.log(`${label}: Pi answered get_commands in ${Date.now() - began}ms`)
+    }
+    let lastStage = "init"
+    const stage = (name) => { lastStage = name }
+    const litellmModels = async (client) => {
+      try {
+        return pluginModels((await client.request({ type: "get_available_models" })).response)
+      } catch (error) {
+        throw new Error(`get_available_models failed at stage "${lastStage}": ${error.message}\nlast records: ${client.records.slice(-4).map((r) => JSON.stringify(r).slice(0, 300)).join("\n")}`)
+      }
+    }
     const untilModels = async (client, predicate, label) => {
       for (let attempt = 0; attempt < 40; attempt++) {
         const models = await litellmModels(client)
@@ -529,8 +575,13 @@ export default function bootstrapProbe(pi) {
     }
 
     rpc = startMgmtPi()
-    await rpc.request({ type: "get_commands" })
+    try {
+      await rpc.request({ type: "get_commands" })
+    } catch (error) {
+      throw new Error(`second Pi never answered get_commands: ${error.message}\nexit=${JSON.stringify(rpc.exit)} stderr=${rpc.stderr}\nrecords=${JSON.stringify(rpc.records.slice(0, 5))}`)
+    }
 
+    stage("1 list")
     // 1. list: bystander shows active + connected
     let result = await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => {
@@ -539,6 +590,7 @@ export default function bootstrapProbe(pi) {
       } },
     ])
 
+    stage("2 add")
     // 2. Add (ID + Base URL only) → inactive / not connected; nothing auto-activated
     result = await rpc.driveCommand("/litellm-endpoints", [
       { select: "＋ 新增 endpoint" },
@@ -555,25 +607,29 @@ export default function bootstrapProbe(pi) {
     assert(!(await litellmModels(rpc)).some((m) => m.provider === "litellm-e2e-new"), "inactive endpoint exposed a model")
     assert(mgmtA.requests.length === 0, "creating an endpoint must not trigger discovery")
 
+    stage("3 connect")
     // 3. Connect key (inactive) → connected, still inactive, still no models
     result = await rpc.driveCommand("/litellm-endpoints", [
       { select: /e2e-new/ },
       { select: "连接 API Key" },
       { input: SECRET_A },
-      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 已连接") || /未启用 · 已连接/.test(r.title), "connect must not activate") },
+      { select: "返回", check: (r) => assert(/未启用 · 已连接/.test(r.title), "connect must not activate") },
+      { select: undefined },
     ])
     noKeyLeak(result, SECRET_A)
     assert(readJson(authFile)["litellm-e2e-new"]?.key === SECRET_A, "credential was not stored under the endpoint's provider id")
     assert(readJson(activationFile).endpointIds.join() === "untouched", "Connect must not change activation")
     assert(!(await litellmModels(rpc)).some((m) => m.provider === "litellm-e2e-new"), "connected but inactive endpoint exposed a model")
 
+    stage("4 activate")
     // 4. Activate → models appear at once with the right credential
-    await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "启用" }, { select: undefined }])
+    await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "启用" }, { select: "返回" }, { select: undefined }])
     let models = await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new" && m.id === "e2e-mgmt-alpha"), "activate")
     assert(models.find((m) => m.id === "e2e-mgmt-alpha").contextWindow === 48_000, "model limits were not mapped")
     assert(mgmtA.requests.length > 0 && mgmtA.requests.every((r) => r.authorization === `Bearer ${SECRET_A}`), "discovery did not use the connected key")
     assert(models.some((m) => m.provider === "litellm-untouched"), "bystander endpoint lost its models")
 
+    stage("5 edit")
     // 5. Edit Base URL → advanced field preserved; new address used
     writeFileSync(configPath, JSON.stringify({ ...readJson(configPath), endpoints: { ...readJson(configPath).endpoints, "e2e-new": { baseUrl: mgmtA.baseUrl, protocolOverrides: { "e2e-mgmt-beta": "responses" }, hand: "written" } } }, null, 2) + "\n")
     mgmtB.state.apiKey = SECRET_A // same key is valid on the new address
@@ -582,6 +638,7 @@ export default function bootstrapProbe(pi) {
       { select: /e2e-new/ },
       { select: "修改 Base URL" },
       { input: mgmtB.baseUrl, check: (r) => assert(/ID 不可修改/.test(r.title) && r.placeholder === mgmtA.baseUrl, "edit must be Base-URL-only with the ID read-only") },
+      { select: "返回" },
       { select: undefined },
     ])
     config = readJson(configPath)
@@ -591,12 +648,14 @@ export default function bootstrapProbe(pi) {
     assert(mgmtB.requests.length > beforeB, "edited Base URL was not used for discovery")
     assert(models.find((m) => m.id === "e2e-mgmt-beta").api === "openai-responses", "protocolOverrides from the config file no longer applied")
 
+    stage("6 replace")
     // 6. Replace key → old key dead, new key used, never echoed
     mgmtB.state.apiKey = SECRET_B
     result = await rpc.driveCommand("/litellm-endpoints", [
       { select: /e2e-new/ },
       { select: "替换 API Key" },
       { input: SECRET_B },
+      { select: "返回" },
       { select: undefined },
     ])
     noKeyLeak(result, SECRET_A, SECRET_B)
@@ -604,11 +663,13 @@ export default function bootstrapProbe(pi) {
     models = await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new" && m.id === "e2e-mgmt-beta"), "replace")
     assert(mgmtB.requests.at(-1).authorization === `Bearer ${SECRET_B}`, "discovery still used the replaced key")
 
+    stage("7 disconnect")
     // 7. Disconnect → credential gone, endpoint + activation stay, models gone, bystander intact
     result = await rpc.driveCommand("/litellm-endpoints", [
       { select: /e2e-new/ },
       { select: "断开凭据" },
       { confirm: true },
+      { select: "返回" },
       { select: undefined },
     ])
     assert(readJson(authFile)["litellm-e2e-new"] === undefined, "Disconnect left the credential behind")
@@ -617,13 +678,14 @@ export default function bootstrapProbe(pi) {
     assert(readJson(activationFile).endpointIds.includes("e2e-new"), "Disconnect changed activation")
     await untilModels(rpc, (list) => !list.some((m) => m.provider === "litellm-e2e-new") && list.some((m) => m.provider === "litellm-untouched"), "disconnect")
 
+    stage("8 reconnect+restart")
     // 8. Connect again, then restart Pi → state survives
     mgmtB.state.apiKey = SECRET_C
-    await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "连接 API Key" }, { input: SECRET_C }, { select: undefined }])
+    await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "连接 API Key" }, { input: SECRET_C }, { select: "返回" }, { select: undefined }])
     await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new"), "reconnect")
     await rpc.close()
     rpc = startMgmtPi()
-    await rpc.request({ type: "get_commands" })
+    await readyWithin(rpc, "restart#1")
     await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => {
         assert(r.options.includes("✓ e2e-new · 已启用 · 已连接"), `state lost across restart: ${JSON.stringify(r.options)}`)
@@ -633,13 +695,15 @@ export default function bootstrapProbe(pi) {
     await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new") && list.some((m) => m.provider === "litellm-untouched"), "restart")
     assert(exists(storeFile) && readJson(storeFile)["litellm-e2e-new"], "discovery snapshot was never persisted for the endpoint")
 
+    stage("9 deactivate")
     // 9. Deactivate → provider gone, credential + snapshot kept
-    await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "停用" }, { select: undefined }])
+    await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "停用" }, { select: "返回" }, { select: undefined }])
     await untilModels(rpc, (list) => !list.some((m) => m.provider === "litellm-e2e-new"), "deactivate")
     assert(readJson(authFile)["litellm-e2e-new"]?.key === SECRET_C, "Deactivate removed the credential")
     assert(readJson(storeFile)["litellm-e2e-new"], "Deactivate removed the snapshot")
     assert(readJson(activationFile).endpointIds.join() === "untouched", "Deactivate did not persist")
 
+    stage("10 delete")
     // 10. Delete: cancel first (nothing changes), then confirm (everything goes)
     const snapshotState = () => [configPath, authFile, storeFile, activationFile].map((f) => readFileSync(f, "utf8"))
     const before = snapshotState()
@@ -665,10 +729,14 @@ export default function bootstrapProbe(pi) {
     assert(config.endpoints.untouched.mine === 1 && config.handWrittenNote.keep === "me", "Delete damaged unrelated configuration")
     assert(readJson(authFile)["litellm-untouched"]?.key === untouched.apiKey, "Delete damaged another endpoint's credential")
 
+    stage("11 restart")
     // 11. Restart: nothing resurrects; re-adding the same id starts clean
+    // Let Delete's follow-up provider refresh finish before stopping Pi: stopping the host while it holds
+    // its own models-store.json.lock makes the next Pi wait out the host's 30s stale-lock window.
+    await new Promise((resolve) => setTimeout(resolve, 4_000))
     await rpc.close()
     rpc = startMgmtPi()
-    await rpc.request({ type: "get_commands" })
+    await readyWithin(rpc, "restart#2")
     await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => assert(!r.options.some((o) => o.includes("e2e-new")), "deleted endpoint resurrected after restart") },
     ])
@@ -681,6 +749,7 @@ export default function bootstrapProbe(pi) {
     ])
     assert(readJson(authFile)["litellm-e2e-new"] === undefined, "re-added id inherited an old credential")
 
+    stage("12 hand edit")
     // 12. Hand edit is visible on the next open, unknown fields survive UI writes
     const edited = readJson(configPath)
     edited.endpoints["hand-added"] = { baseUrl: mgmtA.baseUrl }
@@ -702,5 +771,6 @@ export default function bootstrapProbe(pi) {
   if (rpc) await rpc.close().catch(() => {})
   if (defaultServer) await defaultServer.close().catch(() => {})
   if (companyServer) await companyServer.close().catch(() => {})
-  rmSync(root, { recursive: true, force: true })
+  if (process.env.E2E_KEEP_ROOT) console.log("kept", root)
+  else rmSync(root, { recursive: true, force: true })
 }
