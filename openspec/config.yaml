@@ -10,17 +10,18 @@ context: |
   即自动发现并注册 provider / 协议 / 模型 / 能力 / 推理档位，并跟随 LiteLLM 端变更。
 
   本仓库是 LiteLLM 自动发现能力的 pi 宿主适配器。宿主无关的发现核心（LiteLLM 归一化、models.dev 补缺、
-  能力映射、协议判定、轮询与降级）与平级仓库 ../opencode-litellm-provider 共享，按“单副本共享”，
-  不使用 git submodule、不复制两份。共享方式的选择见 docs/decisions.md。
+  能力映射、协议判定、轮询与降级）由独立仓库 rpchen/litellm-discovery-core 单副本提供，构建期固定 SHA
+  编译进 dist；不使用 git submodule、不复制两份。共享方式的选择见 docs/decisions.md。
 
-  行为基线：../opencode-litellm-provider 既有规则（LiteLLM /v1/model/info 为唯一事实来源、models.dev 仅补缺、
+  行为基线：litellm-discovery-core 既有规则（LiteLLM /v1/model/info 为唯一事实来源、models.dev 仅补缺、
   同 model_name 多部署保守合并、布尔取交集与数值取最小、contextTierCap 按阶梯价起点截断上下文、
   protocolOverrides 逐模型兜底）。偏离必须在 design.md 说明理由。
 
   Tech stack: TypeScript（ESM），运行时用 pi 的 jiti 加载，无需构建产物；
   测试与脚本用 Bun。宿主 API 参考 https://github.com/earendil-works/pi 的 docs/extensions.md、
   docs/custom-provider.md、docs/packages.md，以及 packages/coding-agent/examples/extensions/*。
-  仓库：https://github.com/rpchen/pi-litellm-provider（独立 git 仓库，物理嵌套在 LiteLLM 部署仓库目录下但不属于它）。
+  仓库：https://github.com/rpchen/pi-litellm-provider（独立 git 仓库，可独立 clone/开发，
+  也可作为多仓库工作区的成员检出；不要求任何平级或嵌套目录）。
 
 # Per-artifact rules — injected into the corresponding artifact instructions.
 rules:
@@ -28,7 +29,7 @@ rules:
     - 必须写明用到的 pi 扩展 API（registerProvider / refreshModels / 凭据与 /login / 事件 hook），以及依赖 pi 哪个版本区间
     - 必须写明与共享 core 的接口边界：本仓库负责什么、core 负责什么
   design:
-    - 与 ../opencode-litellm-provider 行为基线的任何差异必须列表说明（差异 → 理由）
+    - 与 litellm-discovery-core / 上述行为基线的任何差异必须列表说明（差异 → 理由）
     - 涉及网络发现的设计必须说明：失败降级（LiteLLM / models.dev 不可达时的行为）、缓存策略、刷新触发方式
     - 必须说明协议判定结果如何映射到 pi-ai 的内置 API 实现，以及 variants 与 pi thinkingLevelMap 的对应或取舍
   tasks:
