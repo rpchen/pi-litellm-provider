@@ -1,5 +1,5 @@
 import { createServer } from "node:http"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -425,7 +425,7 @@ export default function bootstrapProbe(pi) {
   const commandsResult = await rpc.request({ type: "get_commands" })
   const commands = commandsResult.response?.data?.commands
   assert(Array.isArray(commands), "get_commands did not return a command list")
-  for (const name of ["litellm-endpoints", "litellm-diagnostics"]) {
+  for (const name of ["litellm-endpoints", "litellm-diagnostics", "litellm-audit-export"]) {
     const command = commands.find((entry) => entry?.name === name)
     assert(command, `Real Pi did not load extension command /${name}`)
     assert(command.source === "extension", `/${name} is not an extension command`)
@@ -487,6 +487,88 @@ export default function bootstrapProbe(pi) {
   assert(diagnosticNotice.message.includes("已注册模型：1"), "Diagnostics model count is not the host-visible count")
   assert(!diagnosticNotice.message.includes(defaultServer.apiKey), "Diagnostics leaked the API key")
   assert(!diagnosticNotice.message.includes(defaultServer.baseUrl), "Diagnostics leaked the LiteLLM URL")
+  // [REAL-HOST-E2E] Diagnostics carry the short Runtime Identity of the running artifact.
+  assert(diagnosticNotice.message.includes("Runtime Identity"), "Diagnostics did not show the Runtime Identity section")
+  const pluginVersion = (diagnosticNotice.message.match(/Plugin Version\s+(\S+)/u) ?? [])[1]
+  const shortDigest = (diagnosticNotice.message.match(/Artifact\s+([0-9a-f]{8}|unknown)/u) ?? [])[1]
+  const shortCore = (diagnosticNotice.message.match(/Core Commit\s+([0-9a-f]{8}|unknown)/u) ?? [])[1]
+  assert(pluginVersion && pluginVersion !== "unknown", "Diagnostics plugin version is missing")
+  assert(shortDigest && shortDigest !== "unknown", "Diagnostics artifact digest is missing")
+  assert(shortCore && shortCore !== "unknown", "Diagnostics core commit is missing")
+
+  // [REAL-HOST-E2E] Audit export carries the full Runtime Identity of the same artifact.
+  const auditRun = await rpc.extensionCommand("/litellm-audit-export default")
+  const auditNotice = await rpc.waitFor(
+    (record) =>
+      record?.type === "extension_ui_request" &&
+      record.method === "notify" &&
+      typeof record.message === "string" &&
+      record.message.includes("LiteLLM 审查报告已导出"),
+    { after: auditRun.after },
+  )
+  const auditPath = (auditNotice.message.match(/([A-Za-z]:[\\/][^\s"']+?litellm-audit-[^\s"']+\.json|\/[^\s"']+?litellm-audit-[^\s"']+\.json)/u) ?? [])[1]
+  assert(auditPath, `Audit notice did not contain a report path: ${auditNotice.message.slice(0, 300)}`)
+  assert(existsSync(auditPath), `Audit report file does not exist: ${auditPath}`)
+  const auditReport = JSON.parse(readFileSync(auditPath, "utf8"))
+  assert(auditReport?.runtimeIdentity?.pluginVersion === pluginVersion, "Audit plugin version differs from diagnostics")
+  assert(
+    typeof auditReport?.runtimeIdentity?.artifactDigest === "string"
+      && /^sha256:[0-9a-f]{64}$/u.test(auditReport.runtimeIdentity.artifactDigest)
+      && auditReport.runtimeIdentity.artifactDigest.slice(7, 15) === shortDigest,
+    "Audit artifact digest is invalid or differs from diagnostics",
+  )
+  assert(
+    typeof auditReport?.runtimeIdentity?.coreCommit === "string"
+      && /^[0-9a-f]{40}$/u.test(auditReport.runtimeIdentity.coreCommit)
+      && auditReport.runtimeIdentity.coreCommit.slice(0, 8) === shortCore,
+    "Audit core commit is invalid or differs from diagnostics",
+  )
+  const auditSerialized = JSON.stringify(auditReport)
+  assert(!auditSerialized.includes(defaultServer.apiKey), "Audit leaked the API key")
+  assert(!auditSerialized.includes(defaultServer.baseUrl) && !auditSerialized.includes("baseUrl"), "Audit leaked the LiteLLM URL")
+  // [REAL-HOST-E2E] The running artifact identity matches the installed package provenance.
+  {
+    const candidates = []
+    const roots = [agentDir, home, xdgState, xdgConfig]
+    const visit = (dir, depth = 0) => {
+      if (depth > 6 || candidates.length > 0) return
+      let names = []
+      try {
+        names = readdirSync(dir)
+      } catch {
+        return
+      }
+      if (names.includes("runtime-identity.json") && names.includes("core-provenance.json")) {
+        candidates.push(dir)
+        return
+      }
+      for (const name of names) {
+        if (name === "node_modules" || name.startsWith(".")) continue
+        let entry = null
+        try {
+          entry = statSync(join(dir, name))
+        } catch {
+          continue
+        }
+        if (entry.isDirectory()) visit(join(dir, name), depth + 1)
+      }
+    }
+    for (const dir of roots) visit(dir)
+    assert(candidates.length > 0, "Installed package runtime identity was not found under the isolated Pi dirs")
+    const installedIdentity = JSON.parse(readFileSync(join(candidates[0], "runtime-identity.json"), "utf8"))
+    const installedProvenance = JSON.parse(readFileSync(join(candidates[0], "core-provenance.json"), "utf8"))
+    nodeAssert.deepEqual(auditReport.runtimeIdentity, installedIdentity, "Audit identity differs from the installed package")
+    assert(installedIdentity.coreCommit === installedProvenance.sha, "Installed identity coreCommit differs from provenance")
+  }
+
+  // [REAL-HOST-E2E] The extension startup log records the same Runtime Identity.
+  assert(
+    typeof rpc.stderr === "string" && rpc.stderr.includes("LiteLLM Runtime Identity"),
+    "Extension startup did not log the Runtime Identity",
+  )
+  assert(rpc.stderr.includes(`plugin=${pluginVersion}`), "Startup plugin version differs from diagnostics")
+  assert(rpc.stderr.includes(`artifact=${shortDigest}`), "Startup artifact digest differs from diagnostics")
+  assert(rpc.stderr.includes(`core=${shortCore}`), "Startup core commit differs from diagnostics")
 
   await rpc.extensionCommand("/litellm-endpoints none")
   const noneModelsResult = await rpc.request({ type: "get_available_models" })

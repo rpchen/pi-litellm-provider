@@ -78,12 +78,39 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 |---|---|
 | `/model` | 打开模型选择器并实时刷新 LiteLLM 模型 |
 | `/thinking` | 切换当前模型的 thinking level |
-| `/litellm-diagnostics [endpoint-id]` | 无参数查看 endpoint 总览；传 id 查看该 endpoint 的发现、缓存、models.dev、协议和 Core 诊断 |
+| `/litellm-diagnostics [endpoint-id]` | 无参数查看 endpoint 总览；传 id 查看该 endpoint 的发现、缓存、models.dev、协议、Core 诊断与 Runtime Identity |
+| `/litellm-audit-export [endpoint-id]` | 导出已注册模型清单与完整 Runtime Identity 到本地 JSON 文件；无参数导出全部已激活 endpoint |
 | `/litellm-endpoints` | endpoint 管理中心：新增、修改 Base URL、删除、启用/停用、连接/替换/断开 API Key；也支持 `all` / `none` / `<endpoint-id>` 参数快速切换启用状态 |
 | `/login` / `/logout` | 保存、切换或移除 LiteLLM 凭据 |
 | `/reload` | 修改 `litellm.json` 后重新读取配置 |
 
 `/litellm-diagnostics` 只读取已有状态，**不会发起模型请求，也不会产生额外 token 消耗**；输出不会包含 API Key、LiteLLM 地址或原始传输错误。诊断中的“最近成功发现”“下次允许重试”等绝对时间会按**当前运行 Pi 的宿主机器时区**显示，并附带 UTC 偏移；内部 snapshot/cache 时间仍保持标准 UTC/epoch。
+
+`/litellm-audit-export` 每次执行都会在 `<agentDir>/litellm-audit/` 下生成一个新 JSON 文件，不覆盖已有报告。报告包含已注册模型的 allowlist 字段与完整的 Runtime Identity，不包含 API Key、LiteLLM 地址或原始上游响应；分享前请自行检查。导出失败不会影响 provider 注册与轮询。
+
+### Runtime Identity
+
+Runtime Identity 是当前正在运行的扩展 artifact 自身的不可变身份，用于把问题对应到具体的构建产物，而不是猜测 Git HEAD、分支或 Release。它包含三个字段：
+
+- `Plugin Version`：扩展版本，取自 `package.json`
+- `Artifact`：当前 artifact 的确定性 SHA-256 摘要（相同产物相同，不同产物不同）
+- `Core Commit`：该 artifact 内嵌的 `litellm-discovery-core` 完整 commit SHA
+
+查看位置：
+
+- `/litellm-diagnostics` 末尾的 `Runtime Identity` 块（短形式，各取前 8 位）
+- `/litellm-audit-export` 导出的 JSON 中的 `runtimeIdentity`（完整值）
+- 扩展启动日志中的 `LiteLLM Runtime Identity plugin=<ver> artifact=<short> core=<short>` 行
+
+```text
+Runtime Identity
+
+Plugin Version   0.5.0
+Artifact         f149674c
+Core Commit      8e155e0e
+```
+
+反馈问题时，请附上 `/litellm-diagnostics` 中的 Runtime Identity 段落，或 audit 导出文件中的 `runtimeIdentity` 对象。
 
 CLI 单次调用示例：
 

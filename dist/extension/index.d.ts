@@ -28,6 +28,11 @@ export interface FactoryInternals {
     env?: Record<string, string | undefined>;
     deps?: DiscoveryDeps;
     cwd?: string;
+    /** Startup identity log sink; defaults to console. */
+    logger?: {
+        info?: (line: string) => void;
+        log?: (line: string) => void;
+    };
     /** Test seams for the config writer. */
     write?: {
         rename?: (from: string, to: string) => void;

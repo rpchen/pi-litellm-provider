@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import path from "node:path"
 import { CORE_BRANCH, CORE_REPOSITORY, PROVENANCE_PATH, ROOT, readProvenanceSHA } from "./prepare-core.ts"
+import { verifyRuntimeIdentity } from "./runtime-identity.ts"
 
 const verificationRoot = path.join(ROOT, ".tmp", "dist-verification")
 const committedDist = path.join(verificationRoot, "committed")
@@ -24,9 +25,13 @@ try {
   const sha = readProvenanceSHA()
   if (!sha) fail("dist provenance 缺少有效的 40 位 core SHA")
 
+  verifyRuntimeIdentity({ root: ROOT, dist: path.join(ROOT, "dist"), selectionSHA: sha })
+
   rmSync(verificationRoot, { recursive: true, force: true })
   mkdirSync(verificationRoot, { recursive: true })
   cpSync(path.join(ROOT, "dist"), committedDist, { recursive: true })
+
+  // [REPRODUCIBLE-BUILD] Rebuild from the pinned SHA; byte-equality proves determinism.
 
   const buildScript = path.join(ROOT, "scripts", "build.ts")
   const result = spawnSync(process.execPath, [buildScript, `--sha=${sha}`, `--out-dir=${rebuiltDist}`], {
@@ -50,6 +55,7 @@ try {
   if (diff.status !== 0) {
     fail(diff.stderr || "比较 dist 产物失败")
   }
+  verifyRuntimeIdentity({ root: ROOT, dist: rebuiltDist, selectionSHA: sha })
   process.stdout.write(`verify:dist: committed artifact matches core ${sha}\n`)
 } finally {
   rmSync(verificationRoot, { recursive: true, force: true })

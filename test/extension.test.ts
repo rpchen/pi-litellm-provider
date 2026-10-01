@@ -55,6 +55,7 @@ describe("扩展工厂注册形态", () => {
     expect(registrations[0]!.config.models).toEqual([])
     expect(typeof registrations[0]!.config.refreshModels).toBe("function")
     expect(commands.map((command) => command.name)).toContain("litellm-diagnostics")
+    expect(commands.map((command) => command.name)).toContain("litellm-audit-export")
   })
 
   test("未连接时也注册且不抛错", () => {

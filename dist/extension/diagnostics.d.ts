@@ -1,4 +1,5 @@
 import type { DiscoveryCacheDiagnostics, DiscoveryDiagnostics } from "../core/index.ts";
+import type { ProviderModelConfigLike } from "./types.ts";
 export type ProviderDiagnosticStatus = "idle" | "restored" | "ready" | "stale" | "empty" | "unconfigured" | "inactive" | "credential-missing" | "auth-error" | "config-error" | "error";
 export interface ProviderDiagnosticSnapshot {
     readonly status: ProviderDiagnosticStatus;
@@ -7,6 +8,8 @@ export interface ProviderDiagnosticSnapshot {
     readonly cache?: DiscoveryCacheDiagnostics;
     readonly lastSuccessfulDiscoveryAt?: string;
     readonly note?: string;
+    /** Last registered provider models (allowlisted shape); used by audit export. */
+    readonly models?: readonly ProviderModelConfigLike[];
 }
 export interface ProviderDiagnosticsState {
     current: ProviderDiagnosticSnapshot;
