@@ -33,7 +33,7 @@ pi install git:github.com/rpchen/pi-litellm-provider#v0.4.0
 
 也可以设置 `LITELLM_BASE_URL`。地址带不带 `/v1`、末尾斜杠都可以，扩展会自动规范化。
 
-legacy 单 endpoint 模式下，地址优先级为：`LITELLM_BASE_URL` → 全局 `~/.pi/agent/litellm.json`。PR9 起不再读取项目级 `.pi/litellm.json`，endpoint 定义和 activation 都是全局的。
+legacy 单 endpoint 模式下，地址优先级为：`LITELLM_BASE_URL` → 全局 `~/.pi/agent/litellm.json`。不再读取项目级 `.pi/litellm.json`，endpoint 定义和 activation 都是全局的。
 
 需要多个 LiteLLM endpoint 时，改用显式 `endpoints`：
 
@@ -79,7 +79,7 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 | `/model` | 打开模型选择器并实时刷新 LiteLLM 模型 |
 | `/thinking` | 切换当前模型的 thinking level |
 | `/litellm-diagnostics [endpoint-id]` | 无参数查看 endpoint 总览；传 id 查看该 endpoint 的发现、缓存、models.dev、协议和 Core 诊断 |
-| `/litellm-endpoints` | 打开全局 endpoint activation 管理；也支持 `all` / `none` / `<endpoint-id>` 参数 |
+| `/litellm-endpoints` | endpoint 管理中心：新增、修改 Base URL、删除、启用/停用、连接/替换/断开 API Key；也支持 `all` / `none` / `<endpoint-id>` 参数快速切换启用状态 |
 | `/login` / `/logout` | 保存、切换或移除 LiteLLM 凭据 |
 | `/reload` | 修改 `litellm.json` 后重新读取配置 |
 
@@ -123,11 +123,28 @@ pi --list-models litellm
 
 在 Pi 运行期间修改 endpoint 定义后，执行 `/reload` 或重启 Pi。
 
-### Endpoint activation
+### 管理 endpoint（`/litellm-endpoints`）
 
-`/litellm-endpoints` 只管理“哪些已配置 endpoint 当前激活”，不负责新增、改名或删除 endpoint。PR9 的完整 CRUD UI 不在本次范围内；endpoint 定义仍由全局配置文件维护。
+执行 `/litellm-endpoints` 打开管理中心，用 Pi 的原生选择框操作（`↑` / `↓` 选择，`Enter` 确认，`Esc` 返回/关闭）。列表每行显示 `✓`/`○`（启用/未启用）和凭据状态（已连接/未连接）。
 
-activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全部启用；也可以选择任意子集，包含“零个激活 endpoint”。停用 endpoint 会立即撤下对应 provider 并停止其发现/轮询，但不会删除 endpoint 定义、宿主凭据或已保存 snapshot；再次启用后会继续使用这些状态。
+| 想做的事 | 怎么做 |
+|---|---|
+| **新增** | 选 **＋ 新增 endpoint** → 输入 Endpoint ID → 输入 Base URL。新 endpoint **默认未启用、未连接**，不会自动启用 |
+| **修改 Base URL** | 选中 endpoint → **修改 Base URL**。ID 不可修改（没有 rename）；`protocolOverrides` 等配置原样保留 |
+| **连接 / 替换 / 断开 API Key** | 选中 endpoint → **连接 API Key** / **替换 API Key** / **断开凭据**。已保存的 Key 永远不会显示；断开只删除该 endpoint 的 Key |
+| **启用 / 停用** | 选中 endpoint → **启用** / **停用**；也可以用列表里的 **全部启用** / **全部停用**。立即生效，允许 0 个启用 |
+| **删除** | 选中 endpoint → **删除 endpoint**，确认后彻底删除：配置、启用状态、已保存的 Key、模型发现缓存。**取消确认不会留下任何改动**（包括 env-legacy default 的内部迁移） |
+
+说明：
+
+- 连接 Key、启用/停用互相独立：连接不会自动启用，断开不会自动停用；未启用的 endpoint 也可以连接、替换、断开 Key。停用不会删除 Key 和缓存。
+- 这里保存的 Key 与 `/login` 是**同一份**宿主凭据（`auth.json`），两边看到的状态一致。Pi 扩展的输入框不会遮罩，输入 Key 时屏幕上可见；不想在屏幕上输入时请用 `/login`。
+- 管理中心改的是 `~/.pi/agent/litellm.json`，它仍是唯一的 endpoint 配置，你也可以继续手工编辑；下次打开管理中心会看到文件里的真实状态。文件必须是合法 JSON，无法解析时管理中心会拒绝写入并提示，不会覆盖你的文件。
+- 只有一个 endpoint 且使用旧的顶层 `baseUrl` 配置时，新增第二个 endpoint 会先请你确认，然后把现有地址迁移到 `endpoints.default`（provider、Key、缓存不变）。地址来自环境变量 `LITELLM_BASE_URL` 时，修改/删除前也需要这次迁移；删除的迁移包含在最终删除确认里（确认后先迁移再立即删除），**取消删除不留任何改动**。
+- 通过管理中心新增 endpoint 后，启用状态会固定为“明确选择的集合”；之后手工写进文件的新 endpoint 需要在管理中心里启用。
+- 仍需手工编辑配置文件：`protocolOverrides`、`pollInterval`、`contextTierCap`。endpoint ID 创建后不能直接改名；要换名请新增新 endpoint 并删除旧的。
+
+activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全部启用；停用 endpoint 会立即撤下对应 provider 并停止其发现/轮询。
 
 每个 endpoint 是独立 provider、独立凭据、独立发现/缓存/snapshot/故障域。插件不会跨 endpoint 聚合模型、负载均衡或自动故障切换。
 
@@ -145,7 +162,7 @@ activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全�
 
 `/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。能力补缺优先使用原厂记录；原厂 provider 记录不可用时依次使用 OpenRouter、OpenCode，再考虑全局唯一记录。这样同一模型被多个网关收录时，不会仅因为 provider 多而丢失 context、输出上限或 reasoning 等关键能力。
 
-模型上限按 PR8 的发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。Core diagnostics 会保留 models.dev 未命中的私有模型用于解释，但若最终仍无法得到正数 context/output，Pi 不会把该模型注册成 `contextWindow: 0` / `maxTokens: 0` 的不可用配置。
+模型上限按共享发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。Core diagnostics 会保留 models.dev 未命中的私有模型用于解释，但若最终仍无法得到正数 context/output，Pi 不会把该模型注册成 `contextWindow: 0` / `maxTokens: 0` 的不可用配置。
 
 > `pi update --models` 只处理 `models.json`，不会加载扩展，因此不会刷新本插件的模型清单。
 

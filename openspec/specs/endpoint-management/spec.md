@@ -1,0 +1,208 @@
+# endpoint-management Specification
+
+## Purpose
+Defines `/litellm-endpoints` as the single management center for globally configured LiteLLM endpoints in the Pi extension: list, add (ID + Base URL), edit (Base URL only), delete with full cleanup, activate/deactivate, and per-endpoint credential management, all through the host's real select/confirm/input dialogs and with non-destructive, atomic writes to the one canonical `litellm.json`.
+
+## Requirements
+
+### Requirement: Unified endpoint management entry
+`/litellm-endpoints` SHALL be the management center for global LiteLLM endpoints. It SHALL use the host's real interactive `ui.select`, `ui.confirm` and `ui.input` dialogs for every choice, confirmation and text entry, and SHALL NOT emulate menus by printing selectable-looking text.
+
+#### Scenario: [HOST-UI] Interaction uses real host dialogs
+- **WHEN** a user runs `/litellm-endpoints` in a real Pi session
+- **THEN** every choice, confirmation and input is presented through the host's `select` / `confirm` / `input` dialogs and the command output contains no fake menu text
+
+### Requirement: Endpoint listing
+The management UI SHALL list every configured endpoint with its active state and credential state, reading the canonical configuration on every invocation.
+
+#### Scenario: [LIST-EMPTY] No endpoint configured
+- **WHEN** no endpoint is configured
+- **THEN** the UI offers "Add endpoint" and does not fail or print an error
+
+#### Scenario: [LIST-SINGLE] Single endpoint
+- **WHEN** exactly one endpoint is configured
+- **THEN** the UI lists that endpoint with its active and credential state
+
+#### Scenario: [LIST-MULTI] Mixed active and credential states
+- **WHEN** several endpoints are configured with different activation and credential states
+- **THEN** each line shows `✓`/`○` for active/inactive and Connected/Not connected for its own credential independently
+
+#### Scenario: [LIST-EXTERNAL] Manual configuration change is visible
+- **WHEN** the user edits `litellm.json` by hand between two invocations
+- **THEN** the next invocation shows the edited state without restarting Pi
+
+#### Scenario: [LIST-LEGACY-GHOST] No ghost default without a legacy address
+- **WHEN** the plugin runs in legacy single-endpoint mode with no connected address
+- **THEN** the endpoint list shows no `default` row and offers Add instead
+
+### Requirement: Add endpoint
+Add SHALL ask only for a user-defined endpoint ID and a Base URL. The new endpoint SHALL be inactive and MAY have no credential. Creating an endpoint SHALL NOT activate it.
+
+#### Scenario: [ADD-OK] Valid endpoint is added
+- **WHEN** the user enters a valid unused ID and an http(s) Base URL
+- **THEN** `litellm.json` gains that endpoint and the UI reports it as added
+
+#### Scenario: [ADD-DUP] Duplicate ID
+- **WHEN** the entered ID already exists in the configuration
+- **THEN** the ID is rejected, nothing is written, and the user may enter another ID
+
+#### Scenario: [ADD-BAD-ID] Invalid ID
+- **WHEN** the entered ID does not match `[a-z0-9][a-z0-9-_]*`
+- **THEN** the ID is rejected and nothing is written
+
+#### Scenario: [ADD-BAD-URL] Invalid Base URL
+- **WHEN** the entered Base URL is empty, not http(s), or contains userinfo
+- **THEN** the URL is rejected and nothing is written
+
+#### Scenario: [ADD-INACTIVE] Default inactive and unconnected
+- **WHEN** an endpoint has just been added
+- **THEN** it is inactive, exposes no provider or model, and shows Not connected
+
+#### Scenario: [ADD-PRESERVE] Existing endpoints are untouched
+- **WHEN** an endpoint is added to a configuration with other endpoints and global settings
+- **THEN** all other endpoints, their unknown fields, `pollInterval`, `contextTierCap` and unknown top-level fields are preserved, and previously active endpoints stay active
+
+#### Scenario: [ADD-LEGACY] Legacy single-endpoint configuration is migrated with confirmation
+- **WHEN** the configuration uses legacy top-level `baseUrl` (or `LITELLM_BASE_URL`) and the user adds a second endpoint
+- **THEN** the UI asks for confirmation, then moves the effective legacy `baseUrl` and `protocolOverrides` into `endpoints.default` (keeping provider id `litellm`, its credential and snapshot identity) and adds the new endpoint
+
+#### Scenario: [ADD-ROLLBACK] A failed Add keeps the activation consistent with the committed configuration
+- **WHEN** endpoint creation fails before the configuration write commits (conflict, write failure or a concurrent external edit) after the activation was pinned
+- **THEN** the previous activation is restored, the runtime reconciles back to its previous state and the configuration has no new endpoint
+- **WHEN** the configuration write has committed but the runtime reload afterwards fails
+- **THEN** the materialised activation is kept and never restored to `all`, the new endpoint stays inactive in the committed configuration, and the UI reports that the configuration was saved while the runtime reload failed
+
+### Requirement: Edit endpoint
+Edit SHALL change only the Base URL. The endpoint ID SHALL be read-only and rename SHALL NOT exist. Fields the UI does not manage SHALL be preserved byte-for-byte in value.
+
+#### Scenario: [EDIT-URL] Base URL is changed
+- **WHEN** the user submits a new valid Base URL for an endpoint
+- **THEN** only that endpoint's `baseUrl` changes in `litellm.json` and a running provider uses the new address
+
+#### Scenario: [EDIT-ID-READONLY] ID cannot be edited
+- **WHEN** the user opens an endpoint's edit flow
+- **THEN** no ID input is offered and the ID is unchanged afterwards
+
+#### Scenario: [EDIT-PRESERVE] Unmanaged fields are preserved
+- **WHEN** an endpoint contains `protocolOverrides` or unknown fields and its Base URL is edited
+- **THEN** those fields remain with identical values
+
+#### Scenario: [EDIT-ATOMIC] Failed write leaves no partial result
+- **WHEN** validation fails, the file cannot be parsed, or the atomic replace fails
+- **THEN** the original file is unchanged and no temporary file remains
+
+#### Scenario: [EDIT-ISOLATED] Other endpoints are unaffected
+- **WHEN** one endpoint's Base URL is edited
+- **THEN** other endpoints' configuration, activation, credential and snapshot are unchanged
+
+#### Scenario: [LEGACY-MIGRATE] Legacy default is fully manageable through migration
+- **WHEN** the legacy default's address comes from `LITELLM_BASE_URL` and the user runs Edit or Delete
+- **THEN** the effective address migrates into `endpoints.default` after the user's confirmation — for Edit as a migration confirmation, for Delete as part of the final Delete confirmation (see `[DEL-CANCEL]`) — and the action completes normally (endpoint id, provider id, saved credential and activation unchanged; unmanaged fields preserved)
+
+### Requirement: Credential management
+The management UI SHALL show Connected / Not connected per endpoint and offer Connect, Replace API Key and Disconnect. It SHALL store credentials in the same host credential backend used by `/login`, SHALL NEVER display an existing key, and SHALL NOT change activation.
+
+#### Scenario: [CRED-CONNECT] Connect a key
+- **WHEN** the user enters an API Key for a Not connected endpoint
+- **THEN** the key is stored for that endpoint's provider id and the endpoint shows Connected
+
+#### Scenario: [CRED-REPLACE] Replace a key
+- **WHEN** the user enters a new key for a Connected endpoint
+- **THEN** the stored key is overwritten and discovery uses the new key
+
+#### Scenario: [CRED-DISCONNECT] Disconnect removes only that credential
+- **WHEN** the user confirms Disconnect
+- **THEN** only that endpoint's credential is removed; the endpoint definition, activation and other endpoints' credentials are unchanged
+
+#### Scenario: [CRED-NO-ECHO] Keys are never echoed
+- **WHEN** any credential operation succeeds or fails
+- **THEN** no notification, log or dialog text contains the old or new key
+
+#### Scenario: [CRED-ACTIVATION-INDEPENDENT] Credential changes do not alter activation
+- **WHEN** a credential is connected, replaced or disconnected on an active or inactive endpoint
+- **THEN** the endpoint's activation state is unchanged, and inactive endpoints still accept these operations
+
+#### Scenario: [CRED-LOGIN-CONSISTENT] /login and the management UI share one credential state
+- **WHEN** a key is saved through the management UI or through the host `/login` credential store
+- **THEN** both entry points report the same Connected state and the provider uses that key
+
+#### Scenario: [CRED-INVALID-KEY] Invalid key input is rejected
+- **WHEN** the entered key is empty or contains whitespace or control characters
+- **THEN** nothing is stored and the existing credential is unchanged
+
+#### Scenario: [CRED-CORRUPT-STORE] Unparseable credential store is not overwritten
+- **WHEN** `auth.json` cannot be parsed
+- **THEN** the operation fails with an explanation and the file is left unchanged
+
+### Requirement: Activation management
+Activation SHALL keep its existing independent semantics and SHALL take effect immediately.
+
+#### Scenario: [ACT-TOGGLE] Activate and deactivate
+- **WHEN** the user activates or deactivates an endpoint
+- **THEN** its provider is registered or unregistered immediately and the choice is persisted in `litellm.activation.json`
+
+#### Scenario: [ACT-ZERO] Zero active endpoints
+- **WHEN** the user deactivates every endpoint
+- **THEN** no provider is exposed and the state is valid
+
+#### Scenario: [ACT-CRED-INDEPENDENT] Deactivation keeps credential and snapshot
+- **WHEN** an endpoint is deactivated
+- **THEN** its credential and persisted snapshot are kept
+
+#### Scenario: [ACT-IMMEDIATE] Provider exposure follows activation at once
+- **WHEN** an endpoint with a credential is activated
+- **THEN** its models become visible without restarting Pi, and they disappear again when it is deactivated
+
+### Requirement: Delete endpoint
+Delete SHALL require explicit confirmation and SHALL remove everything the plugin persists for the endpoint identity.
+
+#### Scenario: [DEL-CONFIRM] Confirmation is required
+- **WHEN** the user selects Delete
+- **THEN** a confirmation dialog states what will be removed before anything changes
+
+#### Scenario: [DEL-CANCEL] Cancelled delete changes nothing
+- **WHEN** the user declines or dismisses the final Delete confirmation
+- **THEN** the endpoint definition, activation, credential and `models-store.json` snapshot are unchanged
+- **THEN** no migration or cleanup has run: for a legacy endpoint the configuration stays legacy (`endpoints.default` is not generated and top-level legacy fields stay), and the first persistent mutation happens only after the user confirms the deletion
+
+#### Scenario: [DEL-CLEANUP] Confirmed delete cleans all persisted state
+- **WHEN** the user confirms Delete
+- **THEN** the endpoint definition, activation entry, stored credential and `models-store.json` snapshot entry are removed and its provider is unregistered
+
+#### Scenario: [DEL-ISOLATED] Other endpoints survive
+- **WHEN** one endpoint is deleted
+- **THEN** every other endpoint keeps its definition, activation, credential and snapshot
+
+#### Scenario: [DEL-NO-GHOST] Re-adding a deleted id starts clean
+- **WHEN** an endpoint id is deleted and later added again
+- **THEN** it is inactive, Not connected and has no restored models
+
+#### Scenario: [DEL-PARTIAL-FAILURE] Interrupted delete is retryable
+- **WHEN** a cleanup step fails before the definition is removed
+- **THEN** the endpoint definition still exists so Delete can be retried, and the error is reported
+
+### Requirement: Canonical configuration safety
+`litellm.json` SHALL remain the only endpoint definition. UI writes SHALL be non-destructive, atomic and conflict-checked.
+
+#### Scenario: [CFG-NON-DESTRUCTIVE] Unknown and global fields survive
+- **WHEN** the UI performs any write
+- **THEN** unknown fields, `pollInterval`, `contextTierCap` and unrelated endpoints are preserved
+
+#### Scenario: [CFG-PARSE-FAIL] Unparseable configuration is not overwritten
+- **WHEN** `litellm.json` is not valid JSON or not an object
+- **THEN** mutations are refused with an explanation and the file is unchanged
+
+#### Scenario: [CFG-CONFLICT] Concurrent external edit is detected
+- **WHEN** the file changes on disk between the UI's read and its replace
+- **THEN** the write is aborted without overwriting the external change
+
+#### Scenario: [CFG-LOCK] Stale lock does not block forever
+- **WHEN** a lock directory left by a dead process exists next to a managed file
+- **THEN** it is reclaimed, while a fresh lock held by another writer is respected
+
+### Requirement: Host-owned file permission preservation
+Writes to the Pi host's `auth.json` and `models-store.json` SHALL match the host's own permission semantics: a created file uses `0600`, and an existing file keeps its mode and ACL across updates.
+
+#### Scenario: [HOST-PERM] Existing host files keep their permissions
+- **WHEN** `auth.json` or `models-store.json` exists with a custom mode (for example `0660`) and credentials are connected, replaced or disconnected, or endpoint state is deleted
+- **THEN** the files are updated in place and keep their existing mode, while files created for the first time use `0600`
