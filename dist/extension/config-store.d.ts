@@ -1,4 +1,4 @@
-export type ConfigErrorCode = "parse" | "shape" | "duplicate" | "invalid-id" | "invalid-url" | "not-found" | "conflict" | "env-managed" | "legacy-conflict";
+export type ConfigErrorCode = "parse" | "shape" | "duplicate" | "invalid-id" | "invalid-url" | "not-found" | "conflict" | "env-managed" | "legacy-conflict" | "not-legacy";
 export declare class ConfigStoreError extends Error {
     readonly code: ConfigErrorCode;
     constructor(code: ConfigErrorCode, message: string);
@@ -14,6 +14,10 @@ export type ConfigMutation = {
 } | {
     kind: "delete";
     id: string;
+}
+/** Legacy single-endpoint → explicit endpoints.default (identity and credential unchanged). */
+ | {
+    kind: "migrate";
 };
 export interface MutationOutcome {
     /** Legacy top-level baseUrl/protocolOverrides were moved into `endpoints.default`. */

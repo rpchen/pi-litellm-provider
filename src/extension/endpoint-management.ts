@@ -44,6 +44,8 @@ export interface ManagementHost {
   sync(ctx: ManagementContext): void
   /** Drop in-memory diagnostics for a deleted endpoint. */
   forget(endpointId: string): void
+  /** Test seams for the config writer. */
+  write?: { rename?: (from: string, to: string) => void; beforeCommit?: () => void }
 }
 
 type Credential = "stored" | "environment" | "none" | "unknown"
@@ -145,24 +147,67 @@ export function createEndpointManager(host: ManagementHost) {
       if (!ok) return
     }
 
+    const previous = host.activation()
+    let configWritten = false
     try {
       // New endpoints start inactive: materialise the current active set (without the new id) first.
       host.persistActivation({ mode: "selected", endpointIds: activeIds().filter((existing) => existing !== id) })
-      await mutateConfig(host.configPath, { kind: "add", id, baseUrl }, { env: host.env })
+      await mutateConfig(host.configPath, { kind: "add", id, baseUrl }, { env: host.env, ...host.write })
+      configWritten = true
       host.reload()
       host.sync(ctx)
       ctx.ui.notify(`已添加 endpoint ${id}（未启用、未连接）。请在列表中选择它来连接 API Key 并启用。`, "info")
     } catch (error) {
-      fail(ctx, error)
+      // A failed Add must not leave the activation permanently materialised as "selected".
+      let rollbackFailure = ""
+      if (!configWritten) {
+        try {
+          host.persistActivation(previous)
+          host.sync(ctx)
+        } catch (rollbackError) {
+          rollbackFailure = `；activation 回滚失败：${errorText(rollbackError)}`
+        }
+      }
+      ctx.ui.notify(`${errorText(error)}${rollbackFailure}`, "error")
+    }
+  }
+
+  /**
+   * Legacy default whose address comes from LITELLM_BASE_URL: the file cannot override the environment,
+   * so manage actions first migrate the effective address into endpoints.default (explicit mode then
+   * ignores the variable). Provider id, credential and activation stay unchanged.
+   */
+  const needsMigration = (view: EndpointView) =>
+    view.id === DEFAULT_ENDPOINT_ID &&
+    host.registry().mode === "legacy" &&
+    Boolean(host.env.LITELLM_BASE_URL?.trim())
+
+  const ensureManaged = async (ctx: ManagementContext, view: EndpointView, action: string): Promise<boolean> => {
+    if (!needsMigration(view)) return true
+    const ok = await ctx.ui.confirm(
+      "迁移为可管理配置",
+      `默认 endpoint 的地址来自环境变量 LITELLM_BASE_URL。${action}前需要把当前地址写入配置文件的 endpoints.default` +
+        "（显式模式不再读取该环境变量）；provider、已保存的凭据和启用状态保持不变。是否继续？",
+    )
+    if (!ok) return false
+    try {
+      await mutateConfig(host.configPath, { kind: "migrate" }, { env: host.env, ...host.write })
+      host.reload()
+      host.sync(ctx)
+      return true
+    } catch (error) {
+      ctx.ui.notify(`迁移失败：${errorText(error)}`, "error")
+      return false
     }
   }
 
   const editBaseUrl = async (ctx: ManagementContext, view: EndpointView) => {
+    if (!(await ensureManaged(ctx, view, "修改 Base URL"))) return
     const baseUrl = await promptBaseUrl(ctx, `修改 ${view.id} 的 Base URL（ID 不可修改）`, view.baseUrl)
     if (baseUrl === undefined) return
     if (baseUrl === view.baseUrl) return ctx.ui.notify("Base URL 没有变化", "info")
     try {
-      await mutateConfig(host.configPath, { kind: "edit", id: view.id, baseUrl }, { env: host.env })
+      await mutateConfig(host.configPath, { kind: "edit", id: view.id, baseUrl }, { env: host.env, ...host.write })
       host.reload()
       host.sync(ctx)
       if (view.active) await refreshProviders(ctx, [view.id])
@@ -200,6 +245,7 @@ export function createEndpointManager(host: ManagementHost) {
   }
 
   const deleteEndpoint = async (ctx: ManagementContext, view: EndpointView): Promise<boolean> => {
+    if (!(await ensureManaged(ctx, view, "删除"))) return false
     const ok = await ctx.ui.confirm(
       `删除 endpoint ${view.id}`,
       "将彻底删除：endpoint 配置、启用状态、已保存的 API Key、模型发现缓存/快照。此操作不可撤销，其他 endpoint 不受影响。是否删除？",
@@ -212,7 +258,7 @@ export function createEndpointManager(host: ManagementHost) {
       host.sync(ctx)
       await removeModelsStoreEntry(host.agentDir, providerId)
       await removeStoredCredential(host.agentDir, providerId)
-      await mutateConfig(host.configPath, { kind: "delete", id: view.id }, { env: host.env })
+      await mutateConfig(host.configPath, { kind: "delete", id: view.id }, { env: host.env, ...host.write })
       host.reload()
       host.sync(ctx)
       host.forget(view.id)

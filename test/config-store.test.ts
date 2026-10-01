@@ -170,6 +170,36 @@ describe("config-store", () => {
     expect(await code(mutateConfig(u.path, { kind: "add", id: "x", baseUrl: "https://x.example" }, { env: {} }))).toBe("legacy-conflict")
   })
 
+  test("[LEGACY-MIGRATE] migrate materialises the effective legacy address into endpoints.default", async () => {
+    const t = setup(JSON.stringify({ pollInterval: 60, keep: 1, protocolOverrides: { m: "chat" } }))
+    const outcome = await mutateConfig(t.path, { kind: "migrate" }, { env: { LITELLM_BASE_URL: "https://env.example" } })
+    expect(outcome).toEqual({ migratedLegacy: true, fromEnvironment: true })
+    expect(t.read()).toEqual({
+      pollInterval: 60,
+      keep: 1,
+      endpoints: { default: { baseUrl: "https://env.example", protocolOverrides: { m: "chat" } } },
+    })
+    // after migration edit/delete work and migration is refused as unnecessary
+    expect(await code(mutateConfig(t.path, { kind: "migrate" }, { env: {} }))).toBe("not-legacy")
+    await mutateConfig(t.path, { kind: "edit", id: "default", baseUrl: "https://x.example" }, { env: {} })
+    expect(t.read().endpoints.default.baseUrl).toBe("https://x.example")
+  })
+
+  test("[LEGACY-MIGRATE] migrate without any legacy address is refused and writes nothing", async () => {
+    const t = setup(JSON.stringify({ pollInterval: 60 }))
+    expect(await code(mutateConfig(t.path, { kind: "migrate" }, { env: {} }))).toBe("not-found")
+    expect(t.read()).toEqual({ pollInterval: 60 })
+  })
+
+  test("[LEGACY-MIGRATE][EDIT-ATOMIC] a failed migrate leaves the file untouched (no partial config)", async () => {
+    const t = setup(JSON.stringify({ baseUrl: "https://old.example", protocolOverrides: { m: "chat" }, keep: 1 }))
+    const before = readFileSync(t.path, "utf8")
+    await expect(
+      mutateConfig(t.path, { kind: "migrate" }, { env: {}, rename: () => { throw new Error("disk full") } }),
+    ).rejects.toThrow("disk full")
+    expect(readFileSync(t.path, "utf8")).toBe(before)
+  })
+
   test("legacy default edit/delete operate on the file; environment-provided address is refused", async () => {
     const t = setup(JSON.stringify({ baseUrl: "https://old.example", protocolOverrides: { m: "chat" }, pollInterval: 60 }))
     await mutateConfig(t.path, { kind: "edit", id: "default", baseUrl: "https://new.example" }, { env: {} })

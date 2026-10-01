@@ -6,7 +6,7 @@
  * is older than 30 s. Pi does not expose its storage to extensions and `proper-lockfile` is not our
  * peer dependency, so we implement the same protocol (see design.md D3).
  */
-import { mkdirSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 export const LOCK_STALE_MS = 30_000;
@@ -65,12 +65,42 @@ export async function withFileLock(file, fn, options = {}) {
         catch { /* already reclaimed */ }
     }
 }
+/**
+ * Write a file in place (same inode): Node applies the mode only when creating, so an existing file keeps
+ * its mode and ACL exactly like Pi's own FileAuthStorageBackend writes. On failure the previous bytes are
+ * restored best-effort so a host-owned file is never left truncated. See design.md D3.
+ */
+export function writeFileInPlace(path, content, options = {}) {
+    mkdirSync(dirname(path), { recursive: true });
+    const write = options.writeFile ?? writeFileSync;
+    const previous = existsSync(path) ? readFileSync(path) : undefined;
+    try {
+        write(path, content, { encoding: "utf8", ...(options.mode !== undefined ? { mode: options.mode } : {}) });
+    }
+    catch (error) {
+        if (previous !== undefined) {
+            try {
+                writeFileSync(path, previous);
+            }
+            catch { /* keep the primary error */ }
+        }
+        throw error;
+    }
+}
 /** Write a sibling temp file then rename over `path`; the temp file never outlives a failure. */
 export function atomicWriteFile(path, content, options = {}) {
     mkdirSync(dirname(path), { recursive: true });
+    const existingMode = existsSync(path) ? statSync(path).mode & 0o777 : undefined;
     const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
         writeFileSync(tmp, content, { encoding: "utf8", mode: options.mode });
+        if (existingMode !== undefined) {
+            try {
+                chmodSync(tmp, existingMode);
+            }
+            catch { /* best effort on platforms without POSIX modes */ }
+        }
+        ;
         (options.rename ?? renameSync)(tmp, path);
     }
     catch (error) {

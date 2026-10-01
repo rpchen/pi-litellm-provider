@@ -103,6 +103,8 @@ export interface FactoryInternals {
   env?: Record<string, string | undefined>
   deps?: DiscoveryDeps
   cwd?: string
+  /** Test seams for the config writer. */
+  write?: { rename?: (from: string, to: string) => void; beforeCommit?: () => void }
 }
 
 function register(pi: ExtensionAPI, endpointId: string, config: ProviderConfigLike): void {
@@ -235,6 +237,7 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     forget: (endpointId) => {
       diagnostics.delete(endpointId)
     },
+    write: internals.write,
   })
 
   pi.registerCommand("litellm-endpoints", {

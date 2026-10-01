@@ -162,7 +162,7 @@ activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全�
 
 `/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。能力补缺优先使用原厂记录；原厂 provider 记录不可用时依次使用 OpenRouter、OpenCode，再考虑全局唯一记录。这样同一模型被多个网关收录时，不会仅因为 provider 多而丢失 context、输出上限或 reasoning 等关键能力。
 
-模型上限按 PR8 的发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。Core diagnostics 会保留 models.dev 未命中的私有模型用于解释，但若最终仍无法得到正数 context/output，Pi 不会把该模型注册成 `contextWindow: 0` / `maxTokens: 0` 的不可用配置。
+模型上限按共享发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。Core diagnostics 会保留 models.dev 未命中的私有模型用于解释，但若最终仍无法得到正数 context/output，Pi 不会把该模型注册成 `contextWindow: 0` / `maxTokens: 0` 的不可用配置。
 
 > `pi update --models` 只处理 `models.json`，不会加载扩展，因此不会刷新本插件的模型清单。
 

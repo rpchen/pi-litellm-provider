@@ -1,3 +1,4 @@
+import { type InPlaceWriteOptions } from "./fs-lock.ts";
 export declare class HostStateError extends Error {
     constructor(message: string);
 }
@@ -14,8 +15,8 @@ export type ApiKeyCheck = {
 };
 export declare function validateApiKey(raw: string): ApiKeyCheck;
 /** Connect or replace: same `{type:"api_key",key}` shape Pi's `/login` stores. */
-export declare function saveStoredCredential(agentDir: string, providerId: string, key: string): Promise<void>;
+export declare function saveStoredCredential(agentDir: string, providerId: string, key: string, write?: InPlaceWriteOptions["writeFile"]): Promise<void>;
 /** Removes only `providerId`; returns whether an entry existed. Missing file is not created. */
-export declare function removeStoredCredential(agentDir: string, providerId: string): Promise<boolean>;
+export declare function removeStoredCredential(agentDir: string, providerId: string, write?: InPlaceWriteOptions["writeFile"]): Promise<boolean>;
 /** Removes the persisted discovery catalog/snapshot for `providerId`. */
-export declare function removeModelsStoreEntry(agentDir: string, providerId: string): Promise<boolean>;
+export declare function removeModelsStoreEntry(agentDir: string, providerId: string, write?: InPlaceWriteOptions["writeFile"]): Promise<boolean>;

@@ -28,6 +28,11 @@ export interface ManagementHost {
     sync(ctx: ManagementContext): void;
     /** Drop in-memory diagnostics for a deleted endpoint. */
     forget(endpointId: string): void;
+    /** Test seams for the config writer. */
+    write?: {
+        rename?: (from: string, to: string) => void;
+        beforeCommit?: () => void;
+    };
 }
 export declare function createEndpointManager(host: ManagementHost): {
     run: (args: string, ctx: ManagementContext) => Promise<void>;

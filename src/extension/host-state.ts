@@ -4,7 +4,7 @@
  */
 import { existsSync, readFileSync } from "node:fs"
 import { basename, join } from "node:path"
-import { atomicWriteFile, withFileLock } from "./fs-lock.ts"
+import { withFileLock, writeFileInPlace, type InPlaceWriteOptions } from "./fs-lock.ts"
 
 export class HostStateError extends Error {
   constructor(message: string) {
@@ -56,36 +56,51 @@ export function validateApiKey(raw: string): ApiKeyCheck {
   return { ok: true, key }
 }
 
-function writeJson(path: string, data: Record<string, unknown>): void {
-  atomicWriteFile(path, JSON.stringify(data, null, 2), { mode: 0o600 })
+// Host-owned files (auth.json / models-store.json) are written in place so an existing mode/ACL survives:
+// Pi itself only applies 0600 on creation and keeps administrator-managed permissions afterwards.
+function writeJson(path: string, data: Record<string, unknown>, write?: InPlaceWriteOptions["writeFile"]): void {
+  writeFileInPlace(path, JSON.stringify(data, null, 2), { mode: 0o600, ...(write ? { writeFile: write } : {}) })
 }
 
 /** Connect or replace: same `{type:"api_key",key}` shape Pi's `/login` stores. */
-export async function saveStoredCredential(agentDir: string, providerId: string, key: string): Promise<void> {
+export async function saveStoredCredential(
+  agentDir: string,
+  providerId: string,
+  key: string,
+  write?: InPlaceWriteOptions["writeFile"],
+): Promise<void> {
   const path = authPath(agentDir)
   await withFileLock(path, () => {
     const { data } = readJsonObject(path)
-    writeJson(path, { ...data, [providerId]: { type: "api_key", key } })
+    writeJson(path, { ...data, [providerId]: { type: "api_key", key } }, write)
   })
 }
 
 /** Removes only `providerId`; returns whether an entry existed. Missing file is not created. */
-export async function removeStoredCredential(agentDir: string, providerId: string): Promise<boolean> {
-  return removeKey(authPath(agentDir), providerId)
+export async function removeStoredCredential(
+  agentDir: string,
+  providerId: string,
+  write?: InPlaceWriteOptions["writeFile"],
+): Promise<boolean> {
+  return removeKey(authPath(agentDir), providerId, write)
 }
 
 /** Removes the persisted discovery catalog/snapshot for `providerId`. */
-export async function removeModelsStoreEntry(agentDir: string, providerId: string): Promise<boolean> {
-  return removeKey(modelsStorePath(agentDir), providerId)
+export async function removeModelsStoreEntry(
+  agentDir: string,
+  providerId: string,
+  write?: InPlaceWriteOptions["writeFile"],
+): Promise<boolean> {
+  return removeKey(modelsStorePath(agentDir), providerId, write)
 }
 
-async function removeKey(path: string, key: string): Promise<boolean> {
+async function removeKey(path: string, key: string, write?: InPlaceWriteOptions["writeFile"]): Promise<boolean> {
   if (!existsSync(path)) return false
   return withFileLock(path, () => {
     const { exists, data } = readJsonObject(path)
     if (!exists || !Object.prototype.hasOwnProperty.call(data, key)) return false
     const { [key]: _removed, ...rest } = data
-    writeJson(path, rest)
+    writeJson(path, rest, write)
     return true
   })
 }

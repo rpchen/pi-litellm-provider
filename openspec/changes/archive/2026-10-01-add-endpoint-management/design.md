@@ -24,19 +24,19 @@ Pi 的 `ExtensionAPI` / `ModelRegistry` 门面**没有**凭据写入或 models-s
 
 局限（记录在案）：`JSON.stringify` 会丢失重复键、并规范化数字字面量格式（值不变）；原本就不是合法 JSON（如含注释）的文件被拒绝而不是改写。
 
-### D3 宿主文件锁协议
-`auth.json` / `models-store.json` 由 Pi 用 `proper-lockfile`（`realpath:false`，锁目录 `<file>.lock`，`stale=30s`）串行化。插件不依赖 `proper-lockfile`（Pi 内部依赖，不是我们的 peer），而是实现同一协议：`mkdir <file>.lock` 成功即持锁；EEXIST 时检查 mtime 超过 30s 视为 stale 并回收；持锁期间每 10s 刷新 mtime；`rmdir` 释放；获取超时报错。写入用同目录临时文件 + `rename`，文件新建模式 `0600`。写前读到无法解析的内容则**拒绝**，不覆盖。宿主通过文件 revision（mtime/size）感知外部写入并重读。
+### D3 宿主文件锁协议（review 修正：权限语义）
+`auth.json` / `models-store.json` 由 Pi 用 `proper-lockfile`（`realpath:false`，锁目录 `<file>.lock`，`stale=30s`）串行化。**写入不再用 temp+rename**（rename 会换 inode，新建文件带 0600，会把已有 0660/ACL 改掉）：宿主自己用 `writeFileSync` 原地写——Node 只在创建时应用 mode，已有文件保持 mode/ACL。本插件同样原地写（`writeFileInPlace`）：创建用 0600；失败路径回写先前内容（best-effort），不把宿主文件留在截断状态。`litellm.json` 仍是 temp+rename，但替换时保留原文件 mode。插件不依赖 `proper-lockfile`（Pi 内部依赖，不是我们的 peer），而是实现同一协议：`mkdir <file>.lock` 成功即持锁；EEXIST 时检查 mtime 超过 30s 视为 stale 并回收；持锁期间每 10s 刷新 mtime；`rmdir` 释放；获取超时报错。写入用同目录临时文件 + `rename`，文件新建模式 `0600`。写前读到无法解析的内容则**拒绝**，不覆盖。宿主通过文件 revision（mtime/size）感知外部写入并重读。
 
 ### D4 凭据状态与宿主 `/login` 一致
 Connected = `auth.json` 中存在该 provider id 的条目。default endpoint 另外识别 `LITELLM_API_KEY` 环境变量，显示为“已连接（环境变量）”，Disconnect 只删除 stored 凭据，不改环境变量。无法解析 auth.json 时显示“未知”，且写操作拒绝。API Key 输入规则：trim 后非空、不含空白/控制字符。Pi 扩展 API 没有掩码输入；输入时可见，保存后**任何位置都不回显**。
 
 ### D5 activation 与 Add / Delete 的交互
-- Add：新 endpoint 必须默认 inactive。当前 activation 为 `all` 时，先把它物化为 `selected`（当前已激活且**已配置**的 id，排除新 id）再写配置；新 id 同时从任何残留 selected 列表中剔除，避免“幽灵激活”。先写 activation 后写配置：配置写失败时只留下无害的 activation 记录。
+- Add：新 endpoint 必须默认 inactive。当前 activation 为 `all` 时，先把它物化为 `selected`（当前已激活且**已配置**的 id，排除新 id）再写配置；新 id 同时从任何残留 selected 列表中剔除，避免“幽灵激活”。**Add 失败必须回滚 activation**（review 修正）：记录 previous activation；配置写失败（conflict / rename 失败 / 外部并发修改）时 best-effort 恢复 previous 并重新 sync provider；回滚自身失败时不吞掉，primary + rollback 错误一并报告。
   - 取舍：此后手工在文件里新增的 endpoint 不会自动激活（`selected` 语义）。可接受，已写入 README。
 - Delete（顺序：先清理、最后删定义，使中途失败可重试）：确认 → 取消激活并同步 provider（停止轮询）→ 从 `models-store.json` 删除该 provider 条目 → 删除 stored 凭据 → 从 activation 剔除 → 写配置移除 endpoint → 再同步并**二次**删除 models-store 条目（覆盖 in-flight refresh 的晚到 publish）→ 清理内存 diagnostics/coordinator。
 
-### D6 legacy 单 endpoint 配置
-legacy 下只在**添加第二个 endpoint**时迁移：确认后把有效的 `baseUrl`（文件或 `LITELLM_BASE_URL`）与 `protocolOverrides` 移入 `endpoints.default`，并删除顶层 legacy 字段（二者不能共存）；provider id、credential、snapshot 身份不变。legacy default 的地址若来自环境变量，则 Edit/Delete 拒绝（写文件也会被环境变量覆盖，属于不诚实的 UI）。legacy 且无地址时 default 视为不存在，不在列表中出现。
+### D6 legacy 单 endpoint 配置（review 修正）
+legacy 下在**添加第二个 endpoint**或**对 env 提供地址的 default 做 Edit/Delete**时迁移：确认后把有效的 `baseUrl`（文件或 `LITELLM_BASE_URL`）与 `protocolOverrides` 移入 `endpoints.default`（`kind: "migrate"`），并删除顶层 legacy 字段（二者不能共存）；provider id、credential、snapshot 身份不变。env 地址不再以“拒绝”作为产品例外——迁移把生效地址写入文件（显式模式随后不再读取该环境变量），Edit/Delete 照常可用。legacy 且无地址时 default 视为不存在，不在列表中出现（无幽灵行）。
 
 ### D7 `default` 之外的 provider 凭据
 沿用 PR9：非 default endpoint 只接受宿主存储的凭据，不读环境变量。

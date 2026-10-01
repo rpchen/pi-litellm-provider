@@ -28,5 +28,10 @@ export interface FactoryInternals {
     env?: Record<string, string | undefined>;
     deps?: DiscoveryDeps;
     cwd?: string;
+    /** Test seams for the config writer. */
+    write?: {
+        rename?: (from: string, to: string) => void;
+        beforeCommit?: () => void;
+    };
 }
 export default function piLitellmProvider(pi: ExtensionAPI, internals?: FactoryInternals): void;

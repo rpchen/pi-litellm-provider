@@ -93,6 +93,8 @@ function without(raw, ...keys) {
 }
 export function applyMutation(raw, mutation, env = process.env) {
     if ("endpoints" in raw) {
+        if (mutation.kind === "migrate")
+            throw new ConfigStoreError("not-legacy", "配置已是显式 endpoints 形式，无需迁移");
         if (!isRecord(raw.endpoints))
             throw new ConfigStoreError("shape", "endpoints 必须是对象，已拒绝修改");
         if ("baseUrl" in raw || "protocolOverrides" in raw) {
@@ -118,6 +120,24 @@ export function applyMutation(raw, mutation, env = process.env) {
         return { next: { ...raw, endpoints }, outcome: { migratedLegacy: false, fromEnvironment: false } };
     }
     const legacy = legacyAddress(raw, env);
+    if (mutation.kind === "migrate") {
+        // Materialise the effective legacy address (file or LITELLM_BASE_URL) into endpoints.default.
+        // Endpoint id, provider identity and the saved credential are unchanged.
+        if (!legacy.url)
+            throw new ConfigStoreError("not-found", "没有可迁移的 legacy 地址");
+        return {
+            next: {
+                ...without(raw, "baseUrl", "protocolOverrides"),
+                endpoints: {
+                    default: {
+                        baseUrl: legacy.url,
+                        ...(raw.protocolOverrides !== undefined ? { protocolOverrides: raw.protocolOverrides } : {}),
+                    },
+                },
+            },
+            outcome: { migratedLegacy: true, fromEnvironment: legacy.fromEnv },
+        };
+    }
     if (mutation.kind === "add") {
         const migrated = {};
         if (legacy.url) {
@@ -164,7 +184,7 @@ function validateMutation(mutation) {
         if (message)
             throw new ConfigStoreError("invalid-id", message);
     }
-    if (mutation.kind !== "delete") {
+    if (mutation.kind === "add" || mutation.kind === "edit") {
         const check = validateBaseUrl(mutation.baseUrl);
         if (!check.ok)
             throw new ConfigStoreError("invalid-url", check.message);
@@ -172,7 +192,7 @@ function validateMutation(mutation) {
 }
 export async function mutateConfig(path, mutation, options = {}) {
     validateMutation(mutation);
-    const normalized = mutation.kind === "delete"
+    const normalized = mutation.kind === "delete" || mutation.kind === "migrate"
         ? mutation
         : { ...mutation, baseUrl: mutation.baseUrl.trim() };
     return withFileLock(path, () => {

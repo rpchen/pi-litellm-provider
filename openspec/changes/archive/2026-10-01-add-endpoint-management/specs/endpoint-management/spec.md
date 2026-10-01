@@ -26,6 +26,10 @@ The management UI SHALL list every configured endpoint with its active state and
 - **WHEN** the user edits `litellm.json` by hand between two invocations
 - **THEN** the next invocation shows the edited state without restarting Pi
 
+#### Scenario: [LIST-LEGACY-GHOST] No ghost default without a legacy address
+- **WHEN** the plugin runs in legacy single-endpoint mode with no connected address
+- **THEN** the endpoint list shows no `default` row and offers Add instead
+
 ### Requirement: Add endpoint
 Add SHALL ask only for a user-defined endpoint ID and a Base URL. The new endpoint SHALL be inactive and MAY have no credential. Creating an endpoint SHALL NOT activate it.
 
@@ -57,6 +61,10 @@ Add SHALL ask only for a user-defined endpoint ID and a Base URL. The new endpoi
 - **WHEN** the configuration uses legacy top-level `baseUrl` (or `LITELLM_BASE_URL`) and the user adds a second endpoint
 - **THEN** the UI asks for confirmation, then moves the effective legacy `baseUrl` and `protocolOverrides` into `endpoints.default` (keeping provider id `litellm`, its credential and snapshot identity) and adds the new endpoint
 
+#### Scenario: [ADD-ROLLBACK] A failed Add restores the previous activation
+- **WHEN** endpoint creation fails (conflict, write failure or a concurrent external edit) after the activation was pinned
+- **THEN** the previous activation is restored, the runtime reconciles back to its previous state and the configuration has no new endpoint
+
 ### Requirement: Edit endpoint
 Edit SHALL change only the Base URL. The endpoint ID SHALL be read-only and rename SHALL NOT exist. Fields the UI does not manage SHALL be preserved byte-for-byte in value.
 
@@ -80,9 +88,9 @@ Edit SHALL change only the Base URL. The endpoint ID SHALL be read-only and rena
 - **WHEN** one endpoint's Base URL is edited
 - **THEN** other endpoints' configuration, activation, credential and snapshot are unchanged
 
-#### Scenario: [EDIT-ENV-LEGACY] Environment-provided legacy address is not silently overridden
-- **WHEN** the legacy default endpoint address comes from `LITELLM_BASE_URL`
-- **THEN** Edit and Delete refuse with an explanation instead of writing a value the environment would override
+#### Scenario: [LEGACY-MIGRATE] Legacy default is fully manageable through migration
+- **WHEN** the legacy default's address comes from `LITELLM_BASE_URL` and the user runs Edit or Delete
+- **THEN** the UI offers to migrate the effective address into `endpoints.default`, and after confirmation the action completes normally (endpoint id, provider id, saved credential and activation unchanged; unmanaged fields preserved)
 
 ### Requirement: Credential management
 The management UI SHALL show Connected / Not connected per endpoint and offer Connect, Replace API Key and Disconnect. It SHALL store credentials in the same host credential backend used by `/login`, SHALL NEVER display an existing key, and SHALL NOT change activation.
@@ -183,3 +191,10 @@ Delete SHALL require explicit confirmation and SHALL remove everything the plugi
 #### Scenario: [CFG-LOCK] Stale lock does not block forever
 - **WHEN** a lock directory left by a dead process exists next to a managed file
 - **THEN** it is reclaimed, while a fresh lock held by another writer is respected
+
+### Requirement: Host-owned file permission preservation
+Writes to the Pi host's `auth.json` and `models-store.json` SHALL match the host's own permission semantics: a created file uses `0600`, and an existing file keeps its mode and ACL across updates.
+
+#### Scenario: [HOST-PERM] Existing host files keep their permissions
+- **WHEN** `auth.json` or `models-store.json` exists with a custom mode (for example `0660`) and credentials are connected, replaced or disconnected, or endpoint state is deleted
+- **THEN** the files are updated in place and keep their existing mode, while files created for the first time use `0600`

@@ -4,7 +4,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { atomicWriteFile, withFileLock } from "./fs-lock.js";
+import { withFileLock, writeFileInPlace } from "./fs-lock.js";
 export class HostStateError extends Error {
     constructor(message) {
         super(message);
@@ -47,26 +47,28 @@ export function validateApiKey(raw) {
         return { ok: false, message: "API Key 不能包含空白或控制字符" };
     return { ok: true, key };
 }
-function writeJson(path, data) {
-    atomicWriteFile(path, JSON.stringify(data, null, 2), { mode: 0o600 });
+// Host-owned files (auth.json / models-store.json) are written in place so an existing mode/ACL survives:
+// Pi itself only applies 0600 on creation and keeps administrator-managed permissions afterwards.
+function writeJson(path, data, write) {
+    writeFileInPlace(path, JSON.stringify(data, null, 2), { mode: 0o600, ...(write ? { writeFile: write } : {}) });
 }
 /** Connect or replace: same `{type:"api_key",key}` shape Pi's `/login` stores. */
-export async function saveStoredCredential(agentDir, providerId, key) {
+export async function saveStoredCredential(agentDir, providerId, key, write) {
     const path = authPath(agentDir);
     await withFileLock(path, () => {
         const { data } = readJsonObject(path);
-        writeJson(path, { ...data, [providerId]: { type: "api_key", key } });
+        writeJson(path, { ...data, [providerId]: { type: "api_key", key } }, write);
     });
 }
 /** Removes only `providerId`; returns whether an entry existed. Missing file is not created. */
-export async function removeStoredCredential(agentDir, providerId) {
-    return removeKey(authPath(agentDir), providerId);
+export async function removeStoredCredential(agentDir, providerId, write) {
+    return removeKey(authPath(agentDir), providerId, write);
 }
 /** Removes the persisted discovery catalog/snapshot for `providerId`. */
-export async function removeModelsStoreEntry(agentDir, providerId) {
-    return removeKey(modelsStorePath(agentDir), providerId);
+export async function removeModelsStoreEntry(agentDir, providerId, write) {
+    return removeKey(modelsStorePath(agentDir), providerId, write);
 }
-async function removeKey(path, key) {
+async function removeKey(path, key, write) {
     if (!existsSync(path))
         return false;
     return withFileLock(path, () => {
@@ -74,7 +76,7 @@ async function removeKey(path, key) {
         if (!exists || !Object.prototype.hasOwnProperty.call(data, key))
             return false;
         const { [key]: _removed, ...rest } = data;
-        writeJson(path, rest);
+        writeJson(path, rest, write);
         return true;
     });
 }

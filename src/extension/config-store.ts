@@ -19,6 +19,7 @@ export type ConfigErrorCode =
   | "conflict"
   | "env-managed"
   | "legacy-conflict"
+  | "not-legacy"
 
 export class ConfigStoreError extends Error {
   constructor(readonly code: ConfigErrorCode, message: string) {
@@ -31,6 +32,8 @@ export type ConfigMutation =
   | { kind: "add"; id: string; baseUrl: string }
   | { kind: "edit"; id: string; baseUrl: string }
   | { kind: "delete"; id: string }
+  /** Legacy single-endpoint → explicit endpoints.default (identity and credential unchanged). */
+  | { kind: "migrate" }
 
 export interface MutationOutcome {
   /** Legacy top-level baseUrl/protocolOverrides were moved into `endpoints.default`. */
@@ -136,6 +139,7 @@ export function applyMutation(
   env: Record<string, string | undefined> = process.env,
 ): { next: Raw; outcome: MutationOutcome } {
   if ("endpoints" in raw) {
+    if (mutation.kind === "migrate") throw new ConfigStoreError("not-legacy", "配置已是显式 endpoints 形式，无需迁移")
     if (!isRecord(raw.endpoints)) throw new ConfigStoreError("shape", "endpoints 必须是对象，已拒绝修改")
     if ("baseUrl" in raw || "protocolOverrides" in raw) {
       throw new ConfigStoreError("legacy-conflict", "litellm.json 同时包含 legacy 顶层 baseUrl/protocolOverrides 与 endpoints，已拒绝修改；请先手工修正")
@@ -156,6 +160,23 @@ export function applyMutation(
   }
 
   const legacy = legacyAddress(raw, env)
+  if (mutation.kind === "migrate") {
+    // Materialise the effective legacy address (file or LITELLM_BASE_URL) into endpoints.default.
+    // Endpoint id, provider identity and the saved credential are unchanged.
+    if (!legacy.url) throw new ConfigStoreError("not-found", "没有可迁移的 legacy 地址")
+    return {
+      next: {
+        ...without(raw, "baseUrl", "protocolOverrides"),
+        endpoints: {
+          default: {
+            baseUrl: legacy.url,
+            ...(raw.protocolOverrides !== undefined ? { protocolOverrides: raw.protocolOverrides } : {}),
+          },
+        },
+      },
+      outcome: { migratedLegacy: true, fromEnvironment: legacy.fromEnv },
+    }
+  }
   if (mutation.kind === "add") {
     const migrated: Raw = {}
     if (legacy.url) {
@@ -199,7 +220,7 @@ function validateMutation(mutation: ConfigMutation): void {
     const message = validateEndpointId(mutation.id)
     if (message) throw new ConfigStoreError("invalid-id", message)
   }
-  if (mutation.kind !== "delete") {
+  if (mutation.kind === "add" || mutation.kind === "edit") {
     const check = validateBaseUrl(mutation.baseUrl)
     if (!check.ok) throw new ConfigStoreError("invalid-url", check.message)
   }
@@ -211,7 +232,7 @@ export async function mutateConfig(
   options: MutateOptions = {},
 ): Promise<MutationOutcome> {
   validateMutation(mutation)
-  const normalized: ConfigMutation = mutation.kind === "delete"
+  const normalized: ConfigMutation = mutation.kind === "delete" || mutation.kind === "migrate"
     ? mutation
     : { ...mutation, baseUrl: mutation.baseUrl.trim() }
   return withFileLock(path, () => {

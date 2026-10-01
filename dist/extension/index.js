@@ -173,6 +173,7 @@ export default function piLitellmProvider(pi, internals = {}) {
         forget: (endpointId) => {
             diagnostics.delete(endpointId);
         },
+        write: internals.write,
     });
     pi.registerCommand("litellm-endpoints", {
         description: "管理全局 LiteLLM endpoint：新增、修改、删除、启用/停用、凭据",

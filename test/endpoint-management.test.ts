@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
@@ -13,7 +13,13 @@ type Step =
 
 const silent = { logger: { warn: () => {}, error: () => {} } }
 
-function setup(config?: unknown, extra: { auth?: unknown; store?: unknown; activation?: unknown; env?: Record<string, string> } = {}) {
+function setup(config?: unknown, extra: {
+  auth?: unknown
+  store?: unknown
+  activation?: unknown
+  env?: Record<string, string>
+  write?: { rename?: (from: string, to: string) => void; beforeCommit?: () => void }
+} = {}) {
   const agentDir = mkdtempSync(join(tmpdir(), "pi-mgmt-"))
   const file = (name: string) => join(agentDir, name)
   if (config !== undefined) writeFileSync(file("litellm.json"), typeof config === "string" ? config : JSON.stringify(config, null, 2))
@@ -30,7 +36,7 @@ function setup(config?: unknown, extra: { auth?: unknown; store?: unknown; activ
     registerCommand: (name: string, value: { handler: (args: string, ctx: any) => Promise<void> }) => { commands.set(name, value.handler) },
     on: () => () => {},
   } as unknown as ExtensionAPI
-  piLitellmProvider(api, { agentDir, env: extra.env ?? {}, deps: silent, cwd: agentDir })
+  piLitellmProvider(api, { agentDir, env: extra.env ?? {}, deps: silent, cwd: agentDir, write: extra.write })
 
   const log: Array<{ kind: string; title: string; options?: string[]; placeholder?: string }> = []
   const notes: Array<{ message: string; type?: string }> = []
@@ -63,7 +69,8 @@ function setup(config?: unknown, extra: { auth?: unknown; store?: unknown; activ
     expect(queue).toEqual([]) // every scripted interaction was actually asked
   }
   const json = (name: string) => JSON.parse(readFileSync(file(name), "utf8"))
-  return { agentDir, file, json, run, registered, log, notes, refreshes }
+  const jsonOr = (name: string, fallback: unknown) => (existsSync(file(name)) ? json(name) : fallback)
+  return { agentDir, file, json, jsonOr, run, registered, log, notes, refreshes }
 }
 
 const TWO = {
@@ -94,6 +101,13 @@ describe("endpoint management: listing", () => {
     await t.run("", [{ select: undefined }])
     expect(t.log[0]!.options).toContain("✓ default · 已启用 · 未连接")
     expect(t.log[0]!.options).toContain("○ company · 未启用 · 已连接")
+  })
+
+  test("[LIST-LEGACY-GHOST] legacy default without a configured address is not listed; only Add is offered", async () => {
+    const t = setup({ pollInterval: 60 }) // legacy shape, no baseUrl and no LITELLM_BASE_URL
+    await t.run("", [{ select: undefined }])
+    expect(t.log[0]!.options).toEqual(["＋ 新增 endpoint"])
+    expect(t.notes.filter((n) => n.type === "error" || n.type === "warning")).toEqual([])
   })
 
   test("[LIST-EXTERNAL] a hand edit between invocations shows up without restart", async () => {
@@ -199,12 +213,82 @@ describe("endpoint management: edit", () => {
     expect(readFileSync(t.file("litellm.json"), "utf8")).toBe(before)
   })
 
-  test("[EDIT-ENV-LEGACY] env-provided legacy address: Edit is refused with an explanation", async () => {
+  test("[EDIT-ENV-LEGACY][LEGACY-MIGRATE] env-provided legacy address: Edit first migrates into endpoints.default, then edits", async () => {
+    const t = setup({ pollInterval: 60, protocolOverrides: { m: "chat" }, keep: 1 }, { env: { LITELLM_BASE_URL: "https://env.example" } })
+    await t.run("", [{ select: /default/ }, { select: "修改 Base URL" }, { confirm: true }, { input: "https://x.example" }, { select: "返回" }, { select: undefined }])
+    expect(t.json("litellm.json")).toEqual({
+      pollInterval: 60,
+      keep: 1,
+      endpoints: { default: { baseUrl: "https://x.example", protocolOverrides: { m: "chat" } } },
+    })
+    expect(t.jsonOr("litellm.activation.json", { mode: "all" })).toEqual({ mode: "all" })
+    const confirm = t.log.find((l) => l.kind === "confirm")!
+    expect(confirm.title).toContain("迁移为可管理配置")
+    expect(confirm.title).toContain("endpoints.default")
+  })
+
+  test("[EDIT-ENV-LEGACY] declining the migration leaves the configuration untouched", async () => {
     const t = setup({ pollInterval: 60 }, { env: { LITELLM_BASE_URL: "https://env.example" } })
     const before = readFileSync(t.file("litellm.json"), "utf8")
-    await t.run("", [{ select: /default/ }, { select: "修改 Base URL" }, { input: "https://x.example" }, { select: "返回" }, { select: undefined }])
+    await t.run("", [{ select: /default/ }, { select: "修改 Base URL" }, { confirm: false }, { select: "返回" }, { select: undefined }])
     expect(readFileSync(t.file("litellm.json"), "utf8")).toBe(before)
-    expect(t.notes.some((n) => n.type === "error" && n.message.includes("LITELLM_BASE_URL"))).toBe(true)
+  })
+
+  test("[LEGACY-MIGRATE][DEL-CLEANUP] Delete on the env-legacy default migrates first, then deletes definition and credential", async () => {
+    const t = setup({ pollInterval: 60 }, { env: { LITELLM_BASE_URL: "https://env.example" }, auth: { litellm: { type: "api_key", key: "sk-keep" } } })
+    await t.run("", [{ select: /default/ }, { select: "删除 endpoint" }, { confirm: true }, { confirm: true }, { select: undefined }])
+    expect(t.json("litellm.json")).toEqual({ pollInterval: 60, endpoints: {} })
+    expect(t.json("auth.json")).toEqual({})
+    expect(t.registered.has("litellm")).toBe(false)
+  })
+})
+
+describe("endpoint management: add rollback", () => {
+  test("[ADD-ROLLBACK] failed config write (rename failure) restores activation 'all' and leaves config/providers untouched", async () => {
+    const t = setup(TWO, {
+      activation: { mode: "all" },
+      write: { rename: () => { throw new Error("disk full") } },
+    })
+    await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "https://lab.example" }, { select: undefined }])
+    expect(t.json("litellm.json")).toEqual(TWO) // config unchanged
+    expect(t.json("litellm.activation.json")).toEqual({ mode: "all" }) // not left materialised as selected
+    expect([...t.registered.keys()].sort()).toEqual(["litellm", "litellm-company"]) // runtime state restored
+    expect(t.notes.some((n) => n.type === "error" && n.message.includes("disk full"))).toBe(true)
+  })
+
+  test("[ADD-ROLLBACK] failed config write (concurrent external edit / conflict) restores activation 'all'", async () => {
+    const t = setup(TWO, {
+      activation: { mode: "all" },
+      write: {
+        beforeCommit: () => writeFileSync(t.file("litellm.json"), JSON.stringify({ ...TWO, pollInterval: 777 }, null, 2)),
+      },
+    })
+    await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "https://lab.example" }, { select: undefined }])
+    expect(t.json("litellm.activation.json")).toEqual({ mode: "all" })
+    expect(Object.keys(t.json("litellm.json").endpoints)).toEqual(["default", "company"]) // the external edit wins
+    expect(t.json("litellm.json").pollInterval).toBe(777)
+    expect([...t.registered.keys()].sort()).toEqual(["litellm", "litellm-company"])
+    expect(t.notes.some((n) => n.type === "error" && n.message.includes("被外部修改"))).toBe(true)
+  })
+
+  test("[ADD-ROLLBACK] a rollback failure is reported together with the primary failure", async () => {
+    // the pin write succeeds; the config write fails; the rollback write then also fails (file made read-only)
+    const t = setup(TWO, {
+      activation: { mode: "all" },
+      write: {
+        rename: () => {
+          chmodSync(t.file("litellm.activation.json"), 0o444)
+          throw new Error("disk full")
+        },
+      },
+    })
+    await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "https://lab.example" }, { select: undefined }])
+    chmodSync(t.file("litellm.activation.json"), 0o666)
+    const last = t.notes.at(-1)!
+    expect(last.type).toBe("error")
+    expect(last.message).toContain("disk full") // primary failure first
+    expect(last.message).toContain("回滚失败") // rollback failure kept, not swallowed
+    expect(t.json("litellm.json")).toEqual(TWO)
   })
 })
 

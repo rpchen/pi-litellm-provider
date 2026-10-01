@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -14,6 +14,49 @@ import {
 } from "../src/extension/host-state.ts"
 
 const agent = () => mkdtempSync(join(tmpdir(), "pi-hoststate-"))
+
+describe("host-state: host file mode / ACL preservation", () => {
+  const posixOnly = process.platform === "win32" ? "win32 has no POSIX modes" : ""
+
+  test.skipIf(posixOnly)("[HOST-PERM] existing auth.json (0660) keeps its mode across Connect / Replace / Disconnect", async () => {
+    const dir = agent()
+    writeFileSync(authPath(dir), "{}")
+    chmodSync(authPath(dir), 0o660)
+    await saveStoredCredential(dir, "litellm", "sk-a")
+    expect(statSync(authPath(dir)).mode & 0o777).toBe(0o660)
+    await saveStoredCredential(dir, "litellm", "sk-b") // replace
+    expect(statSync(authPath(dir)).mode & 0o777).toBe(0o660)
+    await removeStoredCredential(dir, "litellm") // disconnect
+    expect(statSync(authPath(dir)).mode & 0o777).toBe(0o660)
+  })
+
+  test.skipIf(posixOnly)("[HOST-PERM] existing models-store.json (0660) keeps its mode after endpoint cleanup", async () => {
+    const dir = agent()
+    writeFileSync(modelsStorePath(dir), JSON.stringify({ litellm: { models: [1] } }))
+    chmodSync(modelsStorePath(dir), 0o660)
+    await removeModelsStoreEntry(dir, "litellm")
+    expect(statSync(modelsStorePath(dir)).mode & 0o777).toBe(0o660)
+  })
+
+  test.skipIf(posixOnly)("[HOST-PERM] files are created with 0600", async () => {
+    const dir = agent()
+    await saveStoredCredential(dir, "litellm", "sk-a")
+    expect(statSync(authPath(dir)).mode & 0o777).toBe(0o600)
+  })
+
+  test("[HOST-PERM] a failed write restores the previous bytes (no truncated host file)", async () => {
+    const dir = agent()
+    writeFileSync(authPath(dir), JSON.stringify({ litellm: { type: "api_key", key: "sk-keep" } }))
+    const before = readFileSync(authPath(dir), "utf8")
+    await expect(
+      saveStoredCredential(dir, "litellm", "sk-new", (path) => {
+        writeFileSync(path, "PARTIAL") // simulate a write that truncates and then fails
+        throw new Error("ENOSPC")
+      }),
+    ).rejects.toThrow("ENOSPC")
+    expect(readFileSync(authPath(dir), "utf8")).toBe(before)
+  })
+})
 
 describe("host-state", () => {
   test("[CRED-CONNECT][CRED-LOGIN-CONSISTENT] saved credential uses Pi's api_key shape, per provider id", async () => {
