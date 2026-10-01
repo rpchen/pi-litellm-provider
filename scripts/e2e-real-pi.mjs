@@ -841,6 +841,19 @@ export default function bootstrapProbe(pi) {
     nodeAssert.deepEqual(config3.handWrittenNote, { keep: "legacy" }, "file-based legacy Edit dropped unknown fields")
     nodeAssert.equal(config3.endpoints, undefined, "file-based legacy Edit must not migrate the config")
 
+    // Delete the file-based legacy default: cancel first — the confirmation must precede every mutation
+    const legacyConfigText = readFileSync(configPath3, "utf8")
+    const legacyAuthText = readFileSync(authFile3, "utf8")
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "删除 endpoint" },
+      { confirm: false, check: (r) => assert(/API Key/.test(r.message) && /缓存/.test(r.message), "Delete confirmation must say what is removed") },
+      { select: "返回" },
+      { select: undefined },
+    ])
+    nodeAssert.equal(readFileSync(configPath3, "utf8"), legacyConfigText, "a cancelled file-legacy Delete changed litellm.json")
+    nodeAssert.equal(readFileSync(authFile3, "utf8"), legacyAuthText, "a cancelled file-legacy Delete changed the credential")
+
     // Delete the file-based legacy default (confirm): definition + credential go, unknown fields stay
     result3 = await rpc.driveCommand("/litellm-endpoints", [
       { select: /default/ },
@@ -870,6 +883,25 @@ export default function bootstrapProbe(pi) {
     result3 = await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已连接"), `env-legacy default missing: ${JSON.stringify(r.options)}`) },
     ])
+
+    // Delete Cancel on the env-legacy default: the final confirmation must precede any migration
+    const envLegacyConfigText = readFileSync(configPath3, "utf8")
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "删除 endpoint" },
+      { confirm: false, check: (r) => {
+        assert(r.message.includes("LITELLM_BASE_URL"), "the combined Delete confirmation must explain the internal migration")
+        assert(/API Key/.test(r.message) && /缓存/.test(r.message), "Delete confirmation must say what is removed")
+      } },
+      { select: "返回" },
+      { select: undefined },
+    ])
+    nodeAssert.equal(readFileSync(configPath3, "utf8"), envLegacyConfigText, "a cancelled env-legacy Delete changed litellm.json")
+    config3 = readJson3(configPath3)
+    nodeAssert.equal(config3.endpoints, undefined, "a cancelled env-legacy Delete generated endpoints.default")
+    nodeAssert.deepEqual(config3.protocolOverrides, { "e2e-legacy-beta": "responses" }, "a cancelled env-legacy Delete removed the top-level legacy fields")
+    nodeAssert.equal(readJson3(authFile3).litellm.key, "sk-legacy-b", "a cancelled env-legacy Delete removed the credential")
+    nodeAssert.deepEqual(readJson3(join(agentDir, "litellm.activation.json")), { mode: "all" }, "a cancelled env-legacy Delete changed activation")
 
     // Edit → migration confirmation → new address; identity fields and unmanaged options survive
     result3 = await rpc.driveCommand("/litellm-endpoints", [

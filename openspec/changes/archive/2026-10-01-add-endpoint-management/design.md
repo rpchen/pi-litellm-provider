@@ -32,11 +32,12 @@ Connected = `auth.json` 中存在该 provider id 的条目。default endpoint �
 
 ### D5 activation 与 Add / Delete 的交互
 - Add：新 endpoint 必须默认 inactive。当前 activation 为 `all` 时，先把它物化为 `selected`（当前已激活且**已配置**的 id，排除新 id）再写配置；新 id 同时从任何残留 selected 列表中剔除，避免“幽灵激活”。**Add 失败必须回滚 activation**（review 修正）：记录 previous activation；配置写失败（conflict / rename 失败 / 外部并发修改）时 best-effort 恢复 previous 并重新 sync provider；回滚自身失败时不吞掉，primary + rollback 错误一并报告。
+  - **rollback 只发生在配置写入 commit 之前**（review 2 修正）：配置已成功写入、但随后 reload/sync 失败时，**保留物化后的 `selected`**（绝不恢复 `all`，否则新 endpoint 下次 rebuild 会被自动激活），新 endpoint 保持 inactive，并明确报告“配置已保存、运行时重新加载失败”，不把已 commit 的写入谎报成完全失败。
   - 取舍：此后手工在文件里新增的 endpoint 不会自动激活（`selected` 语义）。可接受，已写入 README。
-- Delete（顺序：先清理、最后删定义，使中途失败可重试）：确认 → 取消激活并同步 provider（停止轮询）→ 从 `models-store.json` 删除该 provider 条目 → 删除 stored 凭据 → 从 activation 剔除 → 写配置移除 endpoint → 再同步并**二次**删除 models-store 条目（覆盖 in-flight refresh 的晚到 publish）→ 清理内存 diagnostics/coordinator。
+- Delete（顺序：先清理、最后删定义，使中途失败可重试）：**最终 Delete 确认必须发生在任何 migration/cleanup 之前**（review 2 修正）——legacy default 需要迁移时用一条合并确认（说明确认后先内部迁移再立即删除），用户 Confirm 后才执行迁移；Cancel = 零副作用（不迁移、不清理、不改 activation/凭据/快照）。确认后：取消激活并同步 provider（停止轮询）→ 从 `models-store.json` 删除该 provider 条目 → 删除 stored 凭据 → 从 activation 剔除 → 写配置移除 endpoint → 再同步并**二次**删除 models-store 条目（覆盖 in-flight refresh 的晚到 publish）→ 清理内存 diagnostics/coordinator。
 
 ### D6 legacy 单 endpoint 配置（review 修正）
-legacy 下在**添加第二个 endpoint**或**对 env 提供地址的 default 做 Edit/Delete**时迁移：确认后把有效的 `baseUrl`（文件或 `LITELLM_BASE_URL`）与 `protocolOverrides` 移入 `endpoints.default`（`kind: "migrate"`），并删除顶层 legacy 字段（二者不能共存）；provider id、credential、snapshot 身份不变。env 地址不再以“拒绝”作为产品例外——迁移把生效地址写入文件（显式模式随后不再读取该环境变量），Edit/Delete 照常可用。legacy 且无地址时 default 视为不存在，不在列表中出现（无幽灵行）。
+legacy 下在**添加第二个 endpoint**或**对 env 提供地址的 default 做 Edit/Delete**时迁移：确认后把有效的 `baseUrl`（文件或 `LITELLM_BASE_URL`）与 `protocolOverrides` 移入 `endpoints.default`（`kind: "migrate"`），并删除顶层 legacy 字段（二者不能共存）；provider id、credential、snapshot 身份不变。env 地址不再以“拒绝”作为产品例外——迁移把生效地址写入文件（显式模式随后不再读取该环境变量），Edit/Delete 照常可用。legacy 且无地址时 default 视为不存在，不在列表中出现（无幽灵行）。**Delete 的迁移属于删除事务的一部分**（review 2 修正）：合并确认后才执行迁移，取消 Delete 绝不留下迁移副作用。
 
 ### D7 `default` 之外的 provider 凭据
 沿用 PR9：非 default endpoint 只接受宿主存储的凭据，不读环境变量。

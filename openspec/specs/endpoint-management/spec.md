@@ -66,9 +66,11 @@ Add SHALL ask only for a user-defined endpoint ID and a Base URL. The new endpoi
 - **WHEN** the configuration uses legacy top-level `baseUrl` (or `LITELLM_BASE_URL`) and the user adds a second endpoint
 - **THEN** the UI asks for confirmation, then moves the effective legacy `baseUrl` and `protocolOverrides` into `endpoints.default` (keeping provider id `litellm`, its credential and snapshot identity) and adds the new endpoint
 
-#### Scenario: [ADD-ROLLBACK] A failed Add restores the previous activation
-- **WHEN** endpoint creation fails (conflict, write failure or a concurrent external edit) after the activation was pinned
+#### Scenario: [ADD-ROLLBACK] A failed Add keeps the activation consistent with the committed configuration
+- **WHEN** endpoint creation fails before the configuration write commits (conflict, write failure or a concurrent external edit) after the activation was pinned
 - **THEN** the previous activation is restored, the runtime reconciles back to its previous state and the configuration has no new endpoint
+- **WHEN** the configuration write has committed but the runtime reload afterwards fails
+- **THEN** the materialised activation is kept and never restored to `all`, the new endpoint stays inactive in the committed configuration, and the UI reports that the configuration was saved while the runtime reload failed
 
 ### Requirement: Edit endpoint
 Edit SHALL change only the Base URL. The endpoint ID SHALL be read-only and rename SHALL NOT exist. Fields the UI does not manage SHALL be preserved byte-for-byte in value.
@@ -95,7 +97,7 @@ Edit SHALL change only the Base URL. The endpoint ID SHALL be read-only and rena
 
 #### Scenario: [LEGACY-MIGRATE] Legacy default is fully manageable through migration
 - **WHEN** the legacy default's address comes from `LITELLM_BASE_URL` and the user runs Edit or Delete
-- **THEN** the UI offers to migrate the effective address into `endpoints.default`, and after confirmation the action completes normally (endpoint id, provider id, saved credential and activation unchanged; unmanaged fields preserved)
+- **THEN** the effective address migrates into `endpoints.default` after the user's confirmation — for Edit as a migration confirmation, for Delete as part of the final Delete confirmation (see `[DEL-CANCEL]`) — and the action completes normally (endpoint id, provider id, saved credential and activation unchanged; unmanaged fields preserved)
 
 ### Requirement: Credential management
 The management UI SHALL show Connected / Not connected per endpoint and offer Connect, Replace API Key and Disconnect. It SHALL store credentials in the same host credential backend used by `/login`, SHALL NEVER display an existing key, and SHALL NOT change activation.
@@ -159,8 +161,9 @@ Delete SHALL require explicit confirmation and SHALL remove everything the plugi
 - **THEN** a confirmation dialog states what will be removed before anything changes
 
 #### Scenario: [DEL-CANCEL] Cancelled delete changes nothing
-- **WHEN** the user declines or dismisses the confirmation
-- **THEN** the endpoint definition, activation, credential and snapshot are unchanged
+- **WHEN** the user declines or dismisses the final Delete confirmation
+- **THEN** the endpoint definition, activation, credential and `models-store.json` snapshot are unchanged
+- **THEN** no migration or cleanup has run: for a legacy endpoint the configuration stays legacy (`endpoints.default` is not generated and top-level legacy fields stay), and the first persistent mutation happens only after the user confirms the deletion
 
 #### Scenario: [DEL-CLEANUP] Confirmed delete cleans all persisted state
 - **WHEN** the user confirms Delete

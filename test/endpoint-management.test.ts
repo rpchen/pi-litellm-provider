@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
@@ -31,7 +31,11 @@ function setup(config?: unknown, extra: {
   const commands = new Map<string, (args: string, ctx: any) => Promise<void>>()
   const refreshes: string[][] = []
   const api = {
-    registerProvider: (name: string, value: ProviderConfigLike) => { registered.set(name, value) },
+    registerProvider: (name: string, value: ProviderConfigLike) => {
+      // Test seam: the sentinel makes the host reject provider registration (post-commit sync failure).
+      if (existsSync(file("fail-register"))) throw new Error("host rejected provider registration")
+      registered.set(name, value)
+    },
     unregisterProvider: (name: string) => { registered.delete(name) },
     registerCommand: (name: string, value: { handler: (args: string, ctx: any) => Promise<void> }) => { commands.set(name, value.handler) },
     on: () => () => {},
@@ -234,12 +238,55 @@ describe("endpoint management: edit", () => {
     expect(readFileSync(t.file("litellm.json"), "utf8")).toBe(before)
   })
 
-  test("[LEGACY-MIGRATE][DEL-CLEANUP] Delete on the env-legacy default migrates first, then deletes definition and credential", async () => {
+  test("[LEGACY-MIGRATE][DEL-CLEANUP] Delete on the env-legacy default confirms the whole action first, then migrates and deletes definition and credential", async () => {
     const t = setup({ pollInterval: 60 }, { env: { LITELLM_BASE_URL: "https://env.example" }, auth: { litellm: { type: "api_key", key: "sk-keep" } } })
-    await t.run("", [{ select: /default/ }, { select: "删除 endpoint" }, { confirm: true }, { confirm: true }, { select: undefined }])
+    await t.run("", [{ select: /default/ }, { select: "删除 endpoint" }, { confirm: true }, { select: undefined }])
     expect(t.json("litellm.json")).toEqual({ pollInterval: 60, endpoints: {} })
     expect(t.json("auth.json")).toEqual({})
     expect(t.registered.has("litellm")).toBe(false)
+    // one combined confirmation, before ANY persistent mutation
+    const confirms = t.log.filter((l) => l.kind === "confirm")
+    expect(confirms).toHaveLength(1)
+    expect(confirms[0]!.title).toContain("删除 endpoint default")
+    expect(confirms[0]!.title).toContain("LITELLM_BASE_URL") // the confirmation explains the internal migration up front
+    expect(confirms[0]!.title).toContain("迁移")
+  })
+
+  test("[DEL-CANCEL][LEGACY-MIGRATE] cancelling the env-legacy Delete confirmation: no migration, config/activation/credential/snapshot/providers all unchanged", async () => {
+    const t = setup(
+      { pollInterval: 60, protocolOverrides: { m: "chat" }, keep: 1 },
+      {
+        env: { LITELLM_BASE_URL: "https://env.example" },
+        auth: { litellm: { type: "api_key", key: "sk-keep" } },
+        store: { litellm: { models: [1] } },
+        activation: { mode: "all" },
+      },
+    )
+    const before = readFileSync(t.file("litellm.json"), "utf8")
+    const providersBefore = [...t.registered.keys()].sort()
+    await t.run("", [{ select: /default/ }, { select: "删除 endpoint" }, { confirm: false }, { select: "返回" }, { select: undefined }])
+    // no endpoints.default was generated and the top-level legacy configuration is untouched
+    expect(readFileSync(t.file("litellm.json"), "utf8")).toBe(before)
+    expect(t.json("litellm.json").endpoints).toBeUndefined()
+    expect(t.json("litellm.json").protocolOverrides).toEqual({ m: "chat" })
+    expect(t.json("litellm.activation.json")).toEqual({ mode: "all" }) // activation unchanged
+    expect(t.json("auth.json")).toEqual({ litellm: { type: "api_key", key: "sk-keep" } }) // credential unchanged
+    expect(t.json("models-store.json")).toEqual({ litellm: { models: [1] } }) // snapshot unchanged
+    expect([...t.registered.keys()].sort()).toEqual(providersBefore) // runtime/provider unchanged
+    const confirm = t.log.find((l) => l.kind === "confirm")!
+    expect(confirm.title).toContain("删除 endpoint default")
+    expect(confirm.title).toContain("LITELLM_BASE_URL")
+  })
+
+  test("[DEL-CANCEL] cancelling Delete on the file-legacy default changes nothing", async () => {
+    const legacy = { baseUrl: "https://old.example", protocolOverrides: { m: "chat" }, pollInterval: 90 }
+    const t = setup(legacy, { auth: { litellm: { type: "api_key", key: "sk-keep" } }, activation: { mode: "all" } })
+    const before = readFileSync(t.file("litellm.json"), "utf8")
+    await t.run("", [{ select: /default/ }, { select: "删除 endpoint" }, { confirm: false }, { select: "返回" }, { select: undefined }])
+    expect(readFileSync(t.file("litellm.json"), "utf8")).toBe(before)
+    expect(t.json("litellm.activation.json")).toEqual({ mode: "all" })
+    expect(t.json("auth.json")).toEqual({ litellm: { type: "api_key", key: "sk-keep" } })
+    expect(t.registered.has("litellm")).toBe(true)
   })
 })
 
@@ -269,6 +316,27 @@ describe("endpoint management: add rollback", () => {
     expect(t.json("litellm.json").pollInterval).toBe(777)
     expect([...t.registered.keys()].sort()).toEqual(["litellm", "litellm-company"])
     expect(t.notes.some((n) => n.type === "error" && n.message.includes("被外部修改"))).toBe(true)
+  })
+
+  test("[ADD-ROLLBACK] config committed but the runtime reload fails: activation stays materialised (never back to 'all') and the message says saved-but-reload-failed", async () => {
+    const t = setup(TWO, {
+      activation: { mode: "all" },
+      write: { beforeCommit: () => writeFileSync(t.file("fail-register"), "1") },
+    })
+    await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "https://lab.example" }, { select: undefined }])
+    expect(t.json("litellm.json").endpoints.lab).toEqual({ baseUrl: "https://lab.example" }) // the config write IS committed
+    // not rolled back to "all" — that would auto-activate lab on the next rebuild
+    expect(t.json("litellm.activation.json")).toEqual({ mode: "selected", endpointIds: ["default", "company"] })
+    expect(t.registered.has("litellm-lab")).toBe(false) // lab stays inactive
+    const last = t.notes.at(-1)!
+    expect(last.type).toBe("error")
+    expect(last.message).toContain("配置已保存")
+    expect(last.message).toContain("运行时重新加载失败")
+    expect(last.message).toContain("host rejected provider registration")
+    // next reload/rebuild succeeds: the committed endpoint is listed, still inactive
+    rmSync(t.file("fail-register"))
+    await t.run("", [{ select: undefined }])
+    expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未连接")
   })
 
   test("[ADD-ROLLBACK] a rollback failure is reported together with the primary failure", async () => {

@@ -24,6 +24,12 @@
 
 > 发版（feat → minor，需用户确认后打 tag）不属于本 change 的任务，见 PR 说明。
 
+## 7. Review 2 边界修复（随实施归档）
+- [x] 7.1 `[DEL-CANCEL]` Delete 流程重排：最终 Delete 确认（legacy 合并确认迁移+删除）之前零持久化变更，Cancel 不触发迁移/清理（`test/endpoint-management.test.ts` 新增 env-legacy 与 file-legacy 取消用例）
+- [x] 7.2 `[ADD-ROLLBACK]` 区分 config commit 前后失败：commit 后 reload/sync 失败保留物化 `selected`（不回退 `all`）、新 endpoint 保持 inactive、错误信息明确“配置已保存、运行时重新加载失败”
+- [x] 7.3 spec/design 同步强化 `[DEL-CANCEL]` / `[ADD-ROLLBACK]` / `[LEGACY-MIGRATE]`；scenario coverage 保持 43/43（100%）
+- [x] 7.4 真实宿主 E2E 新增 legacy Delete Cancel 场景（见 `scripts/e2e-real-pi.mjs`）
+
 ## Requirement / Scenario → Test Evidence
 
 | Scenario | Evidence files |

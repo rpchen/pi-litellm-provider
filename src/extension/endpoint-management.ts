@@ -158,17 +158,25 @@ export function createEndpointManager(host: ManagementHost) {
       host.sync(ctx)
       ctx.ui.notify(`已添加 endpoint ${id}（未启用、未连接）。请在列表中选择它来连接 API Key 并启用。`, "info")
     } catch (error) {
-      // A failed Add must not leave the activation permanently materialised as "selected".
-      let rollbackFailure = ""
       if (!configWritten) {
+        // A failed Add must not leave the activation permanently materialised as "selected".
+        let rollbackFailure = ""
         try {
           host.persistActivation(previous)
           host.sync(ctx)
         } catch (rollbackError) {
           rollbackFailure = `；activation 回滚失败：${errorText(rollbackError)}`
         }
+        ctx.ui.notify(`${errorText(error)}${rollbackFailure}`, "error")
+      } else {
+        // The config write is already committed: keep the materialised activation so the new endpoint
+        // stays inactive (restoring the previous "all" would auto-activate it on the next sync), and say
+        // so — this is not an "Add failed, nothing written" situation.
+        ctx.ui.notify(
+          `endpoint 配置已保存，但运行时重新加载失败；新 endpoint 保持未启用，可稍后重新运行 /litellm-endpoints 重试：${errorText(error)}`,
+          "error",
+        )
       }
-      ctx.ui.notify(`${errorText(error)}${rollbackFailure}`, "error")
     }
   }
 
@@ -182,6 +190,18 @@ export function createEndpointManager(host: ManagementHost) {
     host.registry().mode === "legacy" &&
     Boolean(host.env.LITELLM_BASE_URL?.trim())
 
+  const migrateNow = async (ctx: ManagementContext, failureNote = ""): Promise<boolean> => {
+    try {
+      await mutateConfig(host.configPath, { kind: "migrate" }, { env: host.env, ...host.write })
+      host.reload()
+      host.sync(ctx)
+      return true
+    } catch (error) {
+      ctx.ui.notify(`迁移失败：${errorText(error)}${failureNote}`, "error")
+      return false
+    }
+  }
+
   const ensureManaged = async (ctx: ManagementContext, view: EndpointView, action: string): Promise<boolean> => {
     if (!needsMigration(view)) return true
     const ok = await ctx.ui.confirm(
@@ -190,15 +210,7 @@ export function createEndpointManager(host: ManagementHost) {
         "（显式模式不再读取该环境变量）；provider、已保存的凭据和启用状态保持不变。是否继续？",
     )
     if (!ok) return false
-    try {
-      await mutateConfig(host.configPath, { kind: "migrate" }, { env: host.env, ...host.write })
-      host.reload()
-      host.sync(ctx)
-      return true
-    } catch (error) {
-      ctx.ui.notify(`迁移失败：${errorText(error)}`, "error")
-      return false
-    }
+    return migrateNow(ctx)
   }
 
   const editBaseUrl = async (ctx: ManagementContext, view: EndpointView) => {
@@ -244,13 +256,22 @@ export function createEndpointManager(host: ManagementHost) {
     }
   }
 
+  /**
+   * Delete runs entirely after the user's final confirmation: the confirmation comes FIRST — including
+   * the internal legacy migration — so cancelling it leaves every kind of state untouched. Only after
+   * Confirm does the migration run, then cleanup, then the definition is removed.
+   */
   const deleteEndpoint = async (ctx: ManagementContext, view: EndpointView): Promise<boolean> => {
-    if (!(await ensureManaged(ctx, view, "删除"))) return false
+    const migrating = needsMigration(view)
     const ok = await ctx.ui.confirm(
       `删除 endpoint ${view.id}`,
-      "将彻底删除：endpoint 配置、启用状态、已保存的 API Key、模型发现缓存/快照。此操作不可撤销，其他 endpoint 不受影响。是否删除？",
+      migrating
+        ? "该 endpoint 的地址来自环境变量 LITELLM_BASE_URL。确认删除后，将先把当前地址迁移到 endpoints.default（显式模式不再读取该环境变量），然后立即删除：" +
+            "endpoint 配置、启用状态、已保存的 API Key、模型发现缓存/快照。此操作不可撤销，其他 endpoint 不受影响。是否删除？"
+        : "将彻底删除：endpoint 配置、启用状态、已保存的 API Key、模型发现缓存/快照。此操作不可撤销，其他 endpoint 不受影响。是否删除？",
     )
     if (!ok) return false
+    if (migrating && !(await migrateNow(ctx, "；删除未执行"))) return false
     const providerId = providerIdForEndpoint(view.id)
     try {
       // Cleanup first, definition last: a mid-way failure leaves the endpoint visible so Delete can be retried.
