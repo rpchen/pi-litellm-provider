@@ -15,7 +15,7 @@ pi install git:github.com/rpchen/pi-litellm-provider
 锁定当前发行版：
 
 ```bash
-pi install git:github.com/rpchen/pi-litellm-provider#v0.4.0
+pi install git:github.com/rpchen/pi-litellm-provider#v0.5.0
 ```
 
 要求：Pi `>=0.87.1`；LiteLLM 地址使用 `http://` 或 `https://`；API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型。
