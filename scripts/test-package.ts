@@ -54,11 +54,33 @@ const required = [
   "package.json",
   ...extensions.map(normalize),
   "dist/extension/index.js",
+  "dist/extension/runtime-identity.js",
+  "dist/extension/audit.js",
+  "dist/extension/audit-file.js",
   "dist/core/build.js",
   "dist/core-provenance.json",
+  // [PACKAGE-IDENTITY] The tarball identity must be present, valid, and consistent with provenance.
+  "dist/runtime-identity.json",
 ]
 const missing = required.filter((entry) => !shipped.has(entry))
 if (missing.length > 0) fail(`npm tarball is missing: ${missing.join(", ")}`)
+
+// [PACKAGE-IDENTITY] identity ↔ package version ↔ provenance consistency on the candidate.
+{
+  const identity = JSON.parse(readFileSync(path.join(root, "dist", "runtime-identity.json"), "utf8")) as {
+    pluginVersion?: unknown
+    artifactDigest?: unknown
+    coreCommit?: unknown
+  }
+  const provenance = JSON.parse(readFileSync(path.join(root, "dist", "core-provenance.json"), "utf8")) as { sha?: unknown }
+  if (identity.pluginVersion !== manifest.version) fail("runtime identity pluginVersion must match package.json")
+  if (typeof identity.artifactDigest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(identity.artifactDigest)) {
+    fail("runtime identity artifactDigest must be sha256:<64 hex>")
+  }
+  if (typeof identity.coreCommit !== "string" || !/^[0-9a-f]{40}$/.test(identity.coreCommit) || identity.coreCommit !== provenance.sha) {
+    fail("runtime identity coreCommit must match core provenance")
+  }
+}
 
 // ".tmp/" and local agent state must never reach a published tarball.
 const leaked = [...shipped].filter(

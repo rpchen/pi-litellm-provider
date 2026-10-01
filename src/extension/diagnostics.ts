@@ -3,6 +3,8 @@ import type {
   DiscoveryCacheDiagnostics,
   DiscoveryDiagnostics,
 } from "../core/index.ts"
+import { getRuntimeIdentity, shortArtifactDigest, shortCoreCommit } from "./runtime-identity.ts"
+import type { ProviderModelConfigLike } from "./types.ts"
 
 export type ProviderDiagnosticStatus =
   | "idle"
@@ -24,6 +26,8 @@ export interface ProviderDiagnosticSnapshot {
   readonly cache?: DiscoveryCacheDiagnostics
   readonly lastSuccessfulDiscoveryAt?: string
   readonly note?: string
+  /** Last registered provider models (allowlisted shape); used by audit export. */
+  readonly models?: readonly ProviderModelConfigLike[]
 }
 
 export interface ProviderDiagnosticsState {
@@ -59,6 +63,17 @@ function readJSON<T>(url: URL): T | undefined {
 }
 
 export function runtimeBuildInfo(): { pluginVersion: string; coreSHA: string; coreBranch: string } {
+  const identity = getRuntimeIdentity()
+  if (identity.pluginVersion !== "unknown") {
+    const provenance =
+      readJSON<CoreProvenance>(new URL("../core-provenance.json", import.meta.url)) ??
+      readJSON<CoreProvenance>(new URL("../../dist/core-provenance.json", import.meta.url))
+    return {
+      pluginVersion: identity.pluginVersion,
+      coreSHA: identity.coreCommit,
+      coreBranch: typeof provenance?.branch === "string" ? provenance.branch : "unknown",
+    }
+  }
   const manifest = readJSON<PackageManifest>(new URL("../../package.json", import.meta.url))
   const provenance =
     readJSON<CoreProvenance>(new URL("../core-provenance.json", import.meta.url)) ??
@@ -171,5 +186,12 @@ export function formatProviderDiagnostics(
 
   if (snapshot.note) lines.push(`说明：${snapshot.note}`)
   lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)
+  const identity = getRuntimeIdentity()
+  lines.push(
+    "Runtime Identity",
+    `Plugin Version   ${identity.pluginVersion}`,
+    `Artifact         ${shortArtifactDigest(identity)}`,
+    `Core Commit      ${shortCoreCommit(identity)}`,
+  )
   return lines.join("\n")
 }

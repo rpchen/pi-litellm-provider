@@ -79,6 +79,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         setProviderDiagnostics(diagnosticsState, {
             status: models.length > 0 ? "restored" : "idle",
             modelCount: models.length,
+            models,
             cache: createDiscoveryCacheDiagnostics({
                 source: models.length > 0 ? "snapshot" : "none",
                 refreshedAt: restored.snapshot ? Date.parse(restored.snapshot.discoveredAt) : undefined,
@@ -96,6 +97,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         setProviderDiagnostics(diagnosticsState, {
             status: "unconfigured",
             modelCount: 0,
+            models: [],
             cache: createDiscoveryCacheDiagnostics({ source: "none" }),
             note: "请配置 LiteLLM 地址后重新刷新。",
         });
@@ -109,6 +111,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         setProviderDiagnostics(diagnosticsState, {
             status: "unconfigured",
             modelCount: 0,
+            models: [],
             cache: createDiscoveryCacheDiagnostics({ source: "none" }),
             note: "请使用 /login 或 LITELLM_API_KEY 配置凭据。",
         });
@@ -156,6 +159,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
                 ? "stale"
                 : outcome.models.length === 0 ? "empty" : "ready",
             modelCount: outcome.models.length,
+            models: outcome.models,
             discovery: outcome.diagnostics,
             cache: createDiscoveryCacheDiagnostics({
                 source: coordinated.source === "cache"
@@ -185,6 +189,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
             setProviderDiagnostics(diagnosticsState, {
                 status: "auth-error",
                 modelCount: 0,
+                models: [],
                 cache: createDiscoveryCacheDiagnostics({ source: "none" }),
                 note: "LiteLLM 返回 401/403；请检查当前凭据权限。",
             });
@@ -199,6 +204,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
             setProviderDiagnostics(diagnosticsState, {
                 status: "config-error",
                 modelCount: 0,
+                models: [],
                 cache: createDiscoveryCacheDiagnostics({ source: "none" }),
                 note: "LiteLLM 地址无法规范化；未发起发现请求。",
             });
@@ -208,9 +214,11 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         // catalog by letting the host record the error.
         logger.warn(`LiteLLM 发现失败，保留上次结果：${messageOf(error)}`);
         const state = coordinator.state(discoveryKey);
+        const retained = restoreCompatibleModels();
         setProviderDiagnostics(diagnosticsState, {
             status: "error",
-            modelCount: restoreCompatibleModels().length,
+            modelCount: retained.length,
+            models: retained,
             cache: createDiscoveryCacheDiagnostics({
                 source: state.hasValue ? "stale" : "none",
                 stale: state.hasValue,

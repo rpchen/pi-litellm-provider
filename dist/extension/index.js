@@ -3,8 +3,11 @@ import { activeEndpointIds, activationPath, loadActivation, saveActivation, } fr
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { createEndpointManager } from "./endpoint-management.js";
+import { createAuditReport } from "./audit.js";
+import { auditDirectory, auditFailureMessage, writeAuditFile } from "./audit-file.js";
 import { DEFAULT_ENDPOINT_ID, loadEndpointRegistry, } from "./config.js";
 import { createProviderDiagnosticsState, formatProviderDiagnostics, setProviderDiagnostics, } from "./diagnostics.js";
+import { formatStartupIdentityLine, getRuntimeIdentity } from "./runtime-identity.js";
 import { createProviderRefreshCoordinator, refreshProviderModels } from "./discovery.js";
 import { PROVIDER_ID, providerIdForEndpoint, providerNameForEndpoint, } from "./provider-id.js";
 export { PROVIDER_ID, providerIdForEndpoint, providerNameForEndpoint };
@@ -25,6 +28,7 @@ export function buildProviderConfig(getConfig, deps, diagnosticsState = createPr
             setProviderDiagnostics(diagnosticsState, {
                 status: "credential-missing",
                 modelCount: 0,
+                models: [],
                 note: `endpoint ${endpointId} 尚未保存凭据；请通过 /login 选择 ${providerNameForEndpoint(endpointId)}。`,
             });
             return Promise.resolve([]);
@@ -96,7 +100,7 @@ export default function piLitellmProvider(pi, internals = {}) {
             registered.delete(endpointId);
             pollStops.get(endpointId)?.();
             pollStops.delete(endpointId);
-            setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0 });
+            setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0, models: [] });
         }
         for (const endpointId of next) {
             const endpoint = registry.endpoints[endpointId];
@@ -137,7 +141,7 @@ export default function piLitellmProvider(pi, internals = {}) {
                 }
                 const active = activeIds().includes(endpointId);
                 if (!active)
-                    setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0 });
+                    setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0, models: [] });
                 ctx.ui.notify(`Endpoint：${endpointId}\nProvider：${providerIdForEndpoint(endpointId)}\n${formatProviderDiagnostics(stateFor(endpointId))}`, "info");
                 return;
             }
@@ -150,6 +154,38 @@ export default function piLitellmProvider(pi, internals = {}) {
                 }),
             ];
             ctx.ui.notify(lines.join("\n"), "info");
+        },
+    });
+    pi.registerCommand("litellm-audit-export", {
+        description: "导出 LiteLLM 已注册模型清单与 Runtime Identity，或传 endpoint id 只导出该 endpoint",
+        handler: async (args, ctx) => {
+            const endpointId = args.trim();
+            if (endpointId && !(endpointId in registry.endpoints)) {
+                ctx.ui.notify(`未知 LiteLLM endpoint：${endpointId}`, "warning");
+                return;
+            }
+            const active = new Set(activeIds());
+            const ids = endpointId ? [endpointId] : Object.keys(registry.endpoints).filter((id) => active.has(id));
+            if (!endpointId && ids.length === 0) {
+                ctx.ui.notify("当前没有已激活的 LiteLLM endpoint", "warning");
+                return;
+            }
+            if (endpointId && !active.has(endpointId)) {
+                setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0, models: [] });
+            }
+            const report = createAuditReport(ids.map((id) => ({
+                id,
+                providerId: providerIdForEndpoint(id),
+                status: stateFor(id).current.status,
+                models: stateFor(id).current.models ?? [],
+            })));
+            try {
+                const file = writeAuditFile(report, auditDirectory(agentDir));
+                ctx.ui.notify(`LiteLLM 审查报告已导出：${file}`, "info");
+            }
+            catch (error) {
+                ctx.ui.notify(`LiteLLM 审查报告导出失败：${auditFailureMessage(error)}`, "error");
+            }
         },
     });
     const manager = createEndpointManager({
@@ -182,6 +218,17 @@ export default function piLitellmProvider(pi, internals = {}) {
         },
     });
     syncProviders();
+    try {
+        const startupLogger = internals.logger ?? console;
+        const line = formatStartupIdentityLine(getRuntimeIdentity());
+        if (typeof startupLogger.info === "function")
+            startupLogger.info(line);
+        else if (typeof startupLogger.log === "function")
+            startupLogger.log(line);
+    }
+    catch {
+        // Startup identity logging must never block extension setup.
+    }
     pi.on("session_start", async (_event, ctx) => {
         registry = resolveRegistry(ctx.cwd);
         if (!internals.activation)
