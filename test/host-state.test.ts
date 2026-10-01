@@ -16,7 +16,7 @@ import {
 const agent = () => mkdtempSync(join(tmpdir(), "pi-hoststate-"))
 
 describe("host-state: host file mode / ACL preservation", () => {
-  const posixOnly = process.platform === "win32" ? "win32 has no POSIX modes" : ""
+  const posixOnly = process.platform === "win32" // win32 has no POSIX modes
 
   test.skipIf(posixOnly)("[HOST-PERM] existing auth.json (0660) keeps its mode across Connect / Replace / Disconnect", async () => {
     const dir = agent()
