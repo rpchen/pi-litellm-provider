@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
@@ -340,18 +340,23 @@ describe("endpoint management: add rollback", () => {
   })
 
   test("[ADD-ROLLBACK] a rollback failure is reported together with the primary failure", async () => {
-    // the pin write succeeds; the config write fails; the rollback write then also fails (file made read-only)
+    // the pin write succeeds; the config write fails; the rollback write then also fails. The activation
+    // path is swapped for a directory: rename-over-a-directory fails on POSIX *and* Windows (a read-only
+    // file only blocks rename on Windows, so that trick silently passes the rollback on Linux).
     const t = setup(TWO, {
       activation: { mode: "all" },
       write: {
         rename: () => {
-          chmodSync(t.file("litellm.activation.json"), 0o444)
+          const activationDir = t.file("litellm.activation.json")
+          rmSync(activationDir, { force: true })
+          mkdirSync(activationDir, { recursive: true })
+          writeFileSync(join(activationDir, "occupied"), "1")
           throw new Error("disk full")
         },
       },
     })
     await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "https://lab.example" }, { select: undefined }])
-    chmodSync(t.file("litellm.activation.json"), 0o666)
+    rmSync(t.file("litellm.activation.json"), { recursive: true, force: true })
     const last = t.notes.at(-1)!
     expect(last.type).toBe("error")
     expect(last.message).toContain("disk full") // primary failure first
