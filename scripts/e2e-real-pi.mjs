@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
+import { strict as nodeAssert } from "node:assert"
 
 const EXPECTED_PI_VERSION = process.env.E2E_PI_VERSION ?? "0.87.1"
 const PACKAGE_SPEC = process.env.E2E_PACKAGE_SPEC?.trim()
@@ -78,7 +79,11 @@ async function startFakeLiteLLM(name, initialKey, models) {
     get apiKey() { return state.apiKey },
     requests,
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+    close: () => new Promise((resolve, reject) => {
+      // A still-running Pi holds keep-alive sockets; close() would wait forever without this.
+      server.closeAllConnections?.()
+      server.close((error) => error ? reject(error) : resolve())
+    }),
   }
 }
 
@@ -764,6 +769,156 @@ export default function bootstrapProbe(pi) {
     await mgmtB.close().catch(() => {})
   }
 
+  // ===== Phase 3: legacy single-endpoint management (file-based + LITELLM_BASE_URL migration) =====
+  const legacyA = await startFakeLiteLLM("legacy-a", "sk-legacy-a", [modelInfo("e2e-legacy-alpha", "chat", 48_000, 6_000)])
+  const legacyB = await startFakeLiteLLM("legacy-b", "sk-legacy-b", [modelInfo("e2e-legacy-beta", "chat", 48_000, 6_000)])
+  try {
+    const configPath3 = join(agentDir, "litellm.json")
+    const authFile3 = join(agentDir, "auth.json")
+    const storeFile3 = join(agentDir, "models-store.json")
+    const readJson3 = (f) => JSON.parse(readFileSync(f, "utf8"))
+
+    const readyWithin = async (client, label) => {
+      const began = Date.now()
+      await client.request({ type: "get_commands" }, { timeoutMs: 90_000 })
+      console.log(`${label}: Pi answered get_commands in ${Date.now() - began}ms`)
+    }
+    const noKeyLeak = (result, ...secretsToHide) => {
+      const blob = JSON.stringify({ seen: result.seen, notices: result.notices })
+      for (const secret of secretsToHide) assert(!blob.includes(secret), "an API key was echoed to the host UI")
+    }
+
+    const startLegacyPi = (extraEnv = {}) => {
+      const child = spawn(PI_BIN, ["--mode", "rpc", "--no-session", "--extension", probeExtensionPath, "--model", "e2e-bootstrap/bootstrap"], {
+        cwd: workDir,
+        env: { ...isolatedEnv, ...extraEnv, NODE_OPTIONS: nodeOptionsValue },
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: process.platform === "win32",
+      })
+      return new RpcClient(child)
+    }
+
+    // A. file-based legacy default: top-level baseUrl + protocolOverrides + unknown fields
+    writeFileSync(configPath3, JSON.stringify({
+      baseUrl: legacyA.baseUrl,
+      protocolOverrides: { "e2e-legacy-alpha": "chat" },
+      handWrittenNote: { keep: "legacy" },
+    }, null, 2) + "\n")
+    writeFileSync(authFile3, JSON.stringify({ litellm: { type: "api_key", key: "sk-legacy-a" } }, null, 2) + "\n", { mode: 0o600 })
+    writeFileSync(join(agentDir, "litellm.activation.json"), JSON.stringify({ mode: "all" }) + "\n")
+    rmSync(storeFile3, { force: true })
+
+    rpc = startLegacyPi()
+    await readyWithin(rpc, "legacy-phase-start")
+
+    // list: legacy default is a real endpoint (connected + active)
+    let result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已连接"), `legacy default missing from list: ${JSON.stringify(r.options)}`) },
+    ])
+
+    // credential management on the legacy default (Pi's credential store has no form): Replace
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "替换 API Key" },
+      { input: "sk-legacy-a2" },
+      { select: "返回" },
+      { select: undefined },
+    ])
+    nodeAssert.equal(readJson3(authFile3).litellm.key, "sk-legacy-a2", "Replace on the legacy default did not overwrite the key")
+    noKeyLeak(result3, "sk-legacy-a", "sk-legacy-a2")
+
+    // Edit Base URL (file-based legacy): top-level fields are preserved, no migration needed
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "修改 Base URL" },
+      { input: legacyB.baseUrl },
+      { select: "返回" },
+      { select: undefined },
+    ])
+    let config3 = readJson3(configPath3)
+    nodeAssert.equal(config3.baseUrl, legacyB.baseUrl, "file-based legacy Edit did not update the address")
+    nodeAssert.deepEqual(config3.protocolOverrides, { "e2e-legacy-alpha": "chat" }, "file-based legacy Edit dropped protocolOverrides")
+    nodeAssert.deepEqual(config3.handWrittenNote, { keep: "legacy" }, "file-based legacy Edit dropped unknown fields")
+    nodeAssert.equal(config3.endpoints, undefined, "file-based legacy Edit must not migrate the config")
+
+    // Delete the file-based legacy default (confirm): definition + credential go, unknown fields stay
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "删除 endpoint" },
+      { confirm: true },
+      { select: undefined },
+    ])
+    config3 = readJson3(configPath3)
+    nodeAssert.equal(config3.baseUrl, undefined, "Delete left the legacy address")
+    nodeAssert.equal(config3.protocolOverrides, undefined, "Delete left the legacy protocolOverrides")
+    nodeAssert.deepEqual(config3.handWrittenNote, { keep: "legacy" }, "Delete dropped unknown fields")
+    nodeAssert.deepEqual(readJson3(authFile3), {}, "Delete left the legacy credential")
+
+    // B. env-provided legacy address: Edit must migrate into endpoints.default first
+    writeFileSync(configPath3, JSON.stringify({
+      pollInterval: 60,
+      protocolOverrides: { "e2e-legacy-beta": "responses" },
+      handWrittenNote: { keep: "env-legacy" },
+    }, null, 2) + "\n")
+    writeFileSync(authFile3, JSON.stringify({ litellm: { type: "api_key", key: "sk-legacy-b" } }, null, 2) + "\n", { mode: 0o600 })
+    writeFileSync(join(agentDir, "litellm.activation.json"), JSON.stringify({ mode: "all" }) + "\n") // reset 3A's delete state
+    rmSync(storeFile3, { force: true })
+    await rpc.close()
+    rpc = startLegacyPi({ LITELLM_BASE_URL: legacyB.baseUrl })
+    await readyWithin(rpc, "env-legacy-start")
+
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已连接"), `env-legacy default missing: ${JSON.stringify(r.options)}`) },
+    ])
+
+    // Edit → migration confirmation → new address; identity fields and unmanaged options survive
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "修改 Base URL" },
+      { confirm: true, check: (r) => {
+        assert(r.title.includes("迁移为可管理配置"), "the migration must be confirmed explicitly")
+        assert(r.message.includes("endpoints.default"), "the migration target must be stated")
+        assert(r.message.includes("LITELLM_BASE_URL"), "the environment source must be explained")
+      } },
+      { input: legacyA.baseUrl },
+      { select: "返回" },
+      { select: undefined },
+    ])
+    noKeyLeak(result3, "sk-legacy-b")
+    config3 = readJson3(configPath3)
+    nodeAssert.deepEqual(config3.endpoints, { default: { baseUrl: legacyA.baseUrl, protocolOverrides: { "e2e-legacy-beta": "responses" } } }, "migration must materialise the env address and move protocolOverrides")
+    nodeAssert.equal(config3.pollInterval, 60)
+    nodeAssert.deepEqual(config3.handWrittenNote, { keep: "env-legacy" })
+    nodeAssert.equal(config3.protocolOverrides, undefined)
+    nodeAssert.equal(readJson3(authFile3).litellm.key, "sk-legacy-b", "migration must keep the credential identity")
+
+    // after migration everything is normal managed behaviour: Delete works without another migration
+    result3 = await rpc.driveCommand("/litellm-endpoints", [
+      { select: /default/ },
+      { select: "删除 endpoint" },
+      { confirm: true },
+      { select: undefined },
+    ])
+    config3 = readJson3(configPath3)
+    nodeAssert.deepEqual(config3.endpoints, {}, "Delete after migration left the definition")
+    nodeAssert.deepEqual(readJson3(authFile3), {}, "Delete after migration left the credential")
+    nodeAssert.deepEqual(config3.handWrittenNote, { keep: "env-legacy" })
+
+    // restart: nothing resurrects, no ghost default
+    await rpc.close()
+    rpc = startLegacyPi({ LITELLM_BASE_URL: legacyB.baseUrl })
+    await readyWithin(rpc, "env-legacy-restart")
+    await rpc.driveCommand("/litellm-endpoints", [
+      { select: undefined, check: (r) => nodeAssert.deepEqual(r.options, ["＋ 新增 endpoint"], `deleted legacy endpoint resurrected: ${JSON.stringify(r.options)}`) },
+    ])
+
+    await rpc.close()
+    console.log("real Pi legacy endpoint management E2E ok: file-based Edit/Delete + env-legacy migration verified")
+  } finally {
+    await legacyA.close().catch(() => {})
+    await legacyB.close().catch(() => {})
+  }
+
   console.log(
     `real Pi ${EXPECTED_PI_VERSION} E2E ok: installed ${PACKAGE_SPEC}; commands, credentials, models, limits, diagnostics, activation and endpoint management verified`,
   )
@@ -772,5 +927,13 @@ export default function bootstrapProbe(pi) {
   if (defaultServer) await defaultServer.close().catch(() => {})
   if (companyServer) await companyServer.close().catch(() => {})
   if (process.env.E2E_KEEP_ROOT) console.log("kept", root)
-  else rmSync(root, { recursive: true, force: true })
+  else {
+    // A just-killed Pi may still hold files briefly: never let cleanup mask the real result.
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    try { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }) }
+    catch (error) { process.stderr.write(`cleanup skipped: ${error.code ?? error.message}\n`) }
+  }
 }
+
+// E2E_EXIT_GUARD: flush stdout, then exit even if a stray handle keeps the loop alive.
+process.stdout.write("", () => process.exit(process.exitCode ?? 0))

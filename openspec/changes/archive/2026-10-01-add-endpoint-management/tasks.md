@@ -14,7 +14,7 @@
 - [x] 3.2 `test/fs-lock.test.ts` `test/config-store.test.ts` `test/host-state.test.ts` `test/endpoint-management.test.ts`（贯穿 Core 校验 → 配置/凭据文件 → command/UI 的纵向用例）
 
 ## 4. Real host E2E
-- [x] 4.1 Real Pi 0.87.1 E2E 阶段 2：`scripts/e2e-real-pi.mjs` 通过 `pi install` 安装后，用 RPC `extension_ui_request/response` 回答宿主真实 select/input/confirm 对话框，覆盖 add → connect → activate → 模型可见 → edit Base URL（高级字段保留）→ replace → disconnect → deactivate → delete → 重启后状态
+- [x] 4.1 Real Pi 0.87.1 E2E：`scripts/e2e-real-pi.mjs` 通过 `pi install` 安装后，用 RPC `extension_ui_request/response` 回答宿主真实 select/input/confirm 对话框，覆盖三阶段：①既有 activation/limits 契约；②explicit endpoint 全流程（add → connect → activate → 模型可见 → edit Base URL（高级字段保留）→ replace → disconnect → deactivate → delete → 重启后状态）；③legacy 全流程（文件态 Edit/Delete + `LITELLM_BASE_URL` 迁移到 `endpoints.default` 后 Edit/Delete，迁移确认、字段/凭据身份保持、重启不复活）
 
 ## 5. README
 - [x] 5.1 `README updated: 管理 endpoint（/litellm-endpoints）`；同步删除“完整 CRUD 不在范围内”的旧说明
@@ -33,6 +33,7 @@
 | LIST-SINGLE | test\endpoint-management.test.ts |
 | LIST-MULTI | test\endpoint-management.test.ts |
 | LIST-EXTERNAL | test\endpoint-management.test.ts |
+| LIST-LEGACY-GHOST | test\endpoint-management.test.ts |
 | ADD-OK | test\config-store.test.ts, test\endpoint-management.test.ts |
 | ADD-DUP | test\config-store.test.ts, test\endpoint-management.test.ts |
 | ADD-BAD-ID | test\config-store.test.ts, test\endpoint-management.test.ts |
@@ -40,12 +41,13 @@
 | ADD-INACTIVE | test\endpoint-management.test.ts |
 | ADD-PRESERVE | test\config-store.test.ts, test\endpoint-management.test.ts |
 | ADD-LEGACY | test\config-store.test.ts, test\endpoint-management.test.ts |
+| ADD-ROLLBACK | test\endpoint-management.test.ts |
 | EDIT-URL | test\config-store.test.ts, test\endpoint-management.test.ts |
 | EDIT-ID-READONLY | test\config-store.test.ts, test\endpoint-management.test.ts |
 | EDIT-PRESERVE | test\config-store.test.ts, test\endpoint-management.test.ts |
 | EDIT-ATOMIC | test\config-store.test.ts, test\endpoint-management.test.ts, test\fs-lock.test.ts |
 | EDIT-ISOLATED | test\config-store.test.ts, test\endpoint-management.test.ts |
-| EDIT-ENV-LEGACY | test\config-store.test.ts, test\endpoint-management.test.ts |
+| LEGACY-MIGRATE | test\config-store.test.ts, test\endpoint-management.test.ts |
 | CRED-CONNECT | test\endpoint-management.test.ts, test\host-state.test.ts |
 | CRED-REPLACE | test\endpoint-management.test.ts, test\host-state.test.ts |
 | CRED-DISCONNECT | test\endpoint-management.test.ts, test\host-state.test.ts |
@@ -68,3 +70,4 @@
 | CFG-PARSE-FAIL | test\config-store.test.ts, test\endpoint-management.test.ts |
 | CFG-CONFLICT | test\config-store.test.ts |
 | CFG-LOCK | test\fs-lock.test.ts |
+| HOST-PERM | test\host-state.test.ts |
