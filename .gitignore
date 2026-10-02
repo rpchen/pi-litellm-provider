@@ -22,3 +22,7 @@ Thumbs.db
 
 # Build output
 *.tgz
+
+# Generated working indexes; immutable shared snapshots live on codebase-memory-index.
+/.codebase-memory/*
+!/.codebase-memory/selection.json
