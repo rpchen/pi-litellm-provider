@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test release index identity, opt-in and integrity boundaries
+        run: npm run test:codebase-memory
+
       - name: Verify committed distributable artifact
         run: bun run verify:dist
 
