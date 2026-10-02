@@ -1,0 +1,12 @@
+{
+    "schema_version": 2,
+    "commit": "6a08cfb926227e1461672a6dc0faa53fc4e42e46",
+    "indexed_at": "2026-10-02T12:38:37Z",
+    "project": "rpchen-pi-litellm-provider-main-6a08cfb926227e1461672a6dc0faa53fc4e42e46",
+    "nodes": 2307,
+    "edges": 4038,
+    "original_size": 7405568,
+    "compressed_size": 995192,
+    "compression_level": 9,
+    "reconcile_basis": "git-clean-head"
+}
