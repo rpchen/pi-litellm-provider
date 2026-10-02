@@ -226,3 +226,7 @@ pi remove git:github.com/rpchen/pi-litellm-provider
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [litellm-discovery-core](https://github.com/rpchen/litellm-discovery-core)
 - [验收记录](docs/research/acceptance-notes.md)
+
+## 开发代码索引
+
+已入库的代码图谱使用与跨客户端配置、Release 附件及本地同步方式见 [docs/codebase-memory.md](docs/codebase-memory.md)。索引工具不属于插件运行时依赖。

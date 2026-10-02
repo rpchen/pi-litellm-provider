@@ -33,3 +33,7 @@
 11. **模型发布边界**：必须遵守共享 testing-standard 的 Discovery 不变量。Core 可以保留 limit 未知的模型用于 diagnostics，但 `toProviderModels` 不得向 Pi 注册 `contextWindow <= 0` 或 `maxTokens <= 0` 的模型；此规则必须有通用 adapter 测试，不得只针对某个具体模型。
 12. **跨会话事实基线**：开始新会话/新规划前重新核对 main、Release/tag、README 当前固定版本、`dist/core-provenance.json`、active OpenSpec 和共享 testing-standard；结束前执行 retrospective，发现“规范已写但代码未通用保证”时不得宣称完成。
 13. **真实 Pi 宿主门禁**：凡涉及 `ExtensionAPI` / `ExtensionContext`、`registerProvider` / `unregisterProvider` / `refreshModels`、credential/login、command/UI、插件安装/加载或其他用户可见宿主行为的变更，CI 的 **Real Pi 0.87.1 E2E** 必须通过。该门禁使用 Pi 自己的 `pi install` 安装固定 Git commit、隔离 `HOME` / XDG / `PI_CODING_AGENT_DIR`、两个本地 fake LiteLLM endpoint 和独立宿主凭据；必须验证真实命令注册、provider/model 可见性、operational limits、endpoint credential 隔离与 activation。模拟 `ExtensionAPI`、直接调用 extension factory、package smoke 或单纯检查入口文件存在都不能替代真实宿主验收。Pi 0.87.1 声明 Node `>=22.19.0`，CI/Release 不得使用更低 Node 版本。
+
+## codebase-memory
+
+仅在本 Git 根目录存在 `.codebase-memory/artifact.json` 时使用索引；结构查询先发现图谱工具并确认 project/root/status。新仓库不得自动建索引。Release 必须生成对应不可变 tag SHA 的图谱附件并回读校验；日常客户端启动按当前检出代码刷新工作索引。流程见 `docs/codebase-memory.md`。
