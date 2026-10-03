@@ -275,7 +275,7 @@ function pluginModels(response) {
   return models.filter((model) => typeof model?.provider === "string" && model.provider.startsWith("litellm"))
 }
 
-function modelInfo(modelName, mode, input = 32_000, output = 4_096) {
+function modelInfo(modelName, mode, input = 32_000, output = 4_096, overrides = {}) {
   return {
     model_name: modelName,
     litellm_params: { model: `openai/${modelName}` },
@@ -286,6 +286,10 @@ function modelInfo(modelName, mode, input = 32_000, output = 4_096) {
       input_cost_per_token: 0.000001,
       output_cost_per_token: 0.000002,
       supports_function_calling: true,
+      // models.dev is unavailable in this offline gate, so reasoning support must be
+      // declared by the endpoint itself for the model to be normally publishable.
+      supports_reasoning: false,
+      ...overrides,
     },
   }
 }
@@ -332,6 +336,13 @@ try {
   defaultServer = await startFakeLiteLLM("default", "sk-default-e2e", [
     modelInfo("e2e-default-responses", "responses"),
     modelInfo("e2e-zero-limit", "chat", 0, 0),
+    // [REAL-HOST-E2E] Incomplete metadata: positive limits but no trusted
+    // reasoning/tools evidence (models.dev is offline here), so Core must keep
+    // this model out of normal registration and explain it in diagnostics.
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
   ])
   companyServer = await startFakeLiteLLM("company", "sk-company-e2e", [
     modelInfo("e2e-company-chat", "chat", 64_000, 8_192),
@@ -454,6 +465,12 @@ export default function bootstrapProbe(pi) {
   assert(companyModel.contextWindow > 0 && companyModel.maxTokens > 0, "Company model has non-operational limits")
   assert(!allModels.some((model) => model.id === "e2e-zero-limit"), "Real Pi exposed a zero-limit model")
   assert(allModels.every((model) => model.contextWindow > 0 && model.maxTokens > 0), "Real Pi exposed non-positive model limits")
+  // [REAL-HOST-E2E] Publication boundary: a model without trustworthy tool/reasoning
+  // evidence must not enter normal registration even with positive limits.
+  assert(
+    !allModels.some((model) => model.id === "e2e-incomplete-capabilities"),
+    "Real Pi exposed a model with unknown key capabilities as a normal model",
+  )
 
   assert(defaultServer.requests.length > 0, "Default fake LiteLLM received no discovery request")
   assert(companyServer.requests.length > 0, "Company fake LiteLLM received no discovery request")
@@ -485,6 +502,15 @@ export default function bootstrapProbe(pi) {
   )
   assert(diagnosticNotice.message.includes("状态：正常"), "Diagnostics did not report a ready endpoint")
   assert(diagnosticNotice.message.includes("已注册模型：1"), "Diagnostics model count is not the host-visible count")
+  // [REAL-HOST-E2E] Publication diagnostics name the incomplete model and its gaps.
+  assert(
+    diagnosticNotice.message.includes("未完成：e2e-incomplete-capabilities"),
+    "Diagnostics did not report the incomplete model as blocked",
+  )
+  assert(
+    diagnosticNotice.message.includes("capabilities.tools") && diagnosticNotice.message.includes("reasoning"),
+    "Diagnostics did not report which capability fields are unknown",
+  )
   assert(!diagnosticNotice.message.includes(defaultServer.apiKey), "Diagnostics leaked the API key")
   assert(!diagnosticNotice.message.includes(defaultServer.baseUrl), "Diagnostics leaked the LiteLLM URL")
   // [REAL-HOST-E2E] Diagnostics carry the short Runtime Identity of the running artifact.
