@@ -892,8 +892,8 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
     "name": "shared-route",
     "protocol": "chat",
     "reasoningSupported": "unknown",
-    "releaseUnit": "unix-ms",
-    "released": 1760486400000,
+    "releaseUnit": "none",
+    "released": 0,
     "variants": [],
   },
   {

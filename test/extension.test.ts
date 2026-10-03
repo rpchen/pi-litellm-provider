@@ -198,6 +198,8 @@ describe("Core refresh coordinator 接入", () => {
         model_name: "coordinated-model",
         litellm_params: { model: "openai/coordinated-model" },
         // Fully declared LiteLLM-only model: complete without models.dev.
+        // Every input modality flag is declared so the sparse-flag rule is
+        // satisfied by endpoint declarations alone.
         model_info: {
           mode: "chat",
           max_input_tokens: 1000,
@@ -205,6 +207,9 @@ describe("Core refresh coordinator 接入", () => {
           supports_function_calling: true,
           supports_reasoning: false,
           supports_vision: false,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
           supports_audio_output: false,
         },
       },

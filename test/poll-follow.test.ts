@@ -34,6 +34,9 @@ function deployment(name: string) {
       supports_function_calling: false,
       supports_reasoning: false,
       supports_vision: false,
+      supports_pdf_input: false,
+      supports_audio_input: false,
+      supports_video_input: false,
       supports_audio_output: false,
     },
   }

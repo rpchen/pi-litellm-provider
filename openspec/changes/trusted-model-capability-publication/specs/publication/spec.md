@@ -75,6 +75,15 @@ as fully configured.
 - **WHEN** the user runs the accept-degraded command for an invalid, ambiguous, or unmatched model
 - **THEN** the command reports Core's rejection and does not claim success
 
+### Requirement: Group-wide evidence flows through the adapter unchanged
+The extension SHALL consume Core's group-wide completeness verdicts
+(consistency of limits, modalities, identity) verbatim and SHALL NOT
+re-derive any completeness, conflict, or eligibility judgment locally.
+
+#### Scenario: Conflict-blocked groups stay blocked
+- **WHEN** Core reports a group blocked for conflicting deployment evidence (limits disagree or identities cannot be proven equal)
+- **THEN** the model stays unregistered with status and conflict fields visible in diagnostics
+
 #### Scenario: Degraded model is distinguishable
 - **WHEN** diagnostics are displayed
 - **THEN** degraded models are listed separately from fully configured models

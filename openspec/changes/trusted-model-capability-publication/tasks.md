@@ -12,6 +12,7 @@
 - [x] Consume Core degradation eligibility in `/litellm-accept-degraded`; reject ineligible statuses without a success message.
 - [x] Seed LKG with the Core captured publication verdict.
 - [x] Source-level typecheck and unit tests against reviewed Core head `1cd6bc285cdf692c335d3fd401a4e4436eb515ef`.
+- [x] Align Core-copy fixtures/tests with group-wide limit/modality/identity evidence (Core branch head `e71393d5c503272b663ecc1ef237a23198b46916`).
 - [x] Extend Real Pi 0.87.1 E2E fixtures/assertions for the publication boundary (incomplete model never registered, diagnostics names it and its gaps).
 - [ ] `bun run build:dist` to the merged Core SHA + `bun run verify:dist` and `bun run test:package` (blocked until rpchen/litellm-discovery-core#26 merges).
 - [ ] Real Pi 0.87.1 E2E run (blocked: it installs a committed dist, so it must run after the Core merge + dist refresh).

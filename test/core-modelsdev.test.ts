@@ -6,6 +6,7 @@ import {
   candidateModelIDs,
   releaseTimestamp,
   selectModelsDevRecord,
+  selectModelsDevRecordDetailed,
 } from "../src/core/index.ts"
 
 function one(modelName: string, model: string, info: Record<string, unknown> = {}) {
@@ -56,7 +57,7 @@ describe("models.dev 记录选择", () => {
     expect(selected?.modelID).toBe("kimi-cn-only")
   })
 
-  test("同名多部署时取候选并集，按部署顺序", () => {
+  test("同名多部署指向不同模型时保持冲突，不按部署顺序取首个", () => {
     const group = groupLiteLLMDeployments({
       data: [
         {
@@ -72,7 +73,11 @@ describe("models.dev 记录选择", () => {
       ],
     })[0]!
     expect(candidateModelIDs(group)).toEqual(["gpt-5.5", "first", "gpt-6-sol", "second", "route"])
-    expect(selectModelsDevRecord(group, modelsDev)?.modelID).toBe("gpt-5.5")
+    // Candidate order still lists deployment ids, but a group whose
+    // deployments provably name different models must not pick the first
+    // candidate as the shared identity.
+    expect(selectModelsDevRecordDetailed(group, modelsDev).outcome).toBe("ambiguous")
+    expect(selectModelsDevRecord(group, modelsDev)).toBeUndefined()
   })
 })
 
