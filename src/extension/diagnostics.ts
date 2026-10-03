@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs"
 import type {
   DiscoveryCacheDiagnostics,
   DiscoveryDiagnostics,
+  LastKnownGoodStore,
 } from "../core/index.ts"
+import { createLastKnownGoodStore } from "../core/index.ts"
 import { getRuntimeIdentity, shortArtifactDigest, shortCoreCommit } from "./runtime-identity.ts"
 import type { ProviderModelConfigLike } from "./types.ts"
 
@@ -23,6 +25,7 @@ export interface ProviderDiagnosticSnapshot {
   readonly status: ProviderDiagnosticStatus
   readonly modelCount: number
   readonly discovery?: DiscoveryDiagnostics
+  readonly publication?: PublicationSummary
   readonly cache?: DiscoveryCacheDiagnostics
   readonly lastSuccessfulDiscoveryAt?: string
   readonly note?: string
@@ -30,8 +33,49 @@ export interface ProviderDiagnosticSnapshot {
   readonly models?: readonly ProviderModelConfigLike[]
 }
 
+export interface PublicationModelState {
+  readonly id: string
+  readonly status: string
+}
+
+export interface PublicationBlockedModel {
+  readonly id: string
+  readonly status: string
+  readonly gaps: readonly string[]
+}
+
+/** Adapter-visible slice of the Core publication partition (no policy logic). */
+export interface PublicationSummary {
+  readonly publishable: readonly PublicationModelState[]
+  readonly degradedIDs: readonly string[]
+  readonly lkgIDs: readonly string[]
+  readonly blocked: readonly PublicationBlockedModel[]
+  readonly failureKind?: string
+}
+
+/** Per-endpoint publication controller: LKG store + degraded acceptance. */
+export interface PublicationController {
+  readonly store: LastKnownGoodStore
+  readonly acceptedDegradedIDs: Set<string>
+}
+
 export interface ProviderDiagnosticsState {
   current: ProviderDiagnosticSnapshot
+  publication?: PublicationController
+}
+
+/** Resolve (creating on first use) the endpoint-scoped publication controller. */
+export function publicationControllerForState(
+  state: ProviderDiagnosticsState | undefined,
+): PublicationController {
+  const existing = state?.publication
+  if (existing) return existing
+  const created: PublicationController = {
+    store: createLastKnownGoodStore(),
+    acceptedDegradedIDs: new Set<string>(),
+  }
+  if (state) state.publication = created
+  return created
 }
 
 export function createProviderDiagnosticsState(): ProviderDiagnosticsState {
@@ -125,6 +169,22 @@ export function formatHostDateTime(
   ].join(" ")
 }
 
+/** Render the Core publication partition: states, gaps, LKG, degraded. */
+export function formatPublicationSummary(summary: PublicationSummary | undefined): string[] {
+  if (!summary) return []
+  const lines = [
+    `模型配置：可用 ${summary.publishable.length} · 未完成 ${summary.blocked.length} · 降级 ${summary.degradedIDs.length} · LKG ${summary.lkgIDs.length}`,
+  ]
+  if (summary.failureKind) lines.push(`元数据获取失败：${summary.failureKind}（未用默认值伪装完整配置）`)
+  if (summary.lkgIDs.length > 0) lines.push(`LKG 提供：${summary.lkgIDs.join("、")}`)
+  if (summary.degradedIDs.length > 0) lines.push(`已接受降级：${summary.degradedIDs.join("、")}（仍标记为降级，非完整配置）`)
+  for (const blocked of summary.blocked.slice(0, 5)) {
+    lines.push(`未完成：${blocked.id} · ${blocked.status}${blocked.gaps.length > 0 ? ` · 缺失 ${blocked.gaps.join("、")}` : ""}`)
+  }
+  if (summary.blocked.length > 5) lines.push(`……另有 ${summary.blocked.length - 5} 个未完成模型`)
+  return lines
+}
+
 const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {
   idle: "尚未执行发现",
   restored: "已从持久化快照恢复，等待网络确认",
@@ -183,6 +243,8 @@ export function formatProviderDiagnostics(
       .map((issue) => issue.modelId ? `${issue.modelId}: ${issue.code}` : issue.code)
     if (examples.length > 0) lines.push(`重点：${examples.join("；")}`)
   }
+
+  lines.push(...formatPublicationSummary(snapshot.publication))
 
   if (snapshot.note) lines.push(`说明：${snapshot.note}`)
   lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)

@@ -80,6 +80,7 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 | `/thinking` | 切换当前模型的 thinking level |
 | `/litellm-diagnostics [endpoint-id]` | 无参数查看 endpoint 总览；传 id 查看该 endpoint 的发现、缓存、models.dev、协议、Core 诊断与 Runtime Identity |
 | `/litellm-audit-export [endpoint-id]` | 导出已注册模型清单与完整 Runtime Identity 到本地 JSON 文件；无参数导出全部已激活 endpoint |
+| `/litellm-accept-degraded <endpoint-id> <model-id>` | 显式接受某个未完成模型的降级配置（仍标记为降级，非完整配置，重启后需重新接受） |
 | `/litellm-endpoints` | endpoint 管理中心：新增、修改 Base URL、删除、启用/停用、连接/替换/断开 API Key；也支持 `all` / `none` / `<endpoint-id>` 参数快速切换启用状态 |
 | `/login` / `/logout` | 保存、切换或移除 LiteLLM 凭据 |
 | `/reload` | 修改 `litellm.json` 后重新读取配置 |
@@ -87,6 +88,14 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 `/litellm-diagnostics` 只读取已有状态，**不会发起模型请求，也不会产生额外 token 消耗**；输出不会包含 API Key、LiteLLM 地址或原始传输错误。诊断中的“最近成功发现”“下次允许重试”等绝对时间会按**当前运行 Pi 的宿主机器时区**显示，并附带 UTC 偏移；内部 snapshot/cache 时间仍保持标准 UTC/epoch。
 
 `/litellm-audit-export` 每次执行都会在 `<agentDir>/litellm-audit/` 下生成一个新 JSON 文件，不覆盖已有报告。报告包含已注册模型的 allowlist 字段与完整的 Runtime Identity，不包含 API Key、LiteLLM 地址或原始上游响应；分享前请自行检查。导出失败不会影响 provider 注册与轮询。
+
+### 模型配置状态（正常发布 / 未完成 / 降级 / LKG）
+
+endpoint 里发现了模型，不等于模型已经正确配置完成。只有能力信息完整可信（上下文窗口、输出上限、工具调用、reasoning 等足以让宿主正确使用）的模型，才会作为正常模型注册。`/litellm-diagnostics` 的“模型配置”段会列出：可用、未完成（含缺失字段）、已接受降级、以及正使用历史完整快照（LKG）的模型。
+
+- 未完成模型不会伪装成正常模型；元数据获取失败（超时、5xx、网络不可达等）不会用默认值拼出看似正常的配置。
+- 元数据暂时失败但存在仍可信的历史完整快照时，模型继续可用并标注为 LKG（标注来源与数据年龄；年龄本身不会使快照失效）。
+- 确认了解缺失仍想使用某个模型时，用 `/litellm-accept-degraded <endpoint-id> <model-id>` 显式接受降级；接受后模型仍标记为降级，可用 `/litellm-diagnostics` 查看剩余缺口。
 
 ### Runtime Identity
 

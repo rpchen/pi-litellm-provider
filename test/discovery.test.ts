@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { createDiscoverySnapshot, endpointFingerprint, type ModelSpec } from "../src/core/index.ts"
+import {
+  createDiscoverySnapshot,
+  createLastKnownGoodStore,
+  endpointFingerprint,
+  type ModelSpec,
+} from "../src/core/index.ts"
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
 import { resetModelsDevCacheForTest, type FetchLike } from "../src/net/fetch.ts"
@@ -91,7 +96,15 @@ const LITELLM_BODY = {
 
 const MODELS_DEV = {
   openai: {
-    models: { "gpt-6-sol": { id: "gpt-6-sol", release_date: "2026-05-01" } },
+    models: {
+      "gpt-6-sol": {
+        id: "gpt-6-sol",
+        release_date: "2026-05-01",
+        limit: { context: 100000, output: 10000 },
+        tool_call: true,
+        reasoning: false,
+      },
+    },
   },
 }
 
@@ -144,15 +157,48 @@ describe("discoverModels", () => {
     expect(outcome.fingerprint.length).toBeGreaterThan(0)
   })
 
-  test("models.dev 失败时降级为仅 LiteLLM 数据", async () => {
+  test("models.dev 失败时不伪装完整配置（降级为空目录、模型保持未完成）", async () => {
     const outcome = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        // getModelsDevCatalog degrades a 500 to an empty catalog with a warning.
         "https://models.dev/api.json": () => jsonResponse(500, {}),
       }),
       logger: silent,
     })
-    expect(outcome.models).toHaveLength(1)
+    // LiteLLM 只声明了 limits，tools/reasoning 无可信证据：不得注册
+    // 看似正常的模型；缺口必须可见。
+    expect(outcome.models).toHaveLength(0)
+    expect(outcome.publication.blocked.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    expect(outcome.publication.blocked[0]!.gaps).toEqual(
+      expect.arrayContaining(["capabilities.tools", "reasoning"]),
+    )
+  })
+
+  test("元数据加载抛错时分类失败并可用有效 LKG 继续提供", async () => {
+    const store = createLastKnownGoodStore()
+    const first = await discoverModels(config(), KEY, undefined, {
+      fetchImpl: fetchRouter({
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+      }),
+      logger: silent,
+      publication: { store, acceptedDegradedIDs: new Set() },
+    })
+    expect(first.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    const second = await discoverModels(config(), KEY, undefined, {
+      fetchImpl: fetchRouter({
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+      }),
+      loadModelsDevCatalog: async () => {
+        throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" })
+      },
+      logger: silent,
+      publication: { store, acceptedDegradedIDs: new Set() },
+    })
+    expect(second.publication.failureKind).toBe("unreachable")
+    expect(second.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    expect(second.publication.lkgIDs).toEqual(["gpt-6-sol"])
   })
 })
 

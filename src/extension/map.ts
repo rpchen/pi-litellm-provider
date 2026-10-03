@@ -8,7 +8,11 @@
  *  - per-model baseUrl: chat/responses use `{root}/v1`, messages uses `{root}` because
  *    `@anthropic-ai/sdk` appends `/v1/messages` itself (see design D3).
  */
-import { hasOperationalLimits, type ModelSpec } from "../core/index.ts"
+import {
+  hasOperationalLimits,
+  type ModelSpec,
+  type PublishableEntry,
+} from "../core/index.ts"
 import type { ProviderModelConfigLike, ThinkingLevel } from "./types.ts"
 
 /** LiteLLM protocol → pi-ai API id. */
@@ -77,10 +81,25 @@ function toPiInput(modalities: readonly string[]): ("text" | "image")[] {
 }
 
 /**
+ * Whether the host model should advertise reasoning.
+ *
+ * Follows the Core verdict when present: `supported` (even with zero
+ * selectable levels) maps to true; `unsupported` and `unknown` map to
+ * false. Specs predating the Core verdict field keep the legacy
+ * variant-count inference.
+ */
+export function reasoningForHost(spec: ModelSpec): boolean {
+  if (spec.reasoningSupported !== undefined) return spec.reasoningSupported === "supported"
+  return spec.variants.length > 0
+}
+
+/**
  * Map discovery specs to pi provider model configs.
  *
  * `rootURL` is the normalized LiteLLM root (no `/v1`); each model's baseUrl is derived
- * per protocol.
+ * per protocol. Only Core-publishable entries should be passed (see
+ * `toProviderModelsWithPublication`); the operational-limits guard stays
+ * as adapter-side defense in depth.
  */
 export function toProviderModels(specs: readonly ModelSpec[], rootURL: string): ProviderModelConfigLike[] {
   const apiBase = `${rootURL}/v1`
@@ -90,7 +109,7 @@ export function toProviderModels(specs: readonly ModelSpec[], rootURL: string): 
       name: spec.name,
       api: PROTOCOL_API[spec.protocol],
       baseUrl: spec.protocol === "messages" ? rootURL : apiBase,
-      reasoning: spec.variants.length > 0,
+      reasoning: reasoningForHost(spec),
       input: toPiInput(spec.capabilities.input),
       cost: spec.cost,
       contextWindow: spec.limit.context,
@@ -99,4 +118,20 @@ export function toProviderModels(specs: readonly ModelSpec[], rootURL: string): 
     const thinkingLevelMap = thinkingLevelMapFor(spec)
     return thinkingLevelMap ? { ...model, thinkingLevelMap } : model
   })
+}
+
+/**
+ * Map Core publication entries to pi provider model configs.
+ *
+ * Consumes the Core partition without reimplementing policy: only
+ * entries Core reports publishable (configured, configured-lkg,
+ * user-accepted degraded) are passed in. Degraded entries map to the
+ * same provider shape with conservative flags; their degraded state
+ * stays visible through diagnostics, never re-labeled as configured.
+ */
+export function toProviderModelsWithPublication(
+  entries: readonly PublishableEntry[],
+  rootURL: string,
+): ProviderModelConfigLike[] {
+  return toProviderModels(entries.map((entry) => entry.spec), rootURL)
 }

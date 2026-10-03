@@ -13,24 +13,39 @@
  * is treated as "not configured": no network request, empty list.
  */
 import {
+  buildPublicationResult,
+  classifyMetadataFailure,
   compareDiscoverySnapshots,
   createDiscoveryCacheDiagnostics,
   createDiscoveryCoordinator,
   createDiscoverySnapshot,
+  createLastKnownGoodEntry,
+  createLastKnownGoodStore,
   diagnoseModelSpecs,
   endpointFingerprint,
+  groupLiteLLMDeployments,
   inspectDiscoverySnapshot,
+  lastKnownGoodKey,
   modelFingerprint,
   normalizeLiteLLMURL,
+  type BlockedEntry,
   type DiscoveryCoordinator,
   type DiscoveryDiagnostics,
   type DiscoverySnapshot,
+  type LastKnownGoodStore,
+  type MetadataFailure,
   type ModelSpec,
+  type PublishableEntry,
 } from "../core/index.ts"
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog, type FetchLike } from "../net/fetch.ts"
 import type { ExtensionConfig } from "./config.ts"
-import { setProviderDiagnostics, type ProviderDiagnosticsState } from "./diagnostics.ts"
-import { toProviderModels } from "./map.ts"
+import {
+  publicationControllerForState,
+  setProviderDiagnostics,
+  type ProviderDiagnosticsState,
+  type PublicationSummary,
+} from "./diagnostics.ts"
+import { toProviderModels, toProviderModelsWithPublication } from "./map.ts"
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "./types.ts"
 
 export interface DiscoveryLogger {
@@ -43,14 +58,27 @@ export interface DiscoveryDeps {
   logger?: DiscoveryLogger
   /** Override models.dev catalog source (tests); production uses the shared cache. */
   loadModelsDevCatalog?: (signal?: AbortSignal) => Promise<unknown>
+  /**
+   * Publication controller override (tests). Production resolves it from
+   * the per-endpoint diagnostics state so degraded acceptance and the LKG
+   * store survive across refreshes of the same provider instance.
+   */
+  publication?: {
+    readonly store?: LastKnownGoodStore
+    readonly acceptedDegradedIDs?: ReadonlySet<string>
+    readonly now?: number
+  }
 }
 
 /** Result of one network-phase discovery, before persistence. */
 export interface DiscoveryOutcome {
   models: ProviderModelConfigLike[]
   specs: ModelSpec[]
+  /** Publishable, non-degraded specs persisted into the snapshot. */
+  snapshotSpecs: ModelSpec[]
   fingerprint: string
   diagnostics: DiscoveryDiagnostics
+  publication: PublicationSummary
 }
 
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>
@@ -71,6 +99,12 @@ interface PersistedCatalog {
 /**
  * Run the network phase: contact LiteLLM, enrich from models.dev, build specs and map to
  * pi provider configs. Throws `DiscoveryError` on degradable failures.
+ *
+ * Publication partition comes from Core `buildPublicationResult`: only
+ * configured, configured-lkg, and user-accepted degraded models map to
+ * provider configs. A models.dev fetch failure does not abort discovery;
+ * it is classified with the Core taxonomy so valid LKG entries can
+ * substitute while the rest stay blocked with reasons.
  */
 export async function discoverModels(
   config: ExtensionConfig,
@@ -80,18 +114,93 @@ export async function discoverModels(
 ): Promise<DiscoveryOutcome> {
   const addresses = normalizeLiteLLMURL(config.baseUrl)
   const litellmResponse = await fetchLiteLLMModelInfo(addresses, apiKey, deps.fetchImpl, signal)
-  const catalog = deps.loadModelsDevCatalog
-    ? await deps.loadModelsDevCatalog(signal)
-    : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal })
-  const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, {
+  let catalog: unknown
+  let catalogFailure: MetadataFailure | undefined
+  try {
+    catalog = deps.loadModelsDevCatalog
+      ? await deps.loadModelsDevCatalog(signal)
+      : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal })
+  } catch (error) {
+    catalog = {}
+    catalogFailure = classifyMetadataFailure(error)
+  }
+  const buildOptions = {
     contextTierCap: config.contextTierCap,
     protocolOverrides: config.protocolOverrides,
+  }
+  const now = deps.publication?.now ?? Date.now()
+  const publication = buildPublicationResult(litellmResponse, catalog, buildOptions, {
+    store: deps.publication?.store,
+    acceptedDegradedIDs: deps.publication?.acceptedDegradedIDs,
+    failure: catalogFailure,
+    now,
   })
+  if (deps.publication?.store) {
+    seedPublicationLKG(deps.publication.store, litellmResponse, publication, now)
+  }
+  const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions)
+  const specs = publication.publishable.map((entry) => entry.spec)
+  const snapshotSpecs = publication.publishable
+    .filter((entry) => entry.degraded === undefined)
+    .map((entry) => entry.spec)
   return {
-    specs: diagnosed.models,
-    models: toProviderModels(diagnosed.models, addresses.rootURL),
-    fingerprint: modelFingerprint(diagnosed.models),
+    specs,
+    snapshotSpecs,
+    models: toProviderModelsWithPublication(publication.publishable, addresses.rootURL),
+    fingerprint: modelFingerprint(specs),
     diagnostics: diagnosed.diagnostics,
+    publication: summarizePublication(publication, catalogFailure),
+  }
+}
+
+/** Record complete configured models as Last Known Good for future outages. */
+function seedPublicationLKG(
+  store: LastKnownGoodStore,
+  litellmResponse: unknown,
+  publication: { publishable: readonly PublishableEntry[] },
+  now: number,
+): void {
+  const groups = new Map(groupLiteLLMDeployments(litellmResponse).map((item) => [item.modelName, item]))
+  for (const entry of publication.publishable) {
+    if (entry.assessment.status !== "configured") continue
+    const group = groups.get(entry.spec.id)
+    if (!group) continue
+    try {
+      store.set(
+        lastKnownGoodKey(entry.spec.id),
+        createLastKnownGoodEntry(group, entry.assessment.identity.selected, entry.spec, now),
+      )
+    } catch {
+      // Seeding is best-effort; it must never fail a discovery.
+    }
+  }
+}
+
+function summarizePublication(
+  publication: { publishable: readonly PublishableEntry[]; blocked: readonly BlockedEntry[] },
+  failure: MetadataFailure | undefined,
+): PublicationSummary {
+  return {
+    publishable: publication.publishable.map((entry) => ({
+      id: entry.spec.id,
+      status: entry.assessment.status,
+    })),
+    degradedIDs: publication.publishable
+      .filter((entry) => entry.degraded !== undefined)
+      .map((entry) => entry.spec.id),
+    lkgIDs: publication.publishable
+      .filter((entry) => entry.assessment.usingLKG)
+      .map((entry) => entry.spec.id),
+    blocked: publication.blocked.map((entry) => ({
+      id: entry.spec.id,
+      status: entry.assessment.status,
+      gaps: [
+        ...entry.assessment.missingFields,
+        ...entry.assessment.unknownFields,
+        ...entry.assessment.illegalFields,
+      ],
+    })),
+    failureKind: failure?.kind,
   }
 }
 
@@ -184,11 +293,19 @@ export async function refreshProviderModels(
   }
 
   const discoveryKey = `${config.endpointId ?? ""}\u0000${config.baseUrl}\u0000${apiKey}`
+  const publicationController = publicationControllerForState(diagnosticsState)
+  const discoveryDeps: DiscoveryDeps = {
+    ...deps,
+    publication: deps.publication ?? {
+      store: publicationController.store,
+      acceptedDegradedIDs: publicationController.acceptedDegradedIDs,
+    },
+  }
 
   try {
     const coordinated = await coordinator.refresh(
       discoveryKey,
-      () => discoverModels(config, apiKey, context.signal, deps),
+      () => discoverModels(config, apiKey, context.signal, discoveryDeps),
       {
         forceRefresh: context.force === true,
         failurePolicy: (error) => {
@@ -215,7 +332,7 @@ export async function refreshProviderModels(
     })
     const snapshot = createDiscoverySnapshot(
       successfulEndpoint,
-      outcome.specs,
+      outcome.snapshotSpecs,
       new Date(coordinated.refreshedAt).toISOString(),
     )
     if (restored.compatible && restored.snapshot) {
@@ -234,6 +351,7 @@ export async function refreshProviderModels(
       modelCount: outcome.models.length,
       models: outcome.models,
       discovery: outcome.diagnostics,
+      publication: outcome.publication,
       cache: createDiscoveryCacheDiagnostics({
         source: coordinated.source === "cache"
           ? "memory-cache"
