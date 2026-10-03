@@ -93,6 +93,11 @@ jobs:
             console.log(`remote Git package ok: ${entries.join(", ")}`)
           '
 
+      - name: Install pinned native index runtime
+        run: npm install --global codebase-memory-mcp@0.11.0
+      - name: Verify index generation for the reviewed source
+        run: node scripts/codebase-memory-main.mjs build
+
 
   real-pi-host:
     name: Real Pi 0.87.1 E2E
