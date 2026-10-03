@@ -767,35 +767,16 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
     },
     "id": "minimax-m3",
     "limit": {
-      "context": 512000,
-      "input": 512000,
+      "context": 500000,
+      "input": 500000,
       "output": 131072,
     },
     "name": "minimax-m3",
     "protocol": "responses",
     "reasoningSupported": "supported",
     "releaseUnit": "unix-ms",
-    "released": 1768003200000,
-    "variants": [
-      {
-        "id": "low",
-        "settings": {
-          "reasoningEffort": "low",
-        },
-      },
-      {
-        "id": "medium",
-        "settings": {
-          "reasoningEffort": "medium",
-        },
-      },
-      {
-        "id": "high",
-        "settings": {
-          "reasoningEffort": "high",
-        },
-      },
-    ],
+    "released": 1768089600000,
+    "variants": [],
   },
   {
     "capabilities": {

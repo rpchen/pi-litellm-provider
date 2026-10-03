@@ -33,6 +33,8 @@ function deployment(name: string) {
       max_output_tokens: 1000,
       supports_function_calling: false,
       supports_reasoning: false,
+      supports_vision: false,
+      supports_audio_output: false,
     },
   }
 }

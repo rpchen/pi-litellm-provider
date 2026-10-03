@@ -68,8 +68,12 @@ degraded label with remaining gaps and SHALL never re-label such models
 as fully configured.
 
 #### Scenario: Accept degraded model
-- **WHEN** the user runs the accept-degraded command for a blocked model
+- **WHEN** the user runs the accept-degraded command for a Core-eligible blocked model
 - **THEN** the model registers on the degraded path and diagnostics still lists it as degraded with its gaps
+
+#### Scenario: Ineligible model is rejected
+- **WHEN** the user runs the accept-degraded command for an invalid, ambiguous, or unmatched model
+- **THEN** the command reports Core's rejection and does not claim success
 
 #### Scenario: Degraded model is distinguishable
 - **WHEN** diagnostics are displayed

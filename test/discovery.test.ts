@@ -103,6 +103,7 @@ const MODELS_DEV = {
         limit: { context: 100000, output: 10000 },
         tool_call: true,
         reasoning: false,
+        modalities: { input: ["text"], output: ["text"] },
       },
     },
   },

@@ -50,6 +50,7 @@ const COMPLETE_CATALOG = {
         limit: { context: 100000, output: 10000 },
         tool_call: true,
         reasoning: false,
+        modalities: { input: ["text"], output: ["text"] },
       },
     },
   },
@@ -231,6 +232,47 @@ describe("publication longitudinal: Core -> Pi state -> command/UI", () => {
 
     const after = await provider.refreshModels!({ ...ctx, force: true })
     expect(after.map((model) => model.id)).toEqual(["gap-model"])
+  })
+
+  test("accept-degraded rejects invalid metadata without claiming success", async () => {
+    const h = fakePi()
+    piLitellmProvider(h.api, {
+      config: config(),
+      deps: {
+        fetchImpl: async (input) =>
+          String(input).includes("/v1/model/info")
+            ? jsonResponse(200, {
+              data: [{
+                model_name: "invalid-model",
+                litellm_params: { model: "openai/invalid-model" },
+                model_info: {
+                  mode: "chat",
+                  max_input_tokens: 0,
+                  max_output_tokens: 100,
+                  supports_function_calling: true,
+                  supports_reasoning: false,
+                  supports_vision: false,
+                  supports_audio_output: false,
+                },
+              }],
+            })
+            : jsonResponse(200, { openai: { models: { "invalid-model": { id: "invalid-model" } } } }),
+        logger: silent,
+      },
+    })
+    const provider = h.registrations[0]!.config
+    await provider.refreshModels!({
+      allowNetwork: true,
+      signal: new AbortController().signal,
+      credential: { type: "api_key", key: KEY },
+      publish: async () => true,
+    })
+    await h.commands.get("litellm-accept-degraded")!.handler(
+      "default invalid-model",
+      { ui: h.ui, modelRegistry: { refresh: async () => {} } },
+    )
+    expect(h.notifications.some((item) => item.message.includes("已接受降级"))).toBeFalse()
+    expect(h.notifications.some((item) => item.message.includes("拒绝降级") && item.message.includes("invalid-model"))).toBeTrue()
   })
 })
 

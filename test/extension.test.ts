@@ -204,6 +204,8 @@ describe("Core refresh coordinator 接入", () => {
           max_output_tokens: 100,
           supports_function_calling: true,
           supports_reasoning: false,
+          supports_vision: false,
+          supports_audio_output: false,
         },
       },
     ],

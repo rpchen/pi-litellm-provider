@@ -42,6 +42,9 @@ export interface PublicationBlockedModel {
   readonly id: string
   readonly status: string
   readonly gaps: readonly string[]
+  /** Core eligibility. Adapters must not re-derive this from status strings. */
+  readonly degradationEligible: boolean
+  readonly degradationReason?: string
 }
 
 /** Adapter-visible slice of the Core publication partition (no policy logic). */

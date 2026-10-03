@@ -19,6 +19,7 @@ import {
   createDiscoveryCacheDiagnostics,
   createDiscoveryCoordinator,
   createDiscoverySnapshot,
+  capturedPublicationVerdict,
   createLastKnownGoodEntry,
   createLastKnownGoodStore,
   diagnoseModelSpecs,
@@ -28,6 +29,7 @@ import {
   lastKnownGoodKey,
   modelFingerprint,
   normalizeLiteLLMURL,
+  degradationEligibility,
   type BlockedEntry,
   type DiscoveryCoordinator,
   type DiscoveryDiagnostics,
@@ -168,7 +170,13 @@ function seedPublicationLKG(
     try {
       store.set(
         lastKnownGoodKey(entry.spec.id),
-        createLastKnownGoodEntry(group, entry.assessment.identity.selected, entry.spec, now),
+        createLastKnownGoodEntry(
+          group,
+          entry.assessment.identity.selected,
+          entry.spec,
+          now,
+          capturedPublicationVerdict(entry.assessment),
+        ),
       )
     } catch {
       // Seeding is best-effort; it must never fail a discovery.
@@ -191,15 +199,20 @@ function summarizePublication(
     lkgIDs: publication.publishable
       .filter((entry) => entry.assessment.usingLKG)
       .map((entry) => entry.spec.id),
-    blocked: publication.blocked.map((entry) => ({
+    blocked: publication.blocked.map((entry) => {
+      const eligibility = degradationEligibility(entry.assessment)
+      return {
       id: entry.spec.id,
       status: entry.assessment.status,
+      degradationEligible: eligibility.eligible,
+      degradationReason: eligibility.eligible ? undefined : eligibility.reason,
       gaps: [
         ...entry.assessment.missingFields,
         ...entry.assessment.unknownFields,
         ...entry.assessment.illegalFields,
       ],
-    })),
+      }
+    }),
     failureKind: failure?.kind,
   }
 }

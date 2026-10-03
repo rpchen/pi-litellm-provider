@@ -294,11 +294,13 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
       }
       const state = stateFor(endpointId)
       const blocked = state.current.publication?.blocked.find((model) => model.id === modelId)
-      if (!blocked) {
+      if (!blocked || !blocked.degradationEligible) {
         const registered = (state.current.models ?? []).some((model) => model.id === modelId)
         ctx.ui.notify(
-          registered ? `${modelId} 已是完整配置，无需降级接受。` : `未知或不可降级模型：${modelId}`,
-          registered ? "info" : "warning",
+          blocked
+            ? `拒绝降级：${modelId}（${blocked.status}；${blocked.degradationReason ?? "当前状态不可接受降级"}）`
+            : registered ? `${modelId} 已是完整配置，无需降级接受。` : `未知或不可降级模型：${modelId}`,
+          "warning",
         )
         return
       }
