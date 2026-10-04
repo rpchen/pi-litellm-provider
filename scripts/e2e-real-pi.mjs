@@ -693,8 +693,12 @@ export default function bootstrapProbe(pi) {
     "模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 0",
     "the initial publication partition",
   )
-  assert(baselineNotice.message.includes("状态：正常"), "Diagnostics did not report a ready endpoint")
-  assert(baselineNotice.message.includes("models.dev：degraded"), "models.dev unavailability must stay visible in diagnostics")
+  assert(baselineNotice.message.includes("状态：正常"), `Diagnostics did not report a ready endpoint: ${baselineNotice.message}`)
+  console.log(`[publication baseline]\n${baselineNotice.message}`)
+  assert(
+    baselineNotice.message.includes("models.dev：degraded"),
+    `models.dev unavailability must stay visible in diagnostics: ${baselineNotice.message}`,
+  )
   assert(
     baselineNotice.message.includes("未完成：e2e-zero-limit · invalid-metadata"),
     `illegal limits must stay visible in diagnostics: ${baselineNotice.message}`,
