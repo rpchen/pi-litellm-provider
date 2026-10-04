@@ -15,7 +15,7 @@ pi install git:github.com/rpchen/pi-litellm-provider
 锁定当前发行版：
 
 ```bash
-pi install git:github.com/rpchen/pi-litellm-provider#v0.6.0
+pi install git:github.com/rpchen/pi-litellm-provider#v0.7.0
 ```
 
 要求：Pi `>=0.87.1`；LiteLLM 地址使用 `http://` 或 `https://`；API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型。
@@ -114,7 +114,7 @@ Runtime Identity 是当前正在运行的扩展 artifact 自身的不可变身�
 ```text
 Runtime Identity
 
-Plugin Version   0.6.0
+Plugin Version   0.7.0
 Artifact         937e9377
 Core Commit      649bc84f
 ```

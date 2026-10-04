@@ -1,6 +1,6 @@
 {
   "name": "pi-litellm-provider",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Pi extension that auto-discovers providers, protocols, models and reasoning variants from a LiteLLM proxy",
   "type": "module",
   "license": "MIT",
