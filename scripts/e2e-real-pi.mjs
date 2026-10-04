@@ -933,11 +933,14 @@ export default function bootstrapProbe(pi) {
     }
 
     stage("1 list")
-    // 1. list: bystander shows active + connected
+    // 1. list: bystander shows enabled + active + saved API Key. Wait until the bystander's
+    // models have really reached /models (proof that applied.kind === "active" in this process)
+    // before asserting on the status label — listing before that yields "已启用 · 未生效".
+    await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-untouched"), "stage 1 bootstrap")
     let result = await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => {
         assert(r.options.includes("＋ 新增 endpoint"), "Add is not offered as a real select option")
-        assert(r.options.includes("✓ untouched · 已启用 · 已连接"), `unexpected list: ${JSON.stringify(r.options)}`)
+        assert(r.options.includes("✓ untouched · 已启用 · 已生效 · 已保存 API Key"), `unexpected list: ${JSON.stringify(r.options)}`)
       } },
     ])
 
@@ -947,7 +950,7 @@ export default function bootstrapProbe(pi) {
       { select: "＋ 新增 endpoint" },
       { input: "e2e-new", check: (r) => assert(/Endpoint ID/.test(r.title), "Add must first ask for the ID") },
       { input: mgmtA.baseUrl, check: (r) => assert(/Base URL/.test(r.title), "Add must then ask for the Base URL") },
-      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 未连接"), `new endpoint must be inactive/unconnected: ${JSON.stringify(r.options)}`) },
+      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 未保存 API Key"), `new endpoint must be inactive/unconnected: ${JSON.stringify(r.options)}`) },
     ])
     let config = readJson(configPath)
     assert(config.endpoints["e2e-new"]?.baseUrl === mgmtA.baseUrl, "Add did not write the endpoint")
@@ -964,7 +967,7 @@ export default function bootstrapProbe(pi) {
       { select: /e2e-new/ },
       { select: "连接 API Key" },
       { input: SECRET_A },
-      { select: "返回", check: (r) => assert(/未启用 · 已连接/.test(r.title), "connect must not activate") },
+      { select: "返回", check: (r) => assert(/未启用 · 已保存 API Key/.test(r.title), "connect must not activate") },
       { select: undefined },
     ])
     noKeyLeak(result, SECRET_A)
@@ -1037,13 +1040,16 @@ export default function bootstrapProbe(pi) {
     await rpc.close()
     rpc = startMgmtPi()
     await readyWithin(rpc, "restart#1")
+    // Ensure both endpoints have actually reached /models (proof of applied.kind=active in
+    // the new process) before asserting their management labels — a freshly restarted Pi
+    // can transiently show "已启用 · 未生效" while the first refresh is still in flight.
+    await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new") && list.some((m) => m.provider === "litellm-untouched"), "restart")
     await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => {
-        assert(r.options.includes("✓ e2e-new · 已启用 · 已连接"), `state lost across restart: ${JSON.stringify(r.options)}`)
-        assert(r.options.includes("✓ untouched · 已启用 · 已连接"), "bystander lost across restart")
+        assert(r.options.includes("✓ e2e-new · 已启用 · 已生效 · 已保存 API Key"), `state lost across restart: ${JSON.stringify(r.options)}`)
+        assert(r.options.includes("✓ untouched · 已启用 · 已生效 · 已保存 API Key"), "bystander lost across restart")
       } },
     ])
-    await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new") && list.some((m) => m.provider === "litellm-untouched"), "restart")
     assert(exists(storeFile) && readJson(storeFile)["litellm-e2e-new"], "discovery snapshot was never persisted for the endpoint")
 
     stage("9 deactivate")
@@ -1096,7 +1102,7 @@ export default function bootstrapProbe(pi) {
       { select: "＋ 新增 endpoint" },
       { input: "e2e-new" },
       { input: mgmtA.baseUrl },
-      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 未连接"), "re-added id did not start clean") },
+      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 未保存 API Key"), "re-added id did not start clean") },
     ])
     assert(readJson(authFile)["litellm-e2e-new"] === undefined, "re-added id inherited an old credential")
 
@@ -1156,10 +1162,22 @@ export default function bootstrapProbe(pi) {
 
     rpc = startLegacyPi()
     await readyWithin(rpc, "legacy-phase-start")
+    // Wait until the legacy default's models have really applied before asserting the
+    // management label — freshly-started Pi can transiently show "已启用 · 未生效".
+    {
+      const deadline = Date.now() + 30_000
+      let applied = false
+      while (Date.now() < deadline) {
+        const list = (await rpc.request({ type: "get_available_models" })).response
+        if (list?.some?.((m) => m.provider === "litellm")) { applied = true; break }
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+      if (!applied) throw new Error("legacy default models never applied")
+    }
 
     // list: legacy default is a real endpoint (connected + active)
     let result3 = await rpc.driveCommand("/litellm-endpoints", [
-      { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已连接"), `legacy default missing from list: ${JSON.stringify(r.options)}`) },
+      { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已生效 · 已保存 API Key"), `legacy default missing from list: ${JSON.stringify(r.options)}`) },
     ])
 
     // credential management on the legacy default (Pi's credential store has no form): Replace
@@ -1225,9 +1243,21 @@ export default function bootstrapProbe(pi) {
     await rpc.close()
     rpc = startLegacyPi({ LITELLM_BASE_URL: legacyB.baseUrl })
     await readyWithin(rpc, "env-legacy-start")
+    // Wait until the env-legacy default's models have really applied before asserting the
+    // management label — freshly-started Pi can transiently show "已启用 · 未生效".
+    {
+      const deadline = Date.now() + 30_000
+      let applied = false
+      while (Date.now() < deadline) {
+        const list = (await rpc.request({ type: "get_available_models" })).response
+        if (list?.some?.((m) => m.provider === "litellm")) { applied = true; break }
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+      if (!applied) throw new Error("env-legacy default models never applied")
+    }
 
     result3 = await rpc.driveCommand("/litellm-endpoints", [
-      { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已连接"), `env-legacy default missing: ${JSON.stringify(r.options)}`) },
+      { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已生效 · 已保存 API Key"), `env-legacy default missing: ${JSON.stringify(r.options)}`) },
     ])
 
     // Delete Cancel on the env-legacy default: the final confirmation must precede any migration
