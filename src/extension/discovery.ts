@@ -47,6 +47,7 @@ import {
   type ProviderDiagnosticsState,
   type PublicationSummary,
 } from "./diagnostics.ts"
+import type { AppliedState, ApplyErrorCategory } from "./endpoint-state.ts"
 import { toProviderModels, toProviderModelsWithPublication } from "./map.ts"
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "./types.ts"
 
@@ -70,6 +71,12 @@ export interface DiscoveryDeps {
     readonly acceptedDegradedIDs?: ReadonlySet<string>
     readonly now?: number
   }
+  /**
+   * Applied-state sink: the canonical state writer invoked on every terminal
+   * outcome of this refresh (success → active, category-tagged error → error).
+   * Absent means "no canonical state writer" (legacy/discovery-only callers).
+   */
+  appliedWriter?: (next: AppliedState) => void
 }
 
 /** Result of one network-phase discovery, before persistence. */
@@ -290,6 +297,28 @@ export async function refreshProviderModels(
     return []
   }
 
+  // A definition-level invalid endpoint must never reach the network. The
+  // adapter refuses apply with config-invalid before any request is attempted.
+  if ((config.validation?.kind ?? "ok") === "invalid") {
+    await publishIfChanged(context, stored, [])
+    setProviderDiagnostics(diagnosticsState, {
+      status: "config-error",
+      modelCount: 0,
+      models: [],
+      cache: createDiscoveryCacheDiagnostics({ source: "none" }),
+      note: config.validation && config.validation.kind === "invalid"
+        ? `endpoint 配置非法：${config.validation.reason}`
+        : "endpoint 配置非法。",
+    })
+    deps.appliedWriter?.({
+      kind: "error",
+      category: "config-invalid",
+      message: config.validation && config.validation.kind === "invalid" ? config.validation.reason : undefined,
+      at: new Date().toISOString(),
+    })
+    return []
+  }
+
   if (!apiKey) {
     // The host only reaches the network phase when a credential resolved; treat a missing
     // key defensively as unconfigured rather than sending an unauthenticated request.
@@ -301,6 +330,11 @@ export async function refreshProviderModels(
       models: [],
       cache: createDiscoveryCacheDiagnostics({ source: "none" }),
       note: "请使用 /login 或 LITELLM_API_KEY 配置凭据。",
+    })
+    deps.appliedWriter?.({
+      kind: "error",
+      category: "credential-missing",
+      at: new Date().toISOString(),
     })
     return []
   }
@@ -377,6 +411,11 @@ export async function refreshProviderModels(
       lastSuccessfulDiscoveryAt: new Date(coordinated.refreshedAt).toISOString(),
       note: coordinated.source === "stale" ? "刷新失败，保留上次成功结果。" : undefined,
     })
+    deps.appliedWriter?.({
+      kind: "active",
+      lastDiscoveryAt: new Date(coordinated.refreshedAt).toISOString(),
+      modelCount: outcome.models.length,
+    })
     return outcome.models
   } catch (error) {
     // Host cancellation (a newer refresh superseded this one, the model selector's 15s
@@ -396,6 +435,11 @@ export async function refreshProviderModels(
         cache: createDiscoveryCacheDiagnostics({ source: "none" }),
         note: "LiteLLM 返回 401/403；请检查当前凭据权限。",
       })
+      deps.appliedWriter?.({
+        kind: "error",
+        category: "auth",
+        at: new Date().toISOString(),
+      })
       return []
     }
     if (normalizeLiteLLMURLFailed(error, config.baseUrl)) {
@@ -411,11 +455,25 @@ export async function refreshProviderModels(
         cache: createDiscoveryCacheDiagnostics({ source: "none" }),
         note: "LiteLLM 地址无法规范化；未发起发现请求。",
       })
+      deps.appliedWriter?.({
+        kind: "error",
+        category: "config-invalid",
+        message: "address normalization failed",
+        at: new Date().toISOString(),
+      })
       return []
     }
     // Network / timeout / 5xx / 429 / parse / redirect / 404-exhausted: keep last good
-    // catalog by letting the host record the error.
+    // catalog by letting the host record the error. Categorise into the frozen taxonomy
+    // so the canonical state can distinguish Enabled · Error from Enabled · Not applied.
     logger.warn(`LiteLLM 发现失败，保留上次结果：${messageOf(error)}`)
+    const appliedCategory: ApplyErrorCategory = (() => {
+      if (error instanceof DiscoveryError) {
+        if (error.kind === "parse") return "parse"
+        return "network"
+      }
+      return "network"
+    })()
     const state = coordinator.state(discoveryKey)
     const retained = restoreCompatibleModels()
     setProviderDiagnostics(diagnosticsState, {
@@ -434,6 +492,11 @@ export async function refreshProviderModels(
         ? restored.snapshot?.discoveredAt
         : new Date(state.refreshedAt).toISOString(),
       note: "发现失败；详细错误已通过宿主日志记录。",
+    })
+    deps.appliedWriter?.({
+      kind: "error",
+      category: appliedCategory,
+      at: new Date().toISOString(),
     })
     throw error
   }

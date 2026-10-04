@@ -85,7 +85,17 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 | `/login` / `/logout` | 保存、切换或移除 LiteLLM 凭据 |
 | `/reload` | 修改 `litellm.json` 后重新读取配置 |
 
-`/litellm-diagnostics` 只读取已有状态，**不会发起模型请求，也不会产生额外 token 消耗**；输出不会包含 API Key、LiteLLM 地址或原始传输错误。诊断中的“最近成功发现”“下次允许重试”等绝对时间会按**当前运行 Pi 的宿主机器时区**显示，并附带 UTC 偏移；内部 snapshot/cache 时间仍保持标准 UTC/epoch。
+`/litellm-diagnostics` 只读取已有状态，**不会发起模型请求，也不会产生额外 token 消耗**；输出不会包含 API Key、LiteLLM 地址或原始传输错误。诊断中的"最近成功发现""下次允许重试"等绝对时间会按**当前运行 Pi 的宿主机器时区**显示，并附带 UTC 偏移；内部 snapshot/cache 时间仍保持标准 UTC/epoch。
+
+**传 endpoint id 时永远给出完整详情**：`/litellm-diagnostics <id>` 对任意状态（含 `未启用`、`配置非法`、`需要认证`、`未生效`、`出错`）都输出期望状态、配置合法性、凭据、Runtime apply、最近一次错误分类、最近成功发现时刻、当前注册模型数，以及 discovery / publication / 缓存 / Runtime Identity 细节，不会退化为占位信息。
+
+**`/models`（Pi 模型选择器、`/pi --list-models litellm`）只承诺现实**：它只展示当前**真正成功应用到运行时的 endpoint** 的模型。具体来说，endpoint 只有同时满足以下三条才会出现在 `/models`：
+
+1. 期望状态是 `已启用`
+2. 配置合法（`baseUrl` 是合法 http(s)，无凭据等）
+3. 当前进程里最近一次 apply 成功（`已生效`）
+
+任一条件不满足，该 endpoint 的模型就从 `/models` 消失，包括历史 snapshot 中残留的模型。这意味着 `已启用 · 未生效` / `已启用 · 出错` / `已启用 · 需要认证` / `已启用 · 配置非法` / `未启用` 的 endpoint 都不在 `/models` 中。历史 discovery 结果仍然保留在 `models-store.json` 用于诊断回放，但不会被伪装成当前可用模型。
 
 `/litellm-audit-export` 每次执行都会在 `<agentDir>/litellm-audit/` 下生成一个新 JSON 文件，不覆盖已有报告。报告包含已注册模型的 allowlist 字段与完整的 Runtime Identity，不包含 API Key、LiteLLM 地址或原始上游响应；分享前请自行检查。导出失败不会影响 provider 注册与轮询。
 
@@ -161,11 +171,40 @@ pi --list-models litellm
 
 ### 管理 endpoint（`/litellm-endpoints`）
 
-执行 `/litellm-endpoints` 打开管理中心，用 Pi 的原生选择框操作（`↑` / `↓` 选择，`Enter` 确认，`Esc` 返回/关闭）。列表每行显示 `✓`/`○`（启用/未启用）和凭据状态（已连接/未连接）。
+执行 `/litellm-endpoints` 打开管理中心，用 Pi 的原生选择框操作（`↑` / `↓` 选择，`Enter` 确认，`Esc` 返回/关闭）。列表每行显示 `✓`/`○`（启用/未启用）、用户可见状态与凭据状态。
+
+#### Endpoint 状态模型
+
+每个 endpoint 的用户可见状态由四个独立维度派生：
+
+| 维度 | 含义 |
+|---|---|
+| **期望状态** | 你在配置/激活文件里要求的：`已启用` 或 `未启用`（来自 `litellm.activation.json`） |
+| **配置** | `litellm.json` 里 endpoint 定义是否合法（Base URL 是否是合法 http(s)、不带凭据等） |
+| **凭据** | 是否已保存 API Key（或 legacy `default` 使用 `LITELLM_API_KEY`） |
+| **Runtime** | 当前进程里，该 endpoint 是否真正被应用成功（provider 注册 + 最近一次 discovery 的结果） |
+
+由这四个维度派生的用户可见状态标签：
+
+| 标签 | 含义 | 下一步 |
+|---|---|---|
+| `已启用 · 已生效` | 已启用且当前进程里 apply 成功 | 正常使用 `/models` |
+| `已启用 · 需要认证` | 已启用但未保存 API Key（且 legacy 无 `LITELLM_API_KEY`） | 在 endpoint 详情选 **连接 API Key**，或 `/login` |
+| `已启用 · 未生效` | 已启用，但当前进程尚未成功应用一次 | 在 endpoint 详情选 **重新应用** 触发强制 refresh |
+| `已启用 · 出错` | 启用后最近一次 apply 失败（网络/认证/解析等） | 查看 `/litellm-diagnostics <id>` 的最近错误；修复后在详情选 **重新应用** |
+| `已启用 · 配置非法` | endpoint 的 `baseUrl` 等定义非法；不会被注册 | 在详情选 **修改 Base URL** 修复 |
+| `未启用` | 配置合法但已停用 | 在详情选 **启用** |
+| `未启用 · 配置非法` | 既停用又配置非法；仍然可见可修复 | 同上先修复，再视需要启用 |
+
+**配置表达你的意图，runtime 表达现实。** 启用成功但 apply 失败时，持久化 activation 仍是 `已启用`——我们不会因为 runtime 临时失败而偷偷把你的配置改回 `未启用`，UI 也不会谎报成功。
+
+**凭据状态只描述是否已保存，不等于"已连接"：** `已保存 API Key` 不蕴含 endpoint 可达；要确认可达，看 `Runtime` 是否是 `已生效`。
+
+非法 endpoint 永远不会从管理界面或 diagnostics 消失：即使 `未启用 · 配置非法`，它仍然列出并按提示修复。
 
 | 想做的事 | 怎么做 |
 |---|---|
-| **新增** | 选 **＋ 新增 endpoint** → 输入 Endpoint ID → 输入 Base URL。新 endpoint **默认未启用、未连接**，不会自动启用 |
+| **新增** | 选 **＋ 新增 endpoint** → 输入 Endpoint ID → 输入 Base URL。新 endpoint **默认未启用、未保存 API Key**，不会自动启用 |
 | **修改 Base URL** | 选中 endpoint → **修改 Base URL**。ID 不可修改（没有 rename）；`protocolOverrides` 等配置原样保留 |
 | **连接 / 替换 / 断开 API Key** | 选中 endpoint → **连接 API Key** / **替换 API Key** / **断开凭据**。已保存的 Key 永远不会显示；断开只删除该 endpoint 的 Key |
 | **启用 / 停用** | 选中 endpoint → **启用** / **停用**；也可以用列表里的 **全部启用** / **全部停用**。立即生效，允许 0 个启用 |

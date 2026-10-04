@@ -16,6 +16,7 @@ import { type DiscoveryCoordinator, type DiscoveryDiagnostics, type LastKnownGoo
 import { type FetchLike } from "../net/fetch.ts";
 import type { ExtensionConfig } from "./config.ts";
 import { type ProviderDiagnosticsState, type PublicationSummary } from "./diagnostics.ts";
+import type { AppliedState } from "./endpoint-state.ts";
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "./types.ts";
 export interface DiscoveryLogger {
     warn(message: string): void;
@@ -36,6 +37,12 @@ export interface DiscoveryDeps {
         readonly acceptedDegradedIDs?: ReadonlySet<string>;
         readonly now?: number;
     };
+    /**
+     * Applied-state sink: the canonical state writer invoked on every terminal
+     * outcome of this refresh (success → active, category-tagged error → error).
+     * Absent means "no canonical state writer" (legacy/discovery-only callers).
+     */
+    appliedWriter?: (next: AppliedState) => void;
 }
 /** Result of one network-phase discovery, before persistence. */
 export interface DiscoveryOutcome {

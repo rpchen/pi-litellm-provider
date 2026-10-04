@@ -2,6 +2,10 @@
  * `/litellm-endpoints` management center: list / add / edit / delete endpoints, manage each
  * endpoint's credential, and toggle activation. Every choice, confirmation and text entry goes through
  * the host's real `ui.select / confirm / input` dialogs (TUI and RPC). See design.md D1/D4/D5/D6.
+ *
+ * The user-visible status label is derived from the canonical per-endpoint state
+ * (`src/extension/endpoint-state.ts`) shared with `/litellm-diagnostics` and `/models`
+ * gating, so no view invents its own truth.
  */
 import { providerIdForEndpoint } from "./provider-id.ts"
 import type { EndpointActivation } from "./activation.ts"
@@ -13,6 +17,13 @@ import {
   validateBaseUrl,
   validateEndpointId,
 } from "./config-store.ts"
+import {
+  canRetry,
+  credentialLabel,
+  statusLabel,
+  userVisibleStatus,
+  type EndpointState,
+} from "./endpoint-state.ts"
 import {
   credentialState,
   removeModelsStoreEntry,
@@ -44,24 +55,20 @@ export interface ManagementHost {
   sync(ctx: ManagementContext): void
   /** Drop in-memory diagnostics for a deleted endpoint. */
   forget(endpointId: string): void
+  /** Canonical state for a configured endpoint (desired × validation × credential × applied). */
+  endpointState(endpointId: string): EndpointState
   /** Test seams for the config writer. */
   write?: { rename?: (from: string, to: string) => void; beforeCommit?: () => void }
 }
 
-type Credential = "stored" | "environment" | "none" | "unknown"
-
 interface EndpointView {
   id: string
   baseUrl: string
-  active: boolean
-  credential: Credential
-}
-
-const CREDENTIAL_LABEL: Record<Credential, string> = {
-  stored: "已连接",
-  environment: "已连接（环境变量）",
-  none: "未连接",
-  unknown: "凭据状态未知",
+  state: EndpointState
+  /** User-visible status label, e.g. "已启用 · 已生效" / "未启用 · 配置非法". */
+  statusLabel: string
+  /** Credential label, e.g. "已保存 API Key" / "未保存 API Key". */
+  credentialLabel: string
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -69,19 +76,21 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 export function createEndpointManager(host: ManagementHost) {
   const views = (): EndpointView[] => {
     const registry = host.registry()
-    const activation = host.activation()
-    const selected = new Set(activation.mode === "selected" ? activation.endpointIds : Object.keys(registry.endpoints))
     return Object.entries(registry.endpoints)
-      .filter(([, endpoint]) => registry.mode === "explicit" || endpoint.baseUrl.length > 0)
+      .filter(([, endpoint]) => registry.mode === "explicit" || endpoint.baseUrl.length > 0 || (endpoint.validation?.kind ?? "ok") === "invalid")
       .map(([id, endpoint]) => {
-        const stored = credentialState(host.agentDir, providerIdForEndpoint(id))
-        let credential: Credential = stored === "stored" ? "stored" : stored === "unknown" ? "unknown" : "none"
-        if (credential === "none" && id === DEFAULT_ENDPOINT_ID && host.env.LITELLM_API_KEY?.trim()) credential = "environment"
-        return { id, baseUrl: endpoint.baseUrl, active: selected.has(id), credential }
+        const canonical = host.endpointState(id)
+        return {
+          id,
+          baseUrl: endpoint.baseUrl,
+          state: canonical,
+          statusLabel: statusLabel(userVisibleStatus(canonical)),
+          credentialLabel: credentialLabel(canonical.credential),
+        }
       })
   }
 
-  const activeIds = (): string[] => views().filter((view) => view.active).map((view) => view.id)
+  const activeIds = (): string[] => views().filter((view) => view.state.desired === "enabled").map((view) => view.id)
 
   const refreshProviders = async (ctx: ManagementContext, ids: string[]) => {
     if (ids.length === 0) return
@@ -222,7 +231,7 @@ export function createEndpointManager(host: ManagementHost) {
       await mutateConfig(host.configPath, { kind: "edit", id: view.id, baseUrl }, { env: host.env, ...host.write })
       host.reload()
       host.sync(ctx)
-      if (view.active) await refreshProviders(ctx, [view.id])
+      if (view.state.desired === "enabled") await refreshProviders(ctx, [view.id])
       ctx.ui.notify(`已更新 ${view.id} 的 Base URL`, "info")
     } catch (error) {
       fail(ctx, error)
@@ -230,14 +239,14 @@ export function createEndpointManager(host: ManagementHost) {
   }
 
   const connect = async (ctx: ManagementContext, view: EndpointView) => {
-    const replacing = view.credential === "stored"
+    const replacing = view.state.credential === "stored"
     const raw = await ctx.ui.input(`${replacing ? "替换" : "连接"} ${view.id} 的 API Key`, "sk-xxx")
     if (raw === undefined) return
     const check = validateApiKey(raw)
     if (!check.ok) return ctx.ui.notify(check.message, "warning")
     try {
       await saveStoredCredential(host.agentDir, providerIdForEndpoint(view.id), check.key)
-      if (view.active) await refreshProviders(ctx, [view.id])
+      if (view.state.desired === "enabled") await refreshProviders(ctx, [view.id])
       ctx.ui.notify(`${view.id} 的 API Key 已${replacing ? "替换" : "保存"}`, "info")
     } catch (error) {
       fail(ctx, error)
@@ -249,7 +258,7 @@ export function createEndpointManager(host: ManagementHost) {
     if (!ok) return
     try {
       await removeStoredCredential(host.agentDir, providerIdForEndpoint(view.id))
-      if (view.active) await refreshProviders(ctx, [view.id])
+      if (view.state.desired === "enabled") await refreshProviders(ctx, [view.id])
       ctx.ui.notify(`已断开 ${view.id} 的凭据`, "info")
     } catch (error) {
       fail(ctx, error)
@@ -297,20 +306,26 @@ export function createEndpointManager(host: ManagementHost) {
       host.reload()
       const view = views().find((entry) => entry.id === id)
       if (!view) return ctx.ui.notify(`未知 LiteLLM endpoint：${id}`, "warning")
+      const canConnect = view.state.credential !== "unknown"
       const options = [
-        view.active ? "停用" : "启用",
+        view.state.desired === "enabled" ? "停用" : "启用",
         "修改 Base URL",
-        view.credential === "stored" ? "替换 API Key" : "连接 API Key",
-        ...(view.credential === "stored" ? ["断开凭据"] : []),
+        view.state.credential === "stored" ? "替换 API Key" : "连接 API Key",
+        ...(view.state.credential === "stored" ? ["断开凭据"] : []),
+        ...(canRetry(view.state) ? ["重新应用"] : []),
         "删除 endpoint",
         "返回",
       ]
-      const title = `${view.id} · ${view.baseUrl} · ${view.active ? "已启用" : "未启用"} · ${CREDENTIAL_LABEL[view.credential]}`
+      const title = `${view.id} · ${view.baseUrl} · ${view.statusLabel} · ${view.credentialLabel}`
       const choice = await ctx.ui.select(title, options)
       if (choice === undefined || choice === "返回") return
       if (choice === "启用" || choice === "停用") {
         const current = activeIds()
-        await applyActivation(ctx, view.active ? current.filter((existing) => existing !== id) : [...current, id])
+        await applyActivation(ctx, view.state.desired === "enabled" ? current.filter((existing) => existing !== id) : [...current, id])
+      } else if (choice === "重新应用") {
+        await ctx.modelRegistry.refresh({ providers: [providerIdForEndpoint(view.id)], force: true }).catch((error) => {
+          ctx.ui.notify(`重新应用失败：${errorText(error)}`, "error")
+        })
       } else if (choice === "修改 Base URL") await editBaseUrl(ctx, view)
       else if (choice === "连接 API Key" || choice === "替换 API Key") await connect(ctx, view)
       else if (choice === "断开凭据") await disconnect(ctx, view)
@@ -319,7 +334,7 @@ export function createEndpointManager(host: ManagementHost) {
   }
 
   const line = (view: EndpointView) =>
-    `${view.active ? "✓" : "○"} ${view.id} · ${view.active ? "已启用" : "未启用"} · ${CREDENTIAL_LABEL[view.credential]}`
+    `${view.state.desired === "enabled" ? "✓" : "○"} ${view.id} · ${view.statusLabel} · ${view.credentialLabel}`
 
   const announce = (ctx: ManagementContext) =>
     ctx.ui.notify(`已激活 endpoint：${activeIds().join(", ") || "无"}`, "info")

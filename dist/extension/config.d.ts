@@ -1,3 +1,4 @@
+import type { ValidationState } from "./endpoint-state.ts";
 export type ConfigProtocol = "chat" | "responses" | "messages";
 export interface ExtensionConfig {
     /** Present only for explicit multi-endpoint mode; legacy single-endpoint keeps this undefined. */
@@ -9,6 +10,14 @@ export interface ExtensionConfig {
     globalConfigPath: string;
     /** Kept for discovery/test compatibility; PR9 no longer reads project config. */
     projectConfigPath: string;
+    /**
+       * Endpoint definition validation. `invalid` means the user's definition is
+       * malformed (bad URL/userinfo/etc.); runtime apply refuses the endpoint and
+       * the canonical state translates it into Enabled/Disabled · Invalid configuration.
+       * A missing credential is NOT a validation failure.
+       * When absent (legacy test fixtures), the effective value is `{ kind: "ok" }`.
+       */
+    validation?: ValidationState;
 }
 export interface EndpointRegistryConfig {
     readonly mode: "legacy" | "explicit";

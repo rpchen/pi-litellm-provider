@@ -97,14 +97,14 @@ describe("endpoint management: listing", () => {
   test("[LIST-SINGLE] one endpoint → its line shows active + credential state", async () => {
     const t = setup({ endpoints: { solo: { baseUrl: "https://s.example" } } }, { auth: { "litellm-solo": { type: "api_key", key: "sk-x" } } })
     await t.run("", [{ select: undefined }])
-    expect(t.log[0]!.options).toContain("✓ solo · 已启用 · 已连接")
+    expect(t.log[0]!.options).toContain("✓ solo · 已启用 · 未生效 · 已保存 API Key")
   })
 
   test("[LIST-MULTI] active/inactive and connected/not-connected are independent per endpoint", async () => {
     const t = setup(TWO, { auth: { "litellm-company": { type: "api_key", key: "sk-c" } }, activation: { mode: "selected", endpointIds: ["default"] } })
     await t.run("", [{ select: undefined }])
-    expect(t.log[0]!.options).toContain("✓ default · 已启用 · 未连接")
-    expect(t.log[0]!.options).toContain("○ company · 未启用 · 已连接")
+    expect(t.log[0]!.options).toContain("✓ default · 已启用 · 需要认证 · 未保存 API Key")
+    expect(t.log[0]!.options).toContain("○ company · 未启用 · 已保存 API Key")
   })
 
   test("[LIST-LEGACY-GHOST] legacy default without a configured address is not listed; only Add is offered", async () => {
@@ -140,7 +140,7 @@ describe("endpoint management: add", () => {
     expect([...t.registered.keys()].sort()).toEqual(["litellm", "litellm-company"])
     expect(existsSync(t.file("auth.json"))).toBe(false)
     await t.run("", [{ select: undefined }])
-    expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未连接")
+    expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未保存 API Key")
   })
 
   test("[ADD-DUP] duplicate id re-prompts, nothing written until a valid id", async () => {
@@ -336,7 +336,7 @@ describe("endpoint management: add rollback", () => {
     // next reload/rebuild succeeds: the committed endpoint is listed, still inactive
     rmSync(t.file("fail-register"))
     await t.run("", [{ select: undefined }])
-    expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未连接")
+    expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未保存 API Key")
   })
 
   test("[ADD-ROLLBACK] a rollback failure is reported together with the primary failure", async () => {
@@ -373,7 +373,7 @@ describe("endpoint management: credentials", () => {
     expect(t.json("litellm.activation.json")).toEqual({ mode: "selected", endpointIds: ["default"] })
     expect(t.registered.has("litellm-company")).toBe(false)
     expect(JSON.stringify({ log: t.log, notes: t.notes })).not.toContain("sk-secret-123")
-    expect(t.log.find((l) => l.options?.includes("○ company · 未启用 · 已连接"))).toBeTruthy()
+    expect(t.log.find((l) => l.options?.includes("○ company · 未启用 · 已保存 API Key"))).toBeTruthy()
   })
 
   test("[CRED-REPLACE][CRED-NO-ECHO] replace overwrites without ever showing the old key", async () => {
@@ -417,13 +417,13 @@ describe("endpoint management: credentials", () => {
     expect(t.log[0]!.options!.some((o) => o.includes("凭据状态未知"))).toBe(true)
   })
 
-  test("[CRED-LOGIN-CONSISTENT] a credential stored by the host /login is listed as connected; the legacy env key is labelled environment, and disconnect leaves env alone", async () => {
+  test("[CRED-LOGIN-CONSISTENT] a credential stored by the host /login is reported as saved; the legacy env key is labelled as coming from the environment, and disconnect leaves env alone", async () => {
     const t = setup({ baseUrl: "https://old.example" }, { env: { LITELLM_API_KEY: "sk-env" } })
     await t.run("", [{ select: undefined }])
-    expect(t.log[0]!.options).toContain("✓ default · 已启用 · 已连接（环境变量）")
+    expect(t.log[0]!.options).toContain("✓ default · 已启用 · 未生效 · API Key 来自环境变量")
     writeFileSync(t.file("auth.json"), JSON.stringify({ litellm: { type: "api_key", key: "sk-login" } }))
     await t.run("", [{ select: undefined }])
-    expect(t.log.at(-1)!.options).toContain("✓ default · 已启用 · 已连接")
+    expect(t.log.at(-1)!.options).toContain("✓ default · 已启用 · 未生效 · 已保存 API Key")
   })
 })
 
@@ -498,7 +498,7 @@ describe("endpoint management: delete", () => {
     expect(t.json("auth.json")["litellm-company"]).toBeUndefined()
     expect(t.json("models-store.json")["litellm-company"]).toBeUndefined()
     await t.run("", [{ select: undefined }])
-    expect(t.log.at(-1)!.options).toContain("○ company · 未启用 · 未连接")
+    expect(t.log.at(-1)!.options).toContain("○ company · 未启用 · 未保存 API Key")
   })
 
   test("[DEL-PARTIAL-FAILURE] a cleanup failure before the definition is removed keeps the endpoint so Delete can be retried", async () => {
@@ -507,5 +507,27 @@ describe("endpoint management: delete", () => {
     await t.run("", [{ select: /company/ }, { select: "删除 endpoint" }, { confirm: true }, { select: "返回" }, { select: undefined }])
     expect(t.json("litellm.json").endpoints.company).toBeDefined()
     expect(t.notes.some((n) => n.type === "error" && n.message.includes("可重试"))).toBe(true)
+  })
+
+  test("[INVALID-VISIBLE] invalid baseUrl stays listed and labeled; runtime never registers it", async () => {
+    const t = setup(
+      { endpoints: { good: { baseUrl: "https://good.example" }, broken: { baseUrl: "ftp://broken.example" } } },
+      { activation: { mode: "selected", endpointIds: [] } },
+    )
+    await t.run("", [{ select: undefined }])
+    expect(t.log[0]!.options).toContain("○ good · 未启用 · 未保存 API Key")
+    expect(t.log[0]!.options).toContain("○ broken · 未启用 · 配置非法 · 未保存 API Key")
+    expect(t.registered.has("litellm-broken")).toBe(false)
+    expect(t.registered.has("litellm-good")).toBe(false)
+  })
+
+  test("[INVALID-ENABLED] enabled invalid endpoint shows 已启用 · 配置非法 without network access", async () => {
+    const t = setup(
+      { endpoints: { broken: { baseUrl: "ftp://broken.example" } } },
+      { activation: { mode: "selected", endpointIds: ["broken"] }, auth: { "litellm-broken": { type: "api_key", key: "sk-x" } } },
+    )
+    await t.run("", [{ select: undefined }])
+    expect(t.log[0]!.options).toContain("✓ broken · 已启用 · 配置非法 · 已保存 API Key")
+    expect(t.registered.has("litellm-broken")).toBe(false)
   })
 })

@@ -7,8 +7,10 @@ import { createAuditReport } from "./audit.js";
 import { auditDirectory, auditFailureMessage, writeAuditFile } from "./audit-file.js";
 import { DEFAULT_ENDPOINT_ID, loadEndpointRegistry, } from "./config.js";
 import { createProviderDiagnosticsState, formatProviderDiagnostics, publicationControllerForState, setProviderDiagnostics, } from "./diagnostics.js";
+import { applyErrorLabel, credentialLabel, statusLabel, userVisibleStatus, } from "./endpoint-state.js";
 import { formatStartupIdentityLine, getRuntimeIdentity } from "./runtime-identity.js";
 import { createProviderRefreshCoordinator, refreshProviderModels } from "./discovery.js";
+import { credentialState as resolveCredentialState } from "./host-state.js";
 import { PROVIDER_ID, providerIdForEndpoint, providerNameForEndpoint, } from "./provider-id.js";
 export { PROVIDER_ID, providerIdForEndpoint, providerNameForEndpoint };
 export function normalizedProviderBaseUrl(raw) {
@@ -82,6 +84,8 @@ export default function piLitellmProvider(pi, internals = {}) {
     const diagnostics = new Map();
     const registered = new Set();
     const pollStops = new Map();
+    // Canonical endpoint state — the source of truth every user-visible surface derives from.
+    const endpointStates = new Map();
     const stateFor = (endpointId) => {
         let state = diagnostics.get(endpointId);
         if (!state) {
@@ -89,6 +93,39 @@ export default function piLitellmProvider(pi, internals = {}) {
             diagnostics.set(endpointId, state);
         }
         return state;
+    };
+    const resolveCredential = (endpointId) => {
+        const stored = resolveCredentialState(agentDir, providerIdForEndpoint(endpointId));
+        if (stored === "stored")
+            return "stored";
+        if (stored === "unknown")
+            return "unknown";
+        // Environment credential is legacy/default-only (matches buildProviderConfig).
+        if (endpointId === DEFAULT_ENDPOINT_ID && env.LITELLM_API_KEY?.trim())
+            return "environment";
+        return "none";
+    };
+    const computeDesired = (endpointId) => activeEndpointIds(Object.keys(registry.endpoints), activation).includes(endpointId) ? "enabled" : "disabled";
+    const computeValidation = (endpointId) => registry.endpoints[endpointId]?.validation ?? { kind: "ok" };
+    const setApplied = (endpointId, applied) => {
+        const existing = endpointStates.get(endpointId);
+        const desired = computeDesired(endpointId);
+        const validation = computeValidation(endpointId);
+        const credential = resolveCredential(endpointId);
+        endpointStates.set(endpointId, { endpointId, desired, validation, credential, applied });
+    };
+    const endpointStateFor = (endpointId) => {
+        const existing = endpointStates.get(endpointId);
+        const desired = computeDesired(endpointId);
+        const validation = computeValidation(endpointId);
+        const credential = resolveCredential(endpointId);
+        // Apply-failure must never silently revert desired state. We always recompute
+        // desired/validation/credential from the persisted truth and only treat `applied`
+        // as process-local runtime memory.
+        const applied = existing?.applied ?? { kind: "not-applied" };
+        const merged = { endpointId, desired, validation, credential, applied };
+        endpointStates.set(endpointId, merged);
+        return merged;
     };
     const activeIds = () => activeEndpointIds(Object.keys(registry.endpoints), activation);
     const syncProviders = () => {
@@ -101,13 +138,38 @@ export default function piLitellmProvider(pi, internals = {}) {
             pollStops.get(endpointId)?.();
             pollStops.delete(endpointId);
             setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0, models: [] });
+            setApplied(endpointId, { kind: "not-applied" });
         }
         for (const endpointId of next) {
             const endpoint = registry.endpoints[endpointId];
             if (!endpoint)
                 continue;
-            register(pi, endpointId, buildProviderConfig(() => registry.endpoints[endpointId], internals.deps, stateFor(endpointId), endpointId));
+            // Invalid endpoints are never registered with the host runtime. They remain
+            // visible in management/diagnostics as "Invalid configuration" with no provider.
+            if ((endpoint.validation?.kind ?? "ok") === "invalid") {
+                setApplied(endpointId, { kind: "error", category: "config-invalid", message: endpoint.validation?.kind === "invalid" ? endpoint.validation.reason : undefined });
+                setProviderDiagnostics(stateFor(endpointId), {
+                    status: "config-error",
+                    modelCount: 0,
+                    models: [],
+                    note: endpoint.validation?.kind === "invalid" ? endpoint.validation.reason : undefined,
+                });
+                continue;
+            }
+            // Sync always re-registers so provider config picks up any definition change.
+            // The Pi host treats registerProvider on an existing id as a replace.
+            register(pi, endpointId, buildProviderConfig(() => registry.endpoints[endpointId], {
+                ...internals.deps,
+                appliedWriter: (next) => setApplied(endpointId, next),
+            }, stateFor(endpointId), endpointId));
             registered.add(endpointId);
+            if (!endpointStates.has(endpointId) || endpointStates.get(endpointId)?.applied.kind === "active") {
+                // Preserve a previously-applied state across re-sync; only initialise to
+                // not-applied when this endpoint was previously unregistered or errored.
+            }
+            else {
+                setApplied(endpointId, { kind: "not-applied" });
+            }
         }
     };
     const stopAllPolling = () => {
@@ -139,18 +201,42 @@ export default function piLitellmProvider(pi, internals = {}) {
                     ctx.ui.notify(`未知 LiteLLM endpoint：${endpointId}`, "warning");
                     return;
                 }
-                const active = activeIds().includes(endpointId);
-                if (!active)
-                    setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0, models: [] });
-                ctx.ui.notify(`Endpoint：${endpointId}\nProvider：${providerIdForEndpoint(endpointId)}\n${formatProviderDiagnostics(stateFor(endpointId))}`, "info");
+                // Diagnostics never degrades to a placeholder: every endpoint gets a full canonical
+                // record regardless of desired/validation/credential/applied state.
+                const state = endpointStateFor(endpointId);
+                const status = statusLabel(userVisibleStatus(state));
+                const desired = state.desired === "enabled" ? "已启用" : "未启用";
+                const validation = state.validation.kind === "ok"
+                    ? "合法"
+                    : `非法（${state.validation.reason}）`;
+                const applied = state.applied.kind === "active"
+                    ? `已生效（${state.applied.modelCount} 个模型${state.applied.lastDiscoveryAt ? `，最近成功发现 ${state.applied.lastDiscoveryAt}` : ""}）`
+                    : state.applied.kind === "not-applied"
+                        ? "未生效"
+                        : `出错（${applyErrorLabel(state.applied.category)}${state.applied.message ? `：${state.applied.message}` : ""}）`;
+                const currentSnapshot = stateFor(endpointId).current;
+                const lines = [
+                    `Endpoint：${endpointId}`,
+                    `Provider：${providerIdForEndpoint(endpointId)}`,
+                    `状态：${status}`,
+                    `期望状态：${desired}`,
+                    `配置：${validation}`,
+                    `凭据：${credentialLabel(state.credential)}`,
+                    `Runtime：${applied}`,
+                    `当前注册模型数：${currentSnapshot.modelCount}`,
+                    "",
+                    formatProviderDiagnostics(stateFor(endpointId)),
+                ];
+                ctx.ui.notify(lines.join("\n"), "info");
                 return;
             }
-            const active = new Set(activeIds());
             const lines = [
                 "LiteLLM Endpoints",
                 ...Object.keys(registry.endpoints).map((id) => {
+                    const state = endpointStateFor(id);
                     const snapshot = stateFor(id).current;
-                    return `${active.has(id) ? "✓" : "○"} ${id} · ${providerIdForEndpoint(id)} · ${snapshot.status} · models=${snapshot.modelCount}`;
+                    const marker = state.desired === "enabled" ? "✓" : "○";
+                    return `${marker} ${id} · ${providerIdForEndpoint(id)} · ${statusLabel(userVisibleStatus(state))} · models=${snapshot.modelCount}`;
                 }),
             ];
             ctx.ui.notify(lines.join("\n"), "info");
@@ -208,7 +294,9 @@ export default function piLitellmProvider(pi, internals = {}) {
         },
         forget: (endpointId) => {
             diagnostics.delete(endpointId);
+            endpointStates.delete(endpointId);
         },
+        endpointState: endpointStateFor,
         write: internals.write,
     });
     pi.registerCommand("litellm-accept-degraded", {
