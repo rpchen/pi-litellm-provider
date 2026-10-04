@@ -25,7 +25,20 @@ function deployment(name: string) {
   return {
     model_name: name,
     litellm_params: { model: `openai/${name}` },
-    model_info: { mode: "chat", max_input_tokens: 10000, max_output_tokens: 1000 },
+    // Fully declared LiteLLM-only model so the poll-follow path exercises
+    // registration churn rather than publication blocking.
+    model_info: {
+      mode: "chat",
+      max_input_tokens: 10000,
+      max_output_tokens: 1000,
+      supports_function_calling: false,
+      supports_reasoning: false,
+      supports_vision: false,
+      supports_pdf_input: false,
+      supports_audio_input: false,
+      supports_video_input: false,
+      supports_audio_output: false,
+    },
   }
 }
 

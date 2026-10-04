@@ -28,6 +28,7 @@ import {
 import {
   createProviderDiagnosticsState,
   formatProviderDiagnostics,
+  publicationControllerForState,
   setProviderDiagnostics,
   type ProviderDiagnosticsState,
 } from "./diagnostics.ts"
@@ -278,6 +279,45 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
       diagnostics.delete(endpointId)
     },
     write: internals.write,
+  })
+
+  pi.registerCommand("litellm-accept-degraded", {
+    description: "接受指定 endpoint 上未完成模型的降级配置（仍标记为 degraded，非完整配置）",
+    handler: async (args, ctx) => {
+      const [endpointId, modelId] = args.trim().split(/\s+/)
+      if (!endpointId || !modelId || !(endpointId in registry.endpoints)) {
+        ctx.ui.notify(
+          `用法：litellm-accept-degraded <endpoint-id> <model-id>；未知 endpoint：${endpointId ?? ""}`,
+          "warning",
+        )
+        return
+      }
+      const state = stateFor(endpointId)
+      const blocked = state.current.publication?.blocked.find((model) => model.id === modelId)
+      if (!blocked || !blocked.degradationEligible) {
+        const registered = (state.current.models ?? []).some((model) => model.id === modelId)
+        ctx.ui.notify(
+          blocked
+            ? `拒绝降级：${modelId}（${blocked.status}；${blocked.degradationReason ?? "当前状态不可接受降级"}）`
+            : registered ? `${modelId} 已是完整配置，无需降级接受。` : `未知或不可降级模型：${modelId}`,
+          "warning",
+        )
+        return
+      }
+      publicationControllerForState(state).acceptedDegradedIDs.add(modelId)
+      try {
+        await ctx.modelRegistry?.refresh?.({
+          providers: [providerIdForEndpoint(endpointId)],
+          force: true,
+        })
+      } catch {
+        // Refresh errors surface through diagnostics; acceptance is kept.
+      }
+      ctx.ui.notify(
+        `已接受降级：${modelId}（${blocked.status}；缺口：${blocked.gaps.join("、") || "无"}），仍标记为降级配置。`,
+        "info",
+      )
+    },
   })
 
   pi.registerCommand("litellm-endpoints", {

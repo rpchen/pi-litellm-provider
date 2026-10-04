@@ -42,11 +42,19 @@ function runChecked(command, args, options = {}) {
 
 async function startFakeLiteLLM(name, initialKey, models) {
   const requests = []
-  const state = { apiKey: initialKey, models }
+  const state = { apiKey: initialKey, models, failStatus: 0 }
   const server = createServer((req, res) => {
     const apiKey = state.apiKey
     const authorization = req.headers.authorization ?? ""
     requests.push({ method: req.method, url: req.url, authorization })
+
+    // [REAL-HOST-E2E] An injected outage must surface as a metadata failure
+    // in diagnostics instead of silently republishing pseudo-complete models.
+    if (state.failStatus) {
+      res.writeHead(state.failStatus, { "content-type": "application/json" })
+      res.end(JSON.stringify({ detail: "injected metadata failure" }))
+      return
+    }
 
     if (req.method !== "GET" || (req.url !== "/v1/model/info" && req.url !== "/model/info")) {
       res.writeHead(404, { "content-type": "application/json" })
@@ -275,7 +283,7 @@ function pluginModels(response) {
   return models.filter((model) => typeof model?.provider === "string" && model.provider.startsWith("litellm"))
 }
 
-function modelInfo(modelName, mode, input = 32_000, output = 4_096) {
+function modelInfo(modelName, mode, input = 32_000, output = 4_096, overrides = {}) {
   return {
     model_name: modelName,
     litellm_params: { model: `openai/${modelName}` },
@@ -285,8 +293,29 @@ function modelInfo(modelName, mode, input = 32_000, output = 4_096) {
       max_output_tokens: output,
       input_cost_per_token: 0.000001,
       output_cost_per_token: 0.000002,
+      // This gate stubs models.dev to an empty catalog (and the e2e-* fixture
+      // names would never match it anyway), so every capability dimension the
+      // trusted publication policy requires must be declared by the endpoint
+      // itself: tools, reasoning and the full modality set. A model that leaves
+      // any of them unknown is blocked on purpose.
       supports_function_calling: true,
+      supports_reasoning: false,
+      supports_vision: false,
+      supports_pdf_input: false,
+      supports_audio_input: false,
+      supports_video_input: false,
+      supports_audio_output: false,
+      ...overrides,
     },
+  }
+}
+
+/** LiteLLM-only metadata with no capability declarations at all: never normally publishable. */
+function reducedModelInfo(modelName, mode, input = 32_000, output = 4_096) {
+  return {
+    model_name: modelName,
+    litellm_params: { model: `openai/${modelName}` },
+    model_info: { mode, max_input_tokens: input, max_output_tokens: output },
   }
 }
 
@@ -332,9 +361,20 @@ try {
   defaultServer = await startFakeLiteLLM("default", "sk-default-e2e", [
     modelInfo("e2e-default-responses", "responses"),
     modelInfo("e2e-zero-limit", "chat", 0, 0),
+    // [REAL-HOST-E2E] Incomplete metadata: positive limits but no trusted
+    // reasoning/tools evidence (models.dev is stubbed to an empty catalog
+    // here), so Core must keep this model out of normal registration and
+    // explain it in diagnostics.
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
   ])
   companyServer = await startFakeLiteLLM("company", "sk-company-e2e", [
     modelInfo("e2e-company-chat", "chat", 64_000, 8_192),
+    // [REAL-HOST-E2E] Reasoning supported with no selectable levels: the host
+    // must see a reasoning-capable model with no thinking level map.
+    modelInfo("e2e-company-reasoning", "chat", 32_000, 4_096, { supports_reasoning: true }),
   ])
 
   writeFileSync(
@@ -364,18 +404,41 @@ try {
   )
 
   const fetchHook = join(root, "fetch-hook.mjs")
+  // The stub must survive Pi's own startup: `http-dispatcher` installs undici
+  // globals with a plain `globalThis.fetch = ...` assignment. A data property
+  // lets that assignment land (Pi keeps its intended dispatcher wiring) while
+  // the visible fetch stays ours, so the catalog source is deterministic
+  // instead of depending on an external service.
   writeFileSync(fetchHook, `
 const originalFetch = globalThis.fetch.bind(globalThis)
-globalThis.fetch = async (input, init) => {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-  if (url === "https://models.dev/api.json") {
+let baseFetch = originalFetch
+let depth = 0
+const isModelsDev = (input) => {
+  let url = ""
+  if (typeof input === "string") url = input
+  else if (input instanceof URL) url = input.href
+  else if (input && typeof input.url === "string") url = input.url
+  return url === "https://models.dev/api.json"
+}
+const hookedFetch = (input, init) => {
+  if (isModelsDev(input)) {
     return new Response(JSON.stringify({}), {
       status: 200,
       headers: { "content-type": "application/json" },
     })
   }
-  return originalFetch(input, init)
+  // A wrapper installed on top of this hook may call back into it; fall back to
+  // the underlying implementation instead of recursing.
+  if (depth > 0) return originalFetch(input, init)
+  depth += 1
+  try { return baseFetch(input, init) } finally { depth -= 1 }
 }
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  enumerable: true,
+  get() { return hookedFetch },
+  set(value) { if (typeof value === "function") baseFetch = value },
+})
 `)
 
   const probeExtension = join(root, "bootstrap-probe.ts")
@@ -454,6 +517,23 @@ export default function bootstrapProbe(pi) {
   assert(companyModel.contextWindow > 0 && companyModel.maxTokens > 0, "Company model has non-operational limits")
   assert(!allModels.some((model) => model.id === "e2e-zero-limit"), "Real Pi exposed a zero-limit model")
   assert(allModels.every((model) => model.contextWindow > 0 && model.maxTokens > 0), "Real Pi exposed non-positive model limits")
+  // [REAL-HOST-E2E] Publication boundary: a model without trustworthy tool/reasoning
+  // evidence must not enter normal registration even with positive limits.
+  assert(
+    !allModels.some((model) => model.id === "e2e-incomplete-capabilities"),
+    "Real Pi exposed a model with unknown key capabilities as a normal model",
+  )
+  // [REAL-HOST-E2E] Reasoning follows the Core verdict: supported-without-levels
+  // registers as reasoning-capable with no thinkingLevelMap; a confirmed
+  // non-reasoning model registers with reasoning: false.
+  const reasoningModel = allModels.find((model) => model.provider === "litellm-company" && model.id === "e2e-company-reasoning")
+  assert(reasoningModel, "Real Pi did not expose the reasoning-supported company model")
+  assert(reasoningModel.reasoning === true, `Reasoning model must advertise reasoning, got: ${reasoningModel.reasoning}`)
+  assert(
+    !reasoningModel.thinkingLevelMap || Object.values(reasoningModel.thinkingLevelMap).every((value) => value === null),
+    `Reasoning model must expose no selectable levels: ${JSON.stringify(reasoningModel.thinkingLevelMap)}`,
+  )
+  assert(defaultModel.reasoning === false, `Confirmed non-reasoning model must not advertise reasoning: ${defaultModel.reasoning}`)
 
   assert(defaultServer.requests.length > 0, "Default fake LiteLLM received no discovery request")
   assert(companyServer.requests.length > 0, "Company fake LiteLLM received no discovery request")
@@ -485,6 +565,15 @@ export default function bootstrapProbe(pi) {
   )
   assert(diagnosticNotice.message.includes("状态：正常"), "Diagnostics did not report a ready endpoint")
   assert(diagnosticNotice.message.includes("已注册模型：1"), "Diagnostics model count is not the host-visible count")
+  // [REAL-HOST-E2E] Publication diagnostics name the incomplete model and its gaps.
+  assert(
+    diagnosticNotice.message.includes("未完成：e2e-incomplete-capabilities"),
+    "Diagnostics did not report the incomplete model as blocked",
+  )
+  assert(
+    diagnosticNotice.message.includes("capabilities.tools") && diagnosticNotice.message.includes("reasoning"),
+    "Diagnostics did not report which capability fields are unknown",
+  )
   assert(!diagnosticNotice.message.includes(defaultServer.apiKey), "Diagnostics leaked the API key")
   assert(!diagnosticNotice.message.includes(defaultServer.baseUrl), "Diagnostics leaked the LiteLLM URL")
   // [REAL-HOST-E2E] Diagnostics carry the short Runtime Identity of the running artifact.
@@ -587,6 +676,181 @@ export default function bootstrapProbe(pi) {
       activation.endpointIds.length === 1 &&
       activation.endpointIds[0] === "default",
     `Unexpected persisted activation state: ${JSON.stringify(activation)}`,
+  )
+
+  // ===== Phase 1b: trusted publication verdicts through the real host =====
+  const diagnosticsNotice = async (needle, label) => {
+    let last = "<none>"
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const run = await rpc.extensionCommand("/litellm-diagnostics default")
+      const notice = await rpc.waitFor(
+        (record) =>
+          record?.type === "extension_ui_request" &&
+          record.method === "notify" &&
+          typeof record.message === "string" &&
+          record.message.includes("Endpoint：default"),
+        { after: run.after },
+      )
+      last = notice.message
+      if (notice.message.includes(needle)) return notice
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    throw new Error(`real Pi diagnostics never reported: ${label ?? needle}\nlast diagnostics:\n${last}`)
+  }
+
+  const acceptDegraded = async (args) => {
+    const run = await rpc.extensionCommand(`/litellm-accept-degraded ${args}`)
+    const notice = await rpc.waitFor(
+      (record) =>
+        record?.type === "extension_ui_request" &&
+        record.method === "notify" &&
+        typeof record.message === "string" &&
+        /已接受降级：|拒绝降级：|已是完整配置|未知或不可降级模型|用法：litellm-accept-degraded/.test(record.message),
+      { after: run.after },
+    )
+    return notice.message
+  }
+
+  const publicationModels = async () =>
+    pluginModels((await rpc.request({ type: "get_available_models" })).response)
+
+  // `--no-session` Pi stops endpoint polling once a prompt ends, so Phase 1b
+  // drives discovery through the endpoint manager instead of waiting for a
+  // background poll. "全部启用" re-applies the current active set, and the
+  // manager always force-refreshes those providers before finishing.
+  const forceRefresh = async () => {
+    await rpc.driveCommand("/litellm-endpoints", [
+      { select: "全部启用" },
+      { select: undefined },
+    ])
+  }
+
+  // Partition: only the fully evidenced model registers; illegal limits and
+  // unknown capabilities stay blocked with their reasons on screen.
+  await forceRefresh()
+  const baselineNotice = await diagnosticsNotice(
+    "模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 0",
+    "the initial publication partition",
+  )
+  assert(baselineNotice.message.includes("状态：正常"), `Diagnostics did not report a ready endpoint: ${baselineNotice.message}`)
+  console.log(`[publication baseline]\n${baselineNotice.message}`)
+  // Both metadata sources report their own status; neither is ever faked.
+  assert(
+    baselineNotice.message.includes("/v1/model/info：ok · /v1/models：未作为发现源"),
+    `the model-info source status must be visible: ${baselineNotice.message}`,
+  )
+  assert(
+    baselineNotice.message.includes("models.dev：degraded"),
+    `models.dev unavailability must stay visible in diagnostics: ${baselineNotice.message}`,
+  )
+  assert(
+    baselineNotice.message.includes("未完成：e2e-zero-limit · invalid-metadata"),
+    `illegal limits must stay visible in diagnostics: ${baselineNotice.message}`,
+  )
+
+  // Ineligible states never claim a successful accept.
+  assert(
+    (await acceptDegraded("default e2e-zero-limit")).startsWith("拒绝降级：e2e-zero-limit"),
+    "an invalid-metadata model must be rejected by accept-degraded",
+  )
+  assert(
+    (await acceptDegraded("default e2e-default-responses")).includes("已是完整配置"),
+    "a fully configured model must not be accepted as degraded",
+  )
+  assert(
+    (await acceptDegraded("default e2e-unknown-model")).includes("未知或不可降级模型"),
+    "an unknown model must not be accepted as degraded",
+  )
+  assert(
+    (await acceptDegraded("nowhere e2e-incomplete-capabilities")).includes("用法：litellm-accept-degraded"),
+    "an unknown endpoint must not be accepted as degraded",
+  )
+  assert(
+    (await publicationModels()).filter((model) => model.provider === "litellm").length === 1,
+    "a rejected accept-degraded must not register anything",
+  )
+
+  // Live capability evidence disappears for a previously configured model:
+  // only a provably belonging LKG snapshot may keep it registered.
+  defaultServer.state.models = [
+    reducedModelInfo("e2e-default-responses", "responses"),
+    modelInfo("e2e-zero-limit", "chat", 0, 0),
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
+  ]
+  await forceRefresh()
+  const lkgNotice = await diagnosticsNotice("LKG 提供：e2e-default-responses", "the valid LKG substitution")
+  assert(
+    lkgNotice.message.includes("模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 1"),
+    `unexpected LKG publication summary: ${lkgNotice.message}`,
+  )
+  assert(
+    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+    "the LKG-backed model disappeared from real Pi",
+  )
+
+  // An eligible blocked model registers only through the degraded path and
+  // keeps the degraded label with its gaps; it is never re-labelled configured.
+  const accepted = await acceptDegraded("default e2e-incomplete-capabilities")
+  assert(accepted.startsWith("已接受降级：e2e-incomplete-capabilities"), `eligible accept failed: ${accepted}`)
+  const degradedNotice = await diagnosticsNotice("已接受降级：e2e-incomplete-capabilities", "the degraded acceptance")
+  assert(
+    degradedNotice.message.includes("模型配置：可用 2 · 未完成 1 · 降级 1 · LKG 1"),
+    `unexpected degraded publication summary: ${degradedNotice.message}`,
+  )
+  assert(degradedNotice.message.includes("仍标记为降级，非完整配置"), "diagnostics must keep the degraded label")
+  assert(
+    !degradedNotice.message.includes("未完成：e2e-incomplete-capabilities"),
+    "an accepted degraded model must leave the blocked list",
+  )
+  assert(
+    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-incomplete-capabilities"),
+    "the accepted degraded model did not register",
+  )
+
+  // A real metadata outage is reported, never hidden. `/litellm-endpoints`
+  // re-registers the provider, so the first failure of that fresh lifecycle is
+  // the discovery-error branch: the host keeps the last catalog, and the
+  // diagnostics show the failure, its counter and the retry time.
+  defaultServer.state.failStatus = 500
+  await forceRefresh()
+  const failureNotice = await diagnosticsNotice("状态：发现失败", "the metadata failure")
+  assert(
+    failureNotice.message.includes("说明：发现失败；详细错误已通过宿主日志记录。"),
+    `failure note missing: ${failureNotice.message}`,
+  )
+  assert(
+    /failures=[1-9]\d*/u.test(failureNotice.message),
+    `the failure counter must be visible during the outage: ${failureNotice.message}`,
+  )
+  assert(failureNotice.message.includes("下次允许重试："), `the retry state must be visible: ${failureNotice.message}`)
+  assert(
+    failureNotice.message.includes("已注册模型：1"),
+    `the outage must keep the last registered models: ${failureNotice.message}`,
+  )
+  assert(!failureNotice.message.includes("状态：正常"), `the endpoint must not look healthy during the outage: ${failureNotice.message}`)
+  assert(
+    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+    "the endpoint dropped its models instead of keeping the last good catalog",
+  )
+  assert(
+    rpc.stderr.includes("LiteLLM 发现失败"),
+    `the metadata failure must be visible in the host log: ${rpc.stderr.slice(-400)}`,
+  )
+
+  // Retry recovery: complete trustworthy metadata returns it to normal.
+  defaultServer.state.failStatus = 0
+  await forceRefresh()
+  const recoveredNotice = await diagnosticsNotice("状态：正常", "the retry recovery")
+  assert(recoveredNotice.message.includes("LKG 提供：e2e-default-responses"), "LKG selection must survive recovery")
+  assert(
+    recoveredNotice.message.includes("已接受降级：e2e-incomplete-capabilities"),
+    "degraded acceptance must survive recovery",
+  )
+  console.log(
+    "real Pi publication E2E ok: partition, reasoning verdict, LKG substitution, degraded accept/reject and metadata-failure diagnostics verified",
   )
 
   // ===== Phase 2: Endpoint Management UX (real host dialogs, full vertical) =====

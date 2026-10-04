@@ -1,5 +1,19 @@
 import { readFileSync } from "node:fs";
+import { createLastKnownGoodStore } from "../core/index.js";
 import { getRuntimeIdentity, shortArtifactDigest, shortCoreCommit } from "./runtime-identity.js";
+/** Resolve (creating on first use) the endpoint-scoped publication controller. */
+export function publicationControllerForState(state) {
+    const existing = state?.publication;
+    if (existing)
+        return existing;
+    const created = {
+        store: createLastKnownGoodStore(),
+        acceptedDegradedIDs: new Set(),
+    };
+    if (state)
+        state.publication = created;
+    return created;
+}
 export function createProviderDiagnosticsState() {
     return { current: { status: "idle", modelCount: 0 } };
 }
@@ -72,6 +86,26 @@ export function formatHostDateTime(value, timezoneOffsetMinutes) {
         `UTC${sign}${pad2(offsetHours)}:${pad2(offsetMinutes)}`,
     ].join(" ");
 }
+/** Render the Core publication partition: states, gaps, LKG, degraded. */
+export function formatPublicationSummary(summary) {
+    if (!summary)
+        return [];
+    const lines = [
+        `模型配置：可用 ${summary.publishable.length} · 未完成 ${summary.blocked.length} · 降级 ${summary.degradedIDs.length} · LKG ${summary.lkgIDs.length}`,
+    ];
+    if (summary.failureKind)
+        lines.push(`元数据获取失败：${summary.failureKind}（未用默认值伪装完整配置）`);
+    if (summary.lkgIDs.length > 0)
+        lines.push(`LKG 提供：${summary.lkgIDs.join("、")}`);
+    if (summary.degradedIDs.length > 0)
+        lines.push(`已接受降级：${summary.degradedIDs.join("、")}（仍标记为降级，非完整配置）`);
+    for (const blocked of summary.blocked.slice(0, 5)) {
+        lines.push(`未完成：${blocked.id} · ${blocked.status}${blocked.gaps.length > 0 ? ` · 缺失 ${blocked.gaps.join("、")}` : ""}`);
+    }
+    if (summary.blocked.length > 5)
+        lines.push(`……另有 ${summary.blocked.length - 5} 个未完成模型`);
+    return lines;
+}
 const STATUS_TEXT = {
     idle: "尚未执行发现",
     restored: "已从持久化快照恢复，等待网络确认",
@@ -118,6 +152,7 @@ export function formatProviderDiagnostics(state, now = Date.now(), timezoneOffse
         if (examples.length > 0)
             lines.push(`重点：${examples.join("；")}`);
     }
+    lines.push(...formatPublicationSummary(snapshot.publication));
     if (snapshot.note)
         lines.push(`说明：${snapshot.note}`);
     lines.push(`Core：${build.coreBranch}@${build.coreSHA}`);

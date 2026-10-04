@@ -229,9 +229,9 @@ describe("thinkingLevelMap", () => {
     expect(claude.thinkingLevelMap?.medium).toBeNull()
   })
 
-  test("toggle 类模型不给档位", () => {
+  test("toggle 类模型支持 reasoning 但不给档位（Core  verdict 解耦）", () => {
     const glm = byID.get("glm-5.3")!
-    expect(glm.reasoning).toBeFalse()
+    expect(glm.reasoning).toBeTrue()
     expect("thinkingLevelMap" in glm).toBeFalse()
   })
 })

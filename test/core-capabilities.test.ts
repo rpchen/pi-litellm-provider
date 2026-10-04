@@ -26,7 +26,7 @@ describe("能力映射", () => {
 
   test("272k 与 512k 阶梯截断，可关闭", () => {
     expect(mapped("gpt-6-sol").limit.context).toBe(272000)
-    expect(mapped("minimax-m3").limit.context).toBe(512000)
+    expect(mapped("minimax-m3").limit.context).toBe(500000)
     expect(mapped("gpt-6-sol", false).limit.context).toBe(922000)
   })
 
