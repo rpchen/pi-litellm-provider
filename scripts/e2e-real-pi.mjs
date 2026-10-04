@@ -810,30 +810,34 @@ export default function bootstrapProbe(pi) {
     "the accepted degraded model did not register",
   )
 
-  // A real metadata outage is reported, never hidden: the endpoint goes stale
-  // and keeps the last good partition visible.
+  // A real metadata outage is reported, never hidden. `/litellm-endpoints`
+  // re-registers the provider, so the first failure of that fresh lifecycle is
+  // the discovery-error branch: the host keeps the last catalog, and the
+  // diagnostics show the failure, its counter and the retry time.
   defaultServer.state.failStatus = 500
   await forceRefresh()
-  const staleNotice = await diagnosticsNotice(
-    "状态：网络刷新失败，正在使用 last-known-good",
-    "the metadata failure",
-  )
-  assert(staleNotice.message.includes("说明：刷新失败，保留上次成功结果。"), `stale note missing: ${staleNotice.message}`)
+  const failureNotice = await diagnosticsNotice("状态：发现失败", "the metadata failure")
   assert(
-    /缓存：[^\n]*stale=是/u.test(staleNotice.message),
-    `the stale cache state must be visible during the outage: ${staleNotice.message}`,
+    failureNotice.message.includes("说明：发现失败；详细错误已通过宿主日志记录。"),
+    `failure note missing: ${failureNotice.message}`,
   )
   assert(
-    /failures=[1-9]\d*/u.test(staleNotice.message),
-    `the failure counter must be visible during the outage: ${staleNotice.message}`,
+    /failures=[1-9]\d*/u.test(failureNotice.message),
+    `the failure counter must be visible during the outage: ${failureNotice.message}`,
   )
+  assert(failureNotice.message.includes("下次允许重试："), `the retry state must be visible: ${failureNotice.message}`)
   assert(
-    staleNotice.message.includes("未完成：e2e-zero-limit"),
-    "the blocked partition must stay visible during the outage",
+    failureNotice.message.includes("已注册模型：1"),
+    `the outage must keep the last registered models: ${failureNotice.message}`,
   )
+  assert(!failureNotice.message.includes("状态：正常"), `the endpoint must not look healthy during the outage: ${failureNotice.message}`)
   assert(
     (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-    "the endpoint dropped its models instead of reporting the failure",
+    "the endpoint dropped its models instead of keeping the last good catalog",
+  )
+  assert(
+    rpc.stderr.includes("LiteLLM 发现失败"),
+    `the metadata failure must be visible in the host log: ${rpc.stderr.slice(-400)}`,
   )
 
   // Retry recovery: complete trustworthy metadata returns it to normal.
