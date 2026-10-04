@@ -380,7 +380,10 @@ try {
   writeFileSync(
     join(agentDir, "litellm.json"),
     JSON.stringify({
-      pollInterval: 300,
+      // Phase 1b observes discovery-driven state changes (LKG substitution,
+      // degraded acceptance, outage and recovery), so this endpoint polls on a
+      // short interval instead of the production-sized 300s.
+      pollInterval: 2,
       contextTierCap: false,
       endpoints: {
         default: {
@@ -680,6 +683,7 @@ export default function bootstrapProbe(pi) {
 
   // ===== Phase 1b: trusted publication verdicts through the real host =====
   const diagnosticsNotice = async (needle, label) => {
+    let last = "<none>"
     for (let attempt = 0; attempt < 80; attempt++) {
       const run = await rpc.extensionCommand("/litellm-diagnostics default")
       const notice = await rpc.waitFor(
@@ -690,10 +694,11 @@ export default function bootstrapProbe(pi) {
           record.message.includes("Endpoint：default"),
         { after: run.after },
       )
+      last = notice.message
       if (notice.message.includes(needle)) return notice
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
-    throw new Error(`real Pi diagnostics never reported: ${label ?? needle}`)
+    throw new Error(`real Pi diagnostics never reported: ${label ?? needle}\nlast diagnostics:\n${last}`)
   }
 
   const acceptDegraded = async (args) => {
