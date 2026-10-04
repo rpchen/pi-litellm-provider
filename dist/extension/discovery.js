@@ -12,10 +12,10 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, diagnoseModelSpecs, endpointFingerprint, inspectDiscoverySnapshot, modelFingerprint, normalizeLiteLLMURL, } from "../core/index.js";
+import { buildPublicationResult, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, inspectDiscoverySnapshot, lastKnownGoodKey, modelFingerprint, normalizeLiteLLMURL, degradationEligibility, } from "../core/index.js";
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog } from "../net/fetch.js";
-import { setProviderDiagnostics } from "./diagnostics.js";
-import { toProviderModels } from "./map.js";
+import { publicationControllerForState, setProviderDiagnostics, } from "./diagnostics.js";
+import { toProviderModels, toProviderModelsWithPublication } from "./map.js";
 /** Create one coordinator per registered provider instance. */
 export function createProviderRefreshCoordinator() {
     return createDiscoveryCoordinator();
@@ -23,22 +23,99 @@ export function createProviderRefreshCoordinator() {
 /**
  * Run the network phase: contact LiteLLM, enrich from models.dev, build specs and map to
  * pi provider configs. Throws `DiscoveryError` on degradable failures.
+ *
+ * Publication partition comes from Core `buildPublicationResult`: only
+ * configured, configured-lkg, and user-accepted degraded models map to
+ * provider configs. A models.dev fetch failure does not abort discovery;
+ * it is classified with the Core taxonomy so valid LKG entries can
+ * substitute while the rest stay blocked with reasons.
  */
 export async function discoverModels(config, apiKey, signal, deps = {}) {
     const addresses = normalizeLiteLLMURL(config.baseUrl);
     const litellmResponse = await fetchLiteLLMModelInfo(addresses, apiKey, deps.fetchImpl, signal);
-    const catalog = deps.loadModelsDevCatalog
-        ? await deps.loadModelsDevCatalog(signal)
-        : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal });
-    const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, {
+    let catalog;
+    let catalogFailure;
+    try {
+        catalog = deps.loadModelsDevCatalog
+            ? await deps.loadModelsDevCatalog(signal)
+            : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal });
+    }
+    catch (error) {
+        catalog = {};
+        catalogFailure = classifyMetadataFailure(error);
+    }
+    const buildOptions = {
         contextTierCap: config.contextTierCap,
         protocolOverrides: config.protocolOverrides,
+    };
+    const now = deps.publication?.now ?? Date.now();
+    const publication = buildPublicationResult(litellmResponse, catalog, buildOptions, {
+        store: deps.publication?.store,
+        acceptedDegradedIDs: deps.publication?.acceptedDegradedIDs,
+        failure: catalogFailure,
+        now,
     });
+    if (deps.publication?.store) {
+        seedPublicationLKG(deps.publication.store, litellmResponse, publication, now);
+    }
+    const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions);
+    const specs = publication.publishable.map((entry) => entry.spec);
+    const snapshotSpecs = publication.publishable
+        .filter((entry) => entry.degraded === undefined)
+        .map((entry) => entry.spec);
     return {
-        specs: diagnosed.models,
-        models: toProviderModels(diagnosed.models, addresses.rootURL),
-        fingerprint: modelFingerprint(diagnosed.models),
+        specs,
+        snapshotSpecs,
+        models: toProviderModelsWithPublication(publication.publishable, addresses.rootURL),
+        fingerprint: modelFingerprint(specs),
         diagnostics: diagnosed.diagnostics,
+        publication: summarizePublication(publication, catalogFailure),
+    };
+}
+/** Record complete configured models as Last Known Good for future outages. */
+function seedPublicationLKG(store, litellmResponse, publication, now) {
+    const groups = new Map(groupLiteLLMDeployments(litellmResponse).map((item) => [item.modelName, item]));
+    for (const entry of publication.publishable) {
+        if (entry.assessment.status !== "configured")
+            continue;
+        const group = groups.get(entry.spec.id);
+        if (!group)
+            continue;
+        try {
+            store.set(lastKnownGoodKey(entry.spec.id), createLastKnownGoodEntry(group, entry.assessment.identity.selected, entry.spec, now, capturedPublicationVerdict(entry.assessment)));
+        }
+        catch {
+            // Seeding is best-effort; it must never fail a discovery.
+        }
+    }
+}
+function summarizePublication(publication, failure) {
+    return {
+        publishable: publication.publishable.map((entry) => ({
+            id: entry.spec.id,
+            status: entry.assessment.status,
+        })),
+        degradedIDs: publication.publishable
+            .filter((entry) => entry.degraded !== undefined)
+            .map((entry) => entry.spec.id),
+        lkgIDs: publication.publishable
+            .filter((entry) => entry.assessment.usingLKG)
+            .map((entry) => entry.spec.id),
+        blocked: publication.blocked.map((entry) => {
+            const eligibility = degradationEligibility(entry.assessment);
+            return {
+                id: entry.spec.id,
+                status: entry.assessment.status,
+                degradationEligible: eligibility.eligible,
+                degradationReason: eligibility.eligible ? undefined : eligibility.reason,
+                gaps: [
+                    ...entry.assessment.missingFields,
+                    ...entry.assessment.unknownFields,
+                    ...entry.assessment.illegalFields,
+                ],
+            };
+        }),
+        failureKind: failure?.kind,
     };
 }
 /**
@@ -118,8 +195,16 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         return [];
     }
     const discoveryKey = `${config.endpointId ?? ""}\u0000${config.baseUrl}\u0000${apiKey}`;
+    const publicationController = publicationControllerForState(diagnosticsState);
+    const discoveryDeps = {
+        ...deps,
+        publication: deps.publication ?? {
+            store: publicationController.store,
+            acceptedDegradedIDs: publicationController.acceptedDegradedIDs,
+        },
+    };
     try {
-        const coordinated = await coordinator.refresh(discoveryKey, () => discoverModels(config, apiKey, context.signal, deps), {
+        const coordinated = await coordinator.refresh(discoveryKey, () => discoverModels(config, apiKey, context.signal, discoveryDeps), {
             forceRefresh: context.force === true,
             failurePolicy: (error) => {
                 if (context.signal?.aborted)
@@ -146,7 +231,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
                 protocolOverrides: config.protocolOverrides,
             },
         });
-        const snapshot = createDiscoverySnapshot(successfulEndpoint, outcome.specs, new Date(coordinated.refreshedAt).toISOString());
+        const snapshot = createDiscoverySnapshot(successfulEndpoint, outcome.snapshotSpecs, new Date(coordinated.refreshedAt).toISOString());
         if (restored.compatible && restored.snapshot) {
             const diff = compareDiscoverySnapshots(restored.snapshot, snapshot);
             if (diff.drift) {
@@ -161,6 +246,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
             modelCount: outcome.models.length,
             models: outcome.models,
             discovery: outcome.diagnostics,
+            publication: outcome.publication,
             cache: createDiscoveryCacheDiagnostics({
                 source: coordinated.source === "cache"
                     ? "memory-cache"

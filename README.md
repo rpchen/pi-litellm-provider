@@ -115,8 +115,8 @@ Runtime Identity 是当前正在运行的扩展 artifact 自身的不可变身�
 Runtime Identity
 
 Plugin Version   0.6.0
-Artifact         f149674c
-Core Commit      8e155e0e
+Artifact         937e9377
+Core Commit      649bc84f
 ```
 
 反馈问题时，请附上 `/litellm-diagnostics` 中的 Runtime Identity 段落，或 audit 导出文件中的 `runtimeIdentity` 对象。

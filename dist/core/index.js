@@ -4,5 +4,6 @@ export * from "./diagnostics.js";
 export * from "./litellm.js";
 export * from "./modelsdev.js";
 export * from "./protocol.js";
+export * from "./publication.js";
 export * from "./refresh.js";
 export * from "./snapshot.js";
