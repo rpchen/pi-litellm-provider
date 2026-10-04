@@ -380,10 +380,7 @@ try {
   writeFileSync(
     join(agentDir, "litellm.json"),
     JSON.stringify({
-      // Phase 1b observes discovery-driven state changes (LKG substitution,
-      // degraded acceptance, outage and recovery), so this endpoint polls on a
-      // short interval instead of the production-sized 300s.
-      pollInterval: 2,
+      pollInterval: 300,
       contextTierCap: false,
       endpoints: {
         default: {
@@ -717,8 +714,20 @@ export default function bootstrapProbe(pi) {
   const publicationModels = async () =>
     pluginModels((await rpc.request({ type: "get_available_models" })).response)
 
+  // `--no-session` Pi stops endpoint polling once a prompt ends, so Phase 1b
+  // drives discovery through the endpoint manager instead of waiting for a
+  // background poll. "全部启用" re-applies the current active set, and the
+  // manager always force-refreshes those providers before finishing.
+  const forceRefresh = async () => {
+    await rpc.driveCommand("/litellm-endpoints", [
+      { select: "全部启用" },
+      { select: undefined },
+    ])
+  }
+
   // Partition: only the fully evidenced model registers; illegal limits and
   // unknown capabilities stay blocked with their reasons on screen.
+  await forceRefresh()
   const baselineNotice = await diagnosticsNotice(
     "模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 0",
     "the initial publication partition",
@@ -771,6 +780,7 @@ export default function bootstrapProbe(pi) {
       supports_reasoning: undefined,
     }),
   ]
+  await forceRefresh()
   const lkgNotice = await diagnosticsNotice("LKG 提供：e2e-default-responses", "the valid LKG substitution")
   assert(
     lkgNotice.message.includes("模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 1"),
@@ -803,6 +813,7 @@ export default function bootstrapProbe(pi) {
   // A real metadata outage is reported, never hidden: the endpoint goes stale
   // and keeps the last good partition visible.
   defaultServer.state.failStatus = 500
+  await forceRefresh()
   const staleNotice = await diagnosticsNotice(
     "状态：网络刷新失败，正在使用 last-known-good",
     "the metadata failure",
@@ -827,6 +838,7 @@ export default function bootstrapProbe(pi) {
 
   // Retry recovery: complete trustworthy metadata returns it to normal.
   defaultServer.state.failStatus = 0
+  await forceRefresh()
   const recoveredNotice = await diagnosticsNotice("状态：正常", "the retry recovery")
   assert(recoveredNotice.message.includes("LKG 提供：e2e-default-responses"), "LKG selection must survive recovery")
   assert(
