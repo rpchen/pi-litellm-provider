@@ -15,5 +15,5 @@
 - [x] Align Core-copy fixtures/tests with group-wide limit/modality/identity evidence (Core branch head `8afc3e7d7a7b98581626fedb0322099ad3933cce`).
 - [x] Extend Real Pi 0.87.1 E2E fixtures/assertions for the publication boundary (incomplete model never registered, diagnostics names it and its gaps).
 - [x] `bun run build:dist` to the merged Core SHA + `bun run verify:dist` and `bun run test:package` (Core #26 merged as `649bc84fff85488a5fc6bda0c2a2a9504a357db4`; local `verify:dist`, `typecheck`, `bun test` 341 pass / 3 skip, `test:package`, `validate:spec`, scenario coverage, closure gate, release metadata and `test:codebase-memory` all green).
-- [ ] Real Pi 0.87.1 E2E run (blocked: it installs a committed dist, so it must run after the Core merge + dist refresh).
-- [ ] Archive the change with OpenSpec CLI and re-run strict validation (blocked on the same merge order).
+- [x] Real Pi 0.87.1 E2E run against the committed dist at Core `649bc84fff85488a5fc6bda0c2a2a9504a357db4` (GitHub PR #45 head `08875ac3f3d3f734f8654fd6c7868f4d750a67f7`: `CI` SUCCESS + `Real Pi 0.87.1 E2E` SUCCESS; local run against the same immutable Git commit also green, covering the publication partition, toggle reasoning, LKG substitution, degraded accept/reject and metadata-failure diagnostics).
+- [x] Archive the change with OpenSpec CLI and re-run strict validation (dist refreshed to merged Core `649bc84fff85488a5fc6bda0c2a2a9504a357db4`, PR #45 CI + Real Pi 0.87.1 E2E green).
