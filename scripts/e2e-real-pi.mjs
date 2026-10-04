@@ -293,10 +293,11 @@ function modelInfo(modelName, mode, input = 32_000, output = 4_096, overrides = 
       max_output_tokens: output,
       input_cost_per_token: 0.000001,
       output_cost_per_token: 0.000002,
-      // models.dev is unavailable in this offline gate, so every capability
-      // dimension the trusted publication policy requires must be declared by
-      // the endpoint itself: tools, reasoning and the full modality set.
-      // A model that leaves any of them unknown is blocked on purpose.
+      // This gate stubs models.dev to an empty catalog (and the e2e-* fixture
+      // names would never match it anyway), so every capability dimension the
+      // trusted publication policy requires must be declared by the endpoint
+      // itself: tools, reasoning and the full modality set. A model that leaves
+      // any of them unknown is blocked on purpose.
       supports_function_calling: true,
       supports_reasoning: false,
       supports_vision: false,
@@ -361,8 +362,9 @@ try {
     modelInfo("e2e-default-responses", "responses"),
     modelInfo("e2e-zero-limit", "chat", 0, 0),
     // [REAL-HOST-E2E] Incomplete metadata: positive limits but no trusted
-    // reasoning/tools evidence (models.dev is offline here), so Core must keep
-    // this model out of normal registration and explain it in diagnostics.
+    // reasoning/tools evidence (models.dev is stubbed to an empty catalog
+    // here), so Core must keep this model out of normal registration and
+    // explain it in diagnostics.
     modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
       supports_function_calling: undefined,
       supports_reasoning: undefined,
@@ -402,18 +404,41 @@ try {
   )
 
   const fetchHook = join(root, "fetch-hook.mjs")
+  // The stub must survive Pi's own startup: `http-dispatcher` installs undici
+  // globals with a plain `globalThis.fetch = ...` assignment. A data property
+  // lets that assignment land (Pi keeps its intended dispatcher wiring) while
+  // the visible fetch stays ours, so the catalog source is deterministic
+  // instead of depending on an external service.
   writeFileSync(fetchHook, `
 const originalFetch = globalThis.fetch.bind(globalThis)
-globalThis.fetch = async (input, init) => {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-  if (url === "https://models.dev/api.json") {
+let baseFetch = originalFetch
+let depth = 0
+const isModelsDev = (input) => {
+  let url = ""
+  if (typeof input === "string") url = input
+  else if (input instanceof URL) url = input.href
+  else if (input && typeof input.url === "string") url = input.url
+  return url === "https://models.dev/api.json"
+}
+const hookedFetch = (input, init) => {
+  if (isModelsDev(input)) {
     return new Response(JSON.stringify({}), {
       status: 200,
       headers: { "content-type": "application/json" },
     })
   }
-  return originalFetch(input, init)
+  // A wrapper installed on top of this hook may call back into it; fall back to
+  // the underlying implementation instead of recursing.
+  if (depth > 0) return originalFetch(input, init)
+  depth += 1
+  try { return baseFetch(input, init) } finally { depth -= 1 }
 }
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  enumerable: true,
+  get() { return hookedFetch },
+  set(value) { if (typeof value === "function") baseFetch = value },
+})
 `)
 
   const probeExtension = join(root, "bootstrap-probe.ts")
@@ -695,6 +720,11 @@ export default function bootstrapProbe(pi) {
   )
   assert(baselineNotice.message.includes("状态：正常"), `Diagnostics did not report a ready endpoint: ${baselineNotice.message}`)
   console.log(`[publication baseline]\n${baselineNotice.message}`)
+  // Both metadata sources report their own status; neither is ever faked.
+  assert(
+    baselineNotice.message.includes("/v1/model/info：ok · /v1/models：未作为发现源"),
+    `the model-info source status must be visible: ${baselineNotice.message}`,
+  )
   assert(
     baselineNotice.message.includes("models.dev：degraded"),
     `models.dev unavailability must stay visible in diagnostics: ${baselineNotice.message}`,
@@ -774,8 +804,12 @@ export default function bootstrapProbe(pi) {
   )
   assert(staleNotice.message.includes("说明：刷新失败，保留上次成功结果。"), `stale note missing: ${staleNotice.message}`)
   assert(
-    staleNotice.message.includes("models.dev：degraded"),
-    "models.dev unavailability must stay visible during the outage",
+    /缓存：[^\n]*stale=是/u.test(staleNotice.message),
+    `the stale cache state must be visible during the outage: ${staleNotice.message}`,
+  )
+  assert(
+    /failures=[1-9]\d*/u.test(staleNotice.message),
+    `the failure counter must be visible during the outage: ${staleNotice.message}`,
   )
   assert(
     staleNotice.message.includes("未完成：e2e-zero-limit"),
