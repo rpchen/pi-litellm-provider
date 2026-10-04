@@ -97,7 +97,7 @@ describe("endpoint management: listing", () => {
   test("[LIST-SINGLE] one endpoint → its line shows active + credential state", async () => {
     const t = setup({ endpoints: { solo: { baseUrl: "https://s.example" } } }, { auth: { "litellm-solo": { type: "api_key", key: "sk-x" } } })
     await t.run("", [{ select: undefined }])
-    expect(t.log[0]!.options).toContain("✓ solo · 已启用 · 未生效 · 已保存 API Key")
+    expect(t.log[0]!.options).toContain("✓ solo · 已启用 · 已生效 · 已保存 API Key")
   })
 
   test("[LIST-MULTI] active/inactive and connected/not-connected are independent per endpoint", async () => {
@@ -420,10 +420,10 @@ describe("endpoint management: credentials", () => {
   test("[CRED-LOGIN-CONSISTENT] a credential stored by the host /login is reported as saved; the legacy env key is labelled as coming from the environment, and disconnect leaves env alone", async () => {
     const t = setup({ baseUrl: "https://old.example" }, { env: { LITELLM_API_KEY: "sk-env" } })
     await t.run("", [{ select: undefined }])
-    expect(t.log[0]!.options).toContain("✓ default · 已启用 · 未生效 · API Key 来自环境变量")
+    expect(t.log[0]!.options).toContain("✓ default · 已启用 · 已生效 · API Key 来自环境变量")
     writeFileSync(t.file("auth.json"), JSON.stringify({ litellm: { type: "api_key", key: "sk-login" } }))
     await t.run("", [{ select: undefined }])
-    expect(t.log.at(-1)!.options).toContain("✓ default · 已启用 · 未生效 · 已保存 API Key")
+    expect(t.log.at(-1)!.options).toContain("✓ default · 已启用 · 已生效 · 已保存 API Key")
   })
 })
 
@@ -529,5 +529,29 @@ describe("endpoint management: delete", () => {
     await t.run("", [{ select: undefined }])
     expect(t.log[0]!.options).toContain("✓ broken · 已启用 · 配置非法 · 已保存 API Key")
     expect(t.registered.has("litellm-broken")).toBe(false)
+  })
+
+  test("[STATE-ENABLED-NEEDS-AUTH] enabled endpoint without credential shows 已启用 · 需要认证, not Invalid", async () => {
+    const t = setup(
+      { endpoints: { noauth: { baseUrl: "https://noauth.example" } } },
+      { activation: { mode: "selected", endpointIds: ["noauth"] } },
+    )
+    await t.run("", [{ select: undefined }])
+    expect(t.log[0]!.options).toContain("✓ noauth · 已启用 · 需要认证 · 未保存 API Key")
+    // Provider IS registered (so /login can target it), but no models flow.
+    expect(t.registered.has("litellm-noauth")).toBe(true)
+  })
+
+  test("[STATE-ENABLED-NEEDS-AUTH] detail menu offers 连接 API Key, never Retry without credential", async () => {
+    const t = setup(
+      { endpoints: { noauth: { baseUrl: "https://noauth.example" } } },
+      { activation: { mode: "selected", endpointIds: ["noauth"] } },
+    )
+    await t.run("", [{ select: /noauth/ }, { select: "返回" }, { select: undefined }])
+    const detailLog = t.log.find((l) => l.kind === "select" && l.title.includes("noauth"))
+    expect(detailLog?.options).toContain("连接 API Key")
+    // Retry is hidden when there is no credential — `Needs authentication` is the truthful state;
+    // "Apply again" without credentials would be a no-op.
+    expect(detailLog?.options).not.toContain("重新应用")
   })
 })

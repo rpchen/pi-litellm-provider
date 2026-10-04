@@ -233,6 +233,11 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
         })
         continue
       }
+      // Credential-missing endpoints register the provider so /login can target
+      // it, but runtime apply is "error(credential-missing)" until a key resolves
+      // — refreshModels will return [] and the canonical state stays truthful.
+      const currentCredential = resolveCredential(endpointId)
+      const hasCredential = currentCredential === "stored" || currentCredential === "environment"
       // Sync always re-registers so provider config picks up any definition change.
       // The Pi host treats registerProvider on an existing id as a replace.
       register(pi, endpointId, buildProviderConfig(
@@ -245,11 +250,16 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
         endpointId,
       ))
       registered.add(endpointId)
-      if (!endpointStates.has(endpointId) || endpointStates.get(endpointId)?.applied.kind === "active") {
-        // Preserve a previously-applied state across re-sync; only initialise to
-        // not-applied when this endpoint was previously unregistered or errored.
+      // After registerProvider returns, the endpoint is applied to the host runtime
+      // (registry is visible). Discovery outcome is reported separately via refresh.
+      const existingApplied = endpointStates.get(endpointId)?.applied
+      if (existingApplied?.kind === "active" || existingApplied?.kind === "error") {
+        // Preserve the more specific runtime state on re-sync (e.g. after an edit).
+        // Reset when the registration was re-created through deactivate → activate.
+      } else if (!hasCredential) {
+        setApplied(endpointId, { kind: "error", category: "credential-missing" })
       } else {
-        setApplied(endpointId, { kind: "not-applied" })
+        setApplied(endpointId, { kind: "active", modelCount: 0 })
       }
     }
   }
@@ -265,6 +275,8 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
       const endpoint = registry.endpoints[endpointId]
       if (!endpoint) continue
       const providerId = providerIdForEndpoint(endpointId)
+      // Poll cadence is pollInterval-based; the host's own catalog load at session
+      // start already triggers the immediate refresh for us (via get_available_models).
       pollStops.set(endpointId, startPolling(endpoint.pollInterval, () =>
         ctx.modelRegistry.refresh({ providers: [providerId], force: true }).then(() => undefined),
       ))
