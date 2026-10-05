@@ -172,7 +172,9 @@ class RpcClient {
         reject,
         timer: setTimeout(() => {
           this.waiters.delete(waiter)
-          reject(new Error(`Timed out waiting for Pi RPC record after ${options.timeoutMs ?? TIMEOUT_MS}ms\nstderr:\n${this.stderr}`))
+          const tail = this.records.slice(Math.max(0, after - 2)).slice(-12)
+            .map((record) => JSON.stringify(record).slice(0, 400)).join("\n")
+          reject(new Error(`Timed out waiting for Pi RPC record after ${options.timeoutMs ?? TIMEOUT_MS}ms\nrecords since cursor:\n${tail}\nstderr:\n${this.stderr}`))
         }, options.timeoutMs ?? TIMEOUT_MS),
       }
       this.waiters.add(waiter)
