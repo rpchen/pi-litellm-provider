@@ -1147,7 +1147,8 @@ export default function bootstrapProbe(pi) {
   ])
   assert(duplicate === "silent", "the acknowledged problem set was reported again after restart")
   // Diagnostics still describe the problem set (visibility is not suppressed).
-  await diagnosticsNotice("catalog 当前不可用", "the post-restart diagnostics")
+  const postRestart = await diagnosticsNotice("提醒状态：该问题集合已确认（跨重启保留），不重复提醒", "the restored acknowledgement after restart")
+  assert(postRestart.message.includes("catalog 当前不可用"), "the problem set must stay visible after restart")
 
   // Positive control: a materially bigger problem set is reported again.
   const grownCursor = rpc.records.length
