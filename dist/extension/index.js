@@ -191,9 +191,17 @@ export default function piLitellmProvider(pi, internals = {}) {
     /** Surface a materially new or regressed availability problem, exactly once. */
     const notifyCatalog = (ctx, endpointId) => {
         const pending = takePendingNotice(stateFor(endpointId));
-        const notice = pending
-            ? { level: pending.reason === "catalog-unusable" || pending.reason === "regression" ? "warning" : "info", message: pending.message }
-            : catalogNotice(stateFor(endpointId).current.publication);
+        if (!pending)
+            return;
+        const summary = stateFor(endpointId).current.publication;
+        if (!summary)
+            return;
+        // The notice text is composed from the current summary (regressed model
+        // names, counts) plus the decision reason — never from stored prose.
+        const notice = catalogNotice({
+            ...summary,
+            acknowledgement: { ...summary.acknowledgement, notify: true, reason: pending.reason },
+        });
         if (!notice)
             return;
         ctx.ui.notify(`LiteLLM ${endpointId}：${notice.message}`, notice.level);
