@@ -831,7 +831,6 @@ export default function bootstrapProbe(pi) {
   // rebuilt metadata is incomplete, so the old trusted snapshot no longer
   // describes this model. It is withdrawn, the catalog becomes unusable, and the
   // user is told — never silently substituted, never silently continuing.
-  const regressionCursor = rpc.records.length
   defaultServer.state.models = [
     {
       ...reducedModelInfo("e2e-default-responses", "responses"),
@@ -843,7 +842,11 @@ export default function bootstrapProbe(pi) {
       supports_reasoning: undefined,
     }),
   ]
-  await forceRefresh()
+  // The discovery round records the availability change; the next real
+  // activation action surfaces it exactly once through the host notification.
+  await publicationModels()
+  const regressionCursor = rpc.records.length
+  await rpc.extensionCommand("/litellm-endpoints all")
   const regressionNotice = await notifySince(regressionCursor, /没有任何模型可以安全发布/, "the unusable-catalog notice")
   assert(
     regressionNotice.message.includes("此前可用的模型已被撤下：e2e-default-responses"),

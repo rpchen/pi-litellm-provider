@@ -311,10 +311,6 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
           ctx.ui.notify(`未知 LiteLLM endpoint：${endpointId}`, "warning")
           return
         }
-        // The user is looking at this endpoint's state right now: surface any
-        // unconsumed material availability change (regression / unusable
-        // catalog) exactly once instead of waiting for the next poll.
-        notifyCatalog(ctx, endpointId)
         // Diagnostics never degrades to a placeholder: every endpoint gets a full canonical
         // record regardless of desired/validation/credential/applied state.
         const state = endpointStateFor(endpointId)
