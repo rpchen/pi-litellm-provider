@@ -716,6 +716,9 @@ export default function bootstrapProbe(pi) {
   const diagnosticsNotice = async (needle, label) => {
     let last = "<none>"
     for (let attempt = 0; attempt < 80; attempt++) {
+      // Each catalog request drives a live refreshModels pass, so diagnostics
+      // always describe a discovery round that just happened.
+      await publicationModels().catch(() => [])
       const run = await rpc.extensionCommand("/litellm-diagnostics default")
       const notice = await rpc.waitFor(
         (record) =>
@@ -736,14 +739,12 @@ export default function bootstrapProbe(pi) {
     pluginModels((await rpc.request({ type: "get_available_models" })).response)
 
   // `--no-session` Pi stops endpoint polling once a prompt ends, so Phase 1b
-  // drives discovery through the endpoint manager instead of waiting for a
-  // background poll. "全部启用" re-applies the current active set, and the
-  // manager always force-refreshes those providers before finishing.
+  // drives discovery through non-interactive activation plus catalog reads:
+  // "/litellm-endpoints all" re-registers the active providers, and every
+  // get_available_models call runs a fresh refreshModels pass.
   const forceRefresh = async () => {
-    await rpc.driveCommand("/litellm-endpoints", [
-      { select: "全部启用" },
-      { select: undefined },
-    ])
+    await rpc.extensionCommand("/litellm-endpoints all")
+    await publicationModels()
   }
 
   const notifySince = (cursor, pattern, label) =>
