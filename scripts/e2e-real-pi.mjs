@@ -497,22 +497,25 @@ export default function bootstrapProbe(pi) {
     .join(" ")
   const nodeOptionsValue = nodeOptions
   const probeExtensionPath = probeExtension
-  const child = spawn(
-    PI_BIN,
-    [
-      "--mode", "rpc",
-      "--no-session",
-      "--extension", probeExtension,
-      "--model", "e2e-bootstrap/bootstrap",
-    ],
-    {
-      cwd: workDir,
-      env: { ...isolatedEnv, NODE_OPTIONS: nodeOptions, E2E_MODELS_DEV_CATALOG: catalogFile },
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
-    },
-  )
-  rpc = new RpcClient(child)
+  const startPhase1Pi = () => {
+    const process_ = spawn(
+      PI_BIN,
+      [
+        "--mode", "rpc",
+        "--no-session",
+        "--extension", probeExtension,
+        "--model", "e2e-bootstrap/bootstrap",
+      ],
+      {
+        cwd: workDir,
+        env: { ...isolatedEnv, NODE_OPTIONS: nodeOptions, E2E_MODELS_DEV_CATALOG: catalogFile },
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: process.platform === "win32",
+      },
+    )
+    return new RpcClient(process_)
+  }
+  rpc = startPhase1Pi()
 
   const commandsResult = await rpc.request({ type: "get_commands" })
   const commands = commandsResult.response?.data?.commands
@@ -877,7 +880,7 @@ export default function bootstrapProbe(pi) {
     "the withdrawn model",
   )
   await rpc.extensionCommand("/litellm-endpoints all")
-  const regressionNotice = await notifySince(regressionCursor, /没有任何模型可以安全发布/, "the unusable-catalog notice")
+  const regressionNotice = await notifySince(regressionCursor, /已被撤下：e2e-default-responses/, "the regression notice")
   assert(
     regressionNotice.message.includes("此前可用的模型已被撤下：e2e-default-responses"),
     `the unusable-catalog notice must name the withdrawn model: ${regressionNotice.message}`,
@@ -902,6 +905,18 @@ export default function bootstrapProbe(pi) {
 
   // [REAL-HOST-E2E] Scenario 5: recovery publishes the model again automatically,
   // with no user approval anywhere in the flow.
+  //
+  // The snapshot below is the *withdrawn* state (0 publishable) exactly as it was
+  // asserted above; the recovery step must change the target model from withheld
+  // to published+configured without any user action.
+  const withdrawnModels = await publicationModels()
+  const before = {
+    models: withdrawnModels.filter((model) => model.provider === "litellm").map((model) => model.id),
+    inHost: withdrawnModels.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+  }
+  console.log(`[recovery before] target=e2e-default-responses inHost=${before.inHost} hostModels=${JSON.stringify(before.models)}`)
+  assert(before.inHost === false, "the recovery scenario must start from a withdrawn model")
+
   defaultServer.state.models = [
     modelInfo("e2e-default-responses", "responses"),
     modelInfo("e2e-zero-limit", "chat", 0, 0),
@@ -915,10 +930,40 @@ export default function bootstrapProbe(pi) {
     "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
     "the automatic recovery",
   )
+  const recoveredModels = await publicationModels()
+  const after = {
+    models: recoveredModels.filter((model) => model.provider === "litellm").map((model) => model.id),
+    inHost: recoveredModels.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+  }
+  console.log(`[recovery after] target=e2e-default-responses inHost=${after.inHost} hostModels=${JSON.stringify(after.models)}`)
+  assert(after.inHost === true, "the recovered model did not return to /models")
+
+  // Counts and the per-model state must both move: 0/3 -> 1/2, the target leaves
+  // the withheld list, no LKG is involved, and its status is a fresh configuration
+  // (the LKG line would be present for a snapshot-backed publication).
+  const beforeCounts = /模型配置：发现 (\d+) · 可用 (\d+) · withheld (\d+) · LKG (\d+)/u.exec(unusableNotice.message)
+  const afterCounts = /模型配置：发现 (\d+) · 可用 (\d+) · withheld (\d+) · LKG (\d+)/u.exec(recoveredNotice.message)
+  assert(beforeCounts && afterCounts, "both recovery snapshots must report their publication counts")
+  assert(
+    beforeCounts[1] === "3" && beforeCounts[2] === "0" && beforeCounts[3] === "3" && beforeCounts[4] === "0",
+    `unexpected pre-recovery counts: ${beforeCounts[0]}`,
+  )
+  assert(
+    afterCounts[1] === "3" && afterCounts[2] === "1" && afterCounts[3] === "2" && afterCounts[4] === "0",
+    `unexpected post-recovery counts: ${afterCounts[0]}`,
+  )
+  assert(
+    unusableNotice.message.includes("withheld：e2e-default-responses · discovered-incomplete"),
+    "the withdrawn model must be listed as withheld before recovery",
+  )
+  assert(
+    !recoveredNotice.message.includes("withheld：e2e-default-responses"),
+    "the recovered model must leave the withheld list",
+  )
   assert(!recoveredNotice.message.includes("已被撤下"), "the regression must clear after recovery")
   assert(
-    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-    "the recovered model did not return to /models",
+    !/LKG：e2e-default-responses/u.test(recoveredNotice.message),
+    "the recovered model must be freshly configured, not served from LKG",
   )
 
   // [REAL-HOST-E2E] Scenario 7: a descriptive LiteLLM output declaration differs
@@ -1059,8 +1104,71 @@ export default function bootstrapProbe(pi) {
     retryNotice.message.includes("withheld：e2e-incomplete-capabilities · discovered-incomplete · incomplete-metadata"),
     `the withheld reasons must survive recovery: ${retryNotice.message}`,
   )
+  // [REAL-HOST-E2E] Acknowledgement persistence: the same problem set must not
+  // be re-reported after a host restart, while a material change must be.
+  // Leave the endpoint in the acknowledged unusable state (0 publishable).
+  defaultServer.state.failStatus = 0
+  defaultServer.state.models = [
+    { ...reducedModelInfo("e2e-default-responses", "responses"), litellm_params: { model: "openai/e2e-default-responses" } },
+    modelInfo("e2e-zero-limit", "chat", 0, 0),
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
+  ]
+  await forceRefresh()
+  await diagnosticsNotice("catalog 当前不可用", "the acknowledged unusable state")
+  const ackPersisted = JSON.parse(readFileSync(join(agentDir, "models-store.json"), "utf8"))
+  const ackEntry = Object.values(ackPersisted).find((entry) =>
+    entry && typeof entry === "object" && entry.publicationMemory !== undefined)
+  assert(ackEntry, `the acknowledgement was not persisted to the host store: ${JSON.stringify(ackPersisted).slice(0, 400)}`)
+  assert(
+    ackEntry.publicationMemory.acknowledgement !== null &&
+      Object.keys(ackEntry.publicationMemory.acknowledgement.models).length === 3,
+    `unexpected persisted acknowledgement: ${JSON.stringify(ackEntry.publicationMemory)}`,
+  )
+  console.log(`[ack persisted] ${JSON.stringify(ackEntry.publicationMemory)}`)
+
+  // Restart the real host on the same isolated state.
+  await rpc.close()
+  rpc = startPhase1Pi()
+  await rpc.request({ type: "get_commands" })
+
+  const restartCursor = rpc.records.length
+  await rpc.extensionCommand("/litellm-endpoints all")
+  await publicationModels()
+  await rpc.extensionCommand("/litellm-endpoints all")
+  // Negative control bounded in time: the identical fingerprint must stay silent.
+  const duplicate = await Promise.race([
+    notifySince(restartCursor, /已被撤下|没有任何模型可以安全发布|可用模型集合发生变化/, "duplicate notice")
+      .then(() => "reported")
+      .catch(() => "silent"),
+    new Promise((resolve) => setTimeout(() => resolve("silent"), 8_000)),
+  ])
+  assert(duplicate === "silent", "the acknowledged problem set was reported again after restart")
+  // Diagnostics still describe the problem set (visibility is not suppressed).
+  await diagnosticsNotice("catalog 当前不可用", "the post-restart diagnostics")
+
+  // Positive control: a materially bigger problem set is reported again.
+  const grownCursor = rpc.records.length
+  defaultServer.state.models = [
+    ...defaultServer.state.models,
+    { ...reducedModelInfo("e2e-extra-withheld", "chat"), litellm_params: { model: "openai/e2e-extra-withheld" } },
+  ]
+  await untilPublished(
+    (models) => !models.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+    "the grown problem set",
+  )
+  await rpc.extensionCommand("/litellm-endpoints all")
+  const regrown = await notifySince(grownCursor, /没有任何模型可以安全发布|已被撤下/, "the grown-problem notice")
+  assert(
+    regrown.message.includes("没有任何模型可以安全发布"),
+    `a grown problem set must be reported again: ${regrown.message}`,
+  )
+  console.log(`[ack restart] suppressed duplicate, re-notified on material change`)
+
   console.log(
-    "real Pi publication E2E ok: partial catalog, withheld reasons, trusted LKG, route-change regression with unusable-catalog notice, automatic recovery, resolved discrepancy, unresolved conflict and metadata-failure diagnostics verified",
+    "real Pi publication E2E ok: partial catalog, withheld reasons, trusted LKG, route-change regression with unusable-catalog notice, automatic recovery, resolved discrepancy, unresolved conflict, metadata-failure diagnostics and acknowledgement restart persistence verified",
   )
 
   // ===== Phase 2: Endpoint Management UX (real host dialogs, full vertical) =====

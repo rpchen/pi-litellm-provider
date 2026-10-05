@@ -30,7 +30,11 @@ import {
   inspectDiscoverySnapshot,
   lastKnownGoodKey,
   modelFingerprint,
+  nextPublishedBaseline,
   normalizeLiteLLMURL,
+  parsePublicationMemory,
+  serializePublicationMemory,
+  PUBLICATION_MEMORY_SCHEMA_VERSION,
   type CatalogPublication,
   type DiscoveryCoordinator,
   type DiscoveryDiagnostics,
@@ -38,6 +42,7 @@ import {
   type LastKnownGoodStore,
   type MetadataFailure,
   type ModelSpec,
+  type PublicationMemory,
   type PublicationResult,
   type PublishableEntry,
 } from "../core/index.ts"
@@ -110,6 +115,12 @@ interface PersistedCatalog {
   checkedAt: number
   snapshot?: DiscoverySnapshot
   restoreFingerprint?: string
+  /**
+   * Core-validated publication memory (acknowledgement + regression baseline).
+   * Reporting state only: it can suppress a repeated notification and mark a
+   * withdrawal as a regression, and can never publish or withhold a model.
+   */
+  publicationMemory?: unknown
 }
 
 /**
@@ -176,6 +187,23 @@ export async function discoverModels(
 /** Discovered model count from the Core diagnostics (never a synthesized value). */
 function diagnosticsModelCount(diagnostics: DiscoveryDiagnostics): number {
   return diagnostics.stats.models
+}
+
+/**
+ * Restore the Core-validated publication memory into the endpoint controller.
+ * Unreadable memory is ignored: the worst case is one repeated notification.
+ */
+function restorePublicationMemory(
+  raw: unknown,
+  controller: ReturnType<typeof publicationControllerForState>,
+): void {
+  if (raw === undefined || raw === null) return
+  const memory = parsePublicationMemory(raw)
+  if (!memory) return
+  controller.acknowledgement = memory.acknowledgement
+  if (memory.published.length > 0) {
+    for (const id of memory.published) controller.previouslyPublished.add(id)
+  }
 }
 
 /** Record complete configured models as Last Known Good for future outages. */
@@ -322,7 +350,7 @@ export async function refreshProviderModels(
     logger.warn(
       "LiteLLM 未配置地址：请设置 LITELLM_BASE_URL，或在全局 ~/.pi/agent/litellm.json 中填写 baseUrl",
     )
-    await publishIfChanged(context, stored, [])
+    await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory)
     setProviderDiagnostics(diagnosticsState, {
       status: "unconfigured",
       modelCount: 0,
@@ -336,7 +364,7 @@ export async function refreshProviderModels(
   // A definition-level invalid endpoint must never reach the network. The
   // adapter refuses apply with config-invalid before any request is attempted.
   if ((config.validation?.kind ?? "ok") === "invalid") {
-    await publishIfChanged(context, stored, [])
+    await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory)
     setProviderDiagnostics(diagnosticsState, {
       status: "config-error",
       modelCount: 0,
@@ -359,7 +387,7 @@ export async function refreshProviderModels(
     // The host only reaches the network phase when a credential resolved; treat a missing
     // key defensively as unconfigured rather than sending an unauthenticated request.
     logger.warn("LiteLLM Key 未配置，跳过发现（请使用 /login 或设置 LITELLM_API_KEY）")
-    await publishIfChanged(context, stored, [])
+    await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory)
     setProviderDiagnostics(diagnosticsState, {
       status: "unconfigured",
       modelCount: 0,
@@ -377,6 +405,10 @@ export async function refreshProviderModels(
 
   const discoveryKey = `${config.endpointId ?? ""}\u0000${config.baseUrl}\u0000${apiKey}`
   const publicationController = publicationControllerForState(diagnosticsState)
+  // Restore the persisted publication memory for this endpoint before the round
+  // runs, so an acknowledgement from a previous process suppresses the same
+  // problem set and the regression baseline survives the restart.
+  restorePublicationMemory(stored?.publicationMemory, publicationController)
   const discoveryDeps: DiscoveryDeps = {
     ...deps,
     publication: deps.publication ?? {
@@ -426,21 +458,37 @@ export async function refreshProviderModels(
         )
       }
     }
-    await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint)
     // Availability facts: acknowledge only notification, record the published
     // set as the regression baseline, and remember whether to surface this
     // round. None of this can change what Core published.
+    const refreshedAtIso = new Date(coordinated.refreshedAt).toISOString()
     const acknowledgement = decideAcknowledgement(
       publicationController.acknowledgement,
       outcome.catalog,
-      new Date(coordinated.refreshedAt).toISOString(),
+      refreshedAtIso,
     )
     publicationController.acknowledgement = acknowledgement.next
-    // Additive: the baseline answers "was this model ever published by the
-    // applied catalog", so a withdrawal stays visible in diagnostics across
-    // later rounds. A recovered model leaves the regression list by becoming
-    // publishable again, never by the baseline forgetting it.
-    for (const model of outcome.models) publicationController.previouslyPublished.add(model.id)
+    const memory: PublicationMemory = {
+      schemaVersion: PUBLICATION_MEMORY_SCHEMA_VERSION,
+      acknowledgement: acknowledgement.next,
+      // Additive for models the endpoint still serves, bounded by forgetting
+      // models LiteLLM no longer returns: a withdrawal stays a regression for
+      // later rounds and after a restart.
+      published: nextPublishedBaseline(
+        [...publicationController.previouslyPublished],
+        outcome.models.map((model) => model.id),
+        outcome.catalog.withheld.map((entry) => entry.id),
+      ),
+    }
+    publicationController.previouslyPublished = new Set(memory.published)
+    await publishIfChanged(
+      context,
+      stored,
+      outcome.models,
+      snapshot,
+      restoreFingerprint,
+      serializePublicationMemory(memory),
+    )
     if (acknowledgement.notify && !deps.publication) {
       publicationController.pendingNotice = {
         reason: acknowledgement.reason,
@@ -490,7 +538,7 @@ export async function refreshProviderModels(
     }
     if (error instanceof DiscoveryError && error.kind === "auth") {
       logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`)
-      await publishIfChanged(context, stored, [])
+      await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory)
       setProviderDiagnostics(diagnosticsState, {
         status: "auth-error",
         modelCount: 0,
@@ -510,7 +558,7 @@ export async function refreshProviderModels(
       // Spec: 记录错误、不发起发现请求、不注册模型 — so drop the catalog instead of
       // keeping stale models pointed at a dead address.
       logger.error(`LiteLLM 地址无效（${redactUrl(config.baseUrl)}）：${messageOf(error)}`)
-      await publishIfChanged(context, stored, [])
+      await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory)
       setProviderDiagnostics(diagnosticsState, {
         status: "config-error",
         modelCount: 0,
@@ -638,6 +686,7 @@ async function publishIfChanged(
   models: ProviderModelConfigLike[],
   snapshot?: DiscoverySnapshot,
   restoreFingerprint?: string,
+  publicationMemory?: unknown,
 ): Promise<void> {
   const sameModels = modelsFingerprint(stored?.models) === modelsFingerprint(models)
   const sameSnapshot = snapshot === undefined
@@ -645,8 +694,20 @@ async function publishIfChanged(
     : stored?.snapshot?.endpointFingerprint === snapshot.endpointFingerprint &&
       stored.snapshot.modelFingerprint === snapshot.modelFingerprint &&
       stored.restoreFingerprint === restoreFingerprint
-  if (sameModels && sameSnapshot) return
-  await publish(context, models, snapshot, restoreFingerprint)
+  // A new acknowledgement must be persisted even when models and snapshot are
+  // unchanged, otherwise the suppression would be lost on the next restart.
+  const sameMemory = stableJSON(stored?.publicationMemory ?? null) === stableJSON(publicationMemory ?? null)
+  if (sameModels && sameSnapshot && sameMemory) return
+  await publish(context, models, snapshot, restoreFingerprint, publicationMemory)
+}
+
+function stableJSON(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJSON).join(",")}]`
+  if (typeof value !== "object" || value === null) return JSON.stringify(value) ?? "null"
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right, "en"))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJSON(item)}`)
+    .join(",")}}`
 }
 
 function asStoredCatalog(stored: RefreshModelsContextLike["stored"]): PersistedCatalog | undefined {
@@ -656,7 +717,10 @@ function asStoredCatalog(stored: RefreshModelsContextLike["stored"]): PersistedC
   const restoreFingerprint = "restoreFingerprint" in stored && typeof stored.restoreFingerprint === "string"
     ? stored.restoreFingerprint
     : undefined
-  return { models, checkedAt: 0, snapshot, restoreFingerprint }
+  // The publication memory must survive the host round trip: dropping it
+  // would silently disable acknowledgement suppression and regression history.
+  const publicationMemory = "publicationMemory" in stored ? (stored as { publicationMemory?: unknown }).publicationMemory : undefined
+  return { models, checkedAt: 0, snapshot, restoreFingerprint, publicationMemory }
 }
 
 /** Stable fingerprint over the registered model list, for change detection against `stored`. */
@@ -683,12 +747,15 @@ async function publish(
   models: ProviderModelConfigLike[],
   snapshot?: DiscoverySnapshot,
   restoreFingerprint?: string,
+  publicationMemory?: unknown,
 ): Promise<void> {
   if (!context.publish) return
   // A cancelled refresh must not write the store: skip before racing the abort.
   if (context.signal?.aborted) return
   try {
-    await context.publish({ persist: { models, checkedAt: Date.now(), snapshot, restoreFingerprint } })
+    await context.publish({
+      persist: { models, checkedAt: Date.now(), snapshot, restoreFingerprint, publicationMemory },
+    })
   } catch (error) {
     // The host's publish rejects with an abort reason when cancellation lands during the
     // write (supersede / 15s catalog timeout / shutdown) — normal lifecycle, not a
