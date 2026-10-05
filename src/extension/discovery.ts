@@ -14,6 +14,7 @@
  */
 import {
   buildPublicationResult,
+  catalogFromPublication,
   classifyMetadataFailure,
   compareDiscoverySnapshots,
   createDiscoveryCacheDiagnostics,
@@ -22,6 +23,7 @@ import {
   capturedPublicationVerdict,
   createLastKnownGoodEntry,
   createLastKnownGoodStore,
+  decideAcknowledgement,
   diagnoseModelSpecs,
   endpointFingerprint,
   groupLiteLLMDeployments,
@@ -29,14 +31,14 @@ import {
   lastKnownGoodKey,
   modelFingerprint,
   normalizeLiteLLMURL,
-  degradationEligibility,
-  type BlockedEntry,
+  type CatalogPublication,
   type DiscoveryCoordinator,
   type DiscoveryDiagnostics,
   type DiscoverySnapshot,
   type LastKnownGoodStore,
   type MetadataFailure,
   type ModelSpec,
+  type PublicationResult,
   type PublishableEntry,
 } from "../core/index.ts"
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog, type FetchLike } from "../net/fetch.ts"
@@ -68,7 +70,8 @@ export interface DiscoveryDeps {
    */
   publication?: {
     readonly store?: LastKnownGoodStore
-    readonly acceptedDegradedIDs?: ReadonlySet<string>
+    /** Model ids the previously applied catalog published (regression baseline). */
+    readonly previouslyPublished?: ReadonlySet<string>
     readonly now?: number
   }
   /**
@@ -83,11 +86,15 @@ export interface DiscoveryDeps {
 export interface DiscoveryOutcome {
   models: ProviderModelConfigLike[]
   specs: ModelSpec[]
-  /** Publishable, non-degraded specs persisted into the snapshot. */
+  /**
+   * Specs persisted into the snapshot. They are exactly the published set:
+   * there is no degraded or withheld model in a persisted snapshot.
+   */
   snapshotSpecs: ModelSpec[]
   fingerprint: string
   diagnostics: DiscoveryDiagnostics
   publication: PublicationSummary
+  catalog: CatalogPublication
 }
 
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>
@@ -110,10 +117,10 @@ interface PersistedCatalog {
  * pi provider configs. Throws `DiscoveryError` on degradable failures.
  *
  * Publication partition comes from Core `buildPublicationResult`: only
- * configured, configured-lkg, and user-accepted degraded models map to
- * provider configs. A models.dev fetch failure does not abort discovery;
- * it is classified with the Core taxonomy so valid LKG entries can
- * substitute while the rest stay blocked with reasons.
+ * `configured` and `configured-lkg` models map to provider configs. A
+ * models.dev fetch failure does not abort discovery; it is classified with
+ * the Core taxonomy so valid LKG entries can substitute while the rest stay
+ * withheld with reasons. One model's failure never gates another's.
  */
 export async function discoverModels(
   config: ExtensionConfig,
@@ -140,7 +147,6 @@ export async function discoverModels(
   const now = deps.publication?.now ?? Date.now()
   const publication = buildPublicationResult(litellmResponse, catalog, buildOptions, {
     store: deps.publication?.store,
-    acceptedDegradedIDs: deps.publication?.acceptedDegradedIDs,
     failure: catalogFailure,
     now,
   })
@@ -149,17 +155,27 @@ export async function discoverModels(
   }
   const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions)
   const specs = publication.publishable.map((entry) => entry.spec)
-  const snapshotSpecs = publication.publishable
-    .filter((entry) => entry.degraded === undefined)
-    .map((entry) => entry.spec)
+  // Published specs are the only persisted specs: a withheld model never
+  // survives into a snapshot, and no user confirmation can add one.
+  const snapshotSpecs = [...specs]
+  const catalogFacts = catalogFromPublication(publication, {
+    discovered: diagnosticsModelCount(diagnosed.diagnostics),
+    previouslyPublished: deps.publication?.previouslyPublished,
+  })
   return {
     specs,
     snapshotSpecs,
     models: toProviderModelsWithPublication(publication.publishable, addresses.rootURL),
     fingerprint: modelFingerprint(specs),
     diagnostics: diagnosed.diagnostics,
-    publication: summarizePublication(publication, catalogFailure),
+    publication: summarizePublication(publication, catalogFacts, catalogFailure),
+    catalog: catalogFacts,
   }
+}
+
+/** Discovered model count from the Core diagnostics (never a synthesized value). */
+function diagnosticsModelCount(diagnostics: DiscoveryDiagnostics): number {
+  return diagnostics.stats.models
 }
 
 /** Record complete configured models as Last Known Good for future outages. */
@@ -192,35 +208,55 @@ function seedPublicationLKG(
 }
 
 function summarizePublication(
-  publication: { publishable: readonly PublishableEntry[]; blocked: readonly BlockedEntry[] },
+  publication: PublicationResult,
+  catalogFacts: CatalogPublication,
   failure: MetadataFailure | undefined,
 ): PublicationSummary {
+  const facts = (id: string, assessment: PublicationResult["blocked"][number]["assessment"]) => [
+    ...assessment.discrepancies.map((item) => ({
+      model: id,
+      field: item.field,
+      status: item.status,
+      resolution: item.resolution,
+    })),
+    ...assessment.conflicts.map((item) => ({
+      model: id,
+      field: item.field,
+      status: item.status,
+      resolution: item.resolution,
+    })),
+  ]
+  const allFacts = [
+    ...publication.publishable.flatMap((entry) => facts(entry.spec.id, entry.assessment)),
+    ...publication.blocked.flatMap((entry) => facts(entry.spec.id, entry.assessment)),
+  ]
+  const lkgDetail = publication.publishable
+    .map((entry) => entry.assessment.lkgDetail)
+    .find((detail): detail is string => detail !== undefined)
   return {
+    discovered: catalogFacts.discovered,
     publishable: publication.publishable.map((entry) => ({
       id: entry.spec.id,
       status: entry.assessment.status,
     })),
-    degradedIDs: publication.publishable
-      .filter((entry) => entry.degraded !== undefined)
-      .map((entry) => entry.spec.id),
     lkgIDs: publication.publishable
       .filter((entry) => entry.assessment.usingLKG)
       .map((entry) => entry.spec.id),
-    blocked: publication.blocked.map((entry) => {
-      const eligibility = degradationEligibility(entry.assessment)
-      return {
-      id: entry.spec.id,
-      status: entry.assessment.status,
-      degradationEligible: eligibility.eligible,
-      degradationReason: eligibility.eligible ? undefined : eligibility.reason,
-      gaps: [
-        ...entry.assessment.missingFields,
-        ...entry.assessment.unknownFields,
-        ...entry.assessment.illegalFields,
-      ],
-      }
-    }),
+    lkgDetail,
+    withheld: catalogFacts.withheld.map((entry) => ({
+      id: entry.id,
+      status: entry.status,
+      reasons: entry.reasons,
+      previouslyPublished: entry.previouslyPublished,
+      retryable: entry.retryability === "retryable",
+    })),
+    partial: catalogFacts.partial,
+    unusable: catalogFacts.unusable,
+    regressions: catalogFacts.regressions.map((entry) => entry.id),
+    discrepancies: allFacts.filter((fact) => fact.status === "resolved-discrepancy"),
+    conflicts: allFacts.filter((fact) => fact.status === "unresolved-conflict"),
     failureKind: failure?.kind,
+    acknowledgement: { notify: false, reason: "unchanged", fingerprint: catalogFacts.fingerprint },
   }
 }
 
@@ -345,7 +381,7 @@ export async function refreshProviderModels(
     ...deps,
     publication: deps.publication ?? {
       store: publicationController.store,
-      acceptedDegradedIDs: publicationController.acceptedDegradedIDs,
+      previouslyPublished: publicationController.previouslyPublished,
     },
   }
 
@@ -391,6 +427,22 @@ export async function refreshProviderModels(
       }
     }
     await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint)
+    // Availability facts: acknowledge only notification, record the published
+    // set as the regression baseline, and remember whether to surface this
+    // round. None of this can change what Core published.
+    const acknowledgement = decideAcknowledgement(
+      publicationController.acknowledgement,
+      outcome.catalog,
+      new Date(coordinated.refreshedAt).toISOString(),
+    )
+    publicationController.acknowledgement = acknowledgement.next
+    publicationController.previouslyPublished = new Set(outcome.models.map((model) => model.id))
+    if (acknowledgement.notify && !deps.publication) {
+      publicationController.pendingNotice = {
+        reason: acknowledgement.reason,
+        message: outcome.publication.acknowledgement.reason,
+      }
+    }
     setProviderDiagnostics(diagnosticsState, {
       status: coordinated.source === "stale"
         ? "stale"
@@ -398,7 +450,14 @@ export async function refreshProviderModels(
       modelCount: outcome.models.length,
       models: outcome.models,
       discovery: outcome.diagnostics,
-      publication: outcome.publication,
+      publication: {
+        ...outcome.publication,
+        acknowledgement: {
+          notify: acknowledgement.notify,
+          reason: acknowledgement.reason,
+          fingerprint: acknowledgement.next?.fingerprint ?? "sha256:none",
+        },
+      },
       cache: createDiscoveryCacheDiagnostics({
         source: coordinated.source === "cache"
           ? "memory-cache"

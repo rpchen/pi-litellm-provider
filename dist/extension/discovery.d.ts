@@ -12,7 +12,7 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { type DiscoveryCoordinator, type DiscoveryDiagnostics, type LastKnownGoodStore, type ModelSpec } from "../core/index.ts";
+import { type CatalogPublication, type DiscoveryCoordinator, type DiscoveryDiagnostics, type LastKnownGoodStore, type ModelSpec } from "../core/index.ts";
 import { type FetchLike } from "../net/fetch.ts";
 import type { ExtensionConfig } from "./config.ts";
 import { type ProviderDiagnosticsState, type PublicationSummary } from "./diagnostics.ts";
@@ -34,7 +34,8 @@ export interface DiscoveryDeps {
      */
     publication?: {
         readonly store?: LastKnownGoodStore;
-        readonly acceptedDegradedIDs?: ReadonlySet<string>;
+        /** Model ids the previously applied catalog published (regression baseline). */
+        readonly previouslyPublished?: ReadonlySet<string>;
         readonly now?: number;
     };
     /**
@@ -48,11 +49,15 @@ export interface DiscoveryDeps {
 export interface DiscoveryOutcome {
     models: ProviderModelConfigLike[];
     specs: ModelSpec[];
-    /** Publishable, non-degraded specs persisted into the snapshot. */
+    /**
+     * Specs persisted into the snapshot. They are exactly the published set:
+     * there is no degraded or withheld model in a persisted snapshot.
+     */
     snapshotSpecs: ModelSpec[];
     fingerprint: string;
     diagnostics: DiscoveryDiagnostics;
     publication: PublicationSummary;
+    catalog: CatalogPublication;
 }
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>;
 /** Create one coordinator per registered provider instance. */
@@ -62,10 +67,10 @@ export declare function createProviderRefreshCoordinator(): ProviderRefreshCoord
  * pi provider configs. Throws `DiscoveryError` on degradable failures.
  *
  * Publication partition comes from Core `buildPublicationResult`: only
- * configured, configured-lkg, and user-accepted degraded models map to
- * provider configs. A models.dev fetch failure does not abort discovery;
- * it is classified with the Core taxonomy so valid LKG entries can
- * substitute while the rest stay blocked with reasons.
+ * `configured` and `configured-lkg` models map to provider configs. A
+ * models.dev fetch failure does not abort discovery; it is classified with
+ * the Core taxonomy so valid LKG entries can substitute while the rest stay
+ * withheld with reasons. One model's failure never gates another's.
  */
 export declare function discoverModels(config: ExtensionConfig, apiKey: string, signal: AbortSignal | undefined, deps?: DiscoveryDeps): Promise<DiscoveryOutcome>;
 /**

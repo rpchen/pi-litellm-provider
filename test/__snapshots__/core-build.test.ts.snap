@@ -210,7 +210,7 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
     "limit": {
       "context": 200000,
       "input": 200000,
-      "output": 131072,
+      "output": 32000,
     },
     "name": "glm-5.3",
     "protocol": "responses",
@@ -769,7 +769,7 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
     "limit": {
       "context": 500000,
       "input": 500000,
-      "output": 131072,
+      "output": 64000,
     },
     "name": "minimax-m3",
     "protocol": "responses",

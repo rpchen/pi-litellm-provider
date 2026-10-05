@@ -8,11 +8,20 @@ export function publicationControllerForState(state) {
         return existing;
     const created = {
         store: createLastKnownGoodStore(),
-        acceptedDegradedIDs: new Set(),
+        previouslyPublished: new Set(),
     };
     if (state)
         state.publication = created;
     return created;
+}
+/** Consume a pending catalog notice exactly once. */
+export function takePendingNotice(state) {
+    const controller = state?.publication;
+    if (!controller?.pendingNotice)
+        return undefined;
+    const notice = controller.pendingNotice;
+    controller.pendingNotice = undefined;
+    return notice;
 }
 export function createProviderDiagnosticsState() {
     return { current: { status: "idle", modelCount: 0 } };
@@ -86,25 +95,71 @@ export function formatHostDateTime(value, timezoneOffsetMinutes) {
         `UTC${sign}${pad2(offsetHours)}:${pad2(offsetMinutes)}`,
     ].join(" ");
 }
-/** Render the Core publication partition: states, gaps, LKG, degraded. */
+/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
 export function formatPublicationSummary(summary) {
     if (!summary)
         return [];
     const lines = [
-        `模型配置：可用 ${summary.publishable.length} · 未完成 ${summary.blocked.length} · 降级 ${summary.degradedIDs.length} · LKG ${summary.lkgIDs.length}`,
+        `模型配置：发现 ${summary.discovered} · 可用 ${summary.publishable.length} · withheld ${summary.withheld.length} · LKG ${summary.lkgIDs.length}`,
     ];
+    if (summary.unusable) {
+        lines.push("catalog 当前不可用：endpoint 连接成功，但本轮没有任何模型达到可信发布标准。", "下一步：稍后刷新（Retry）重新发现，或运行 /litellm-diagnostics <endpoint-id> 查看每个模型的 withheld 原因。插件不会用默认值或确认动作强行发布模型。");
+    }
+    else if (summary.partial) {
+        lines.push(`部分可用：${summary.publishable.length} 个模型正常发布，${summary.withheld.length} 个 withheld（其余模型不受影响，无需确认）。`);
+    }
     if (summary.failureKind)
         lines.push(`元数据获取失败：${summary.failureKind}（未用默认值伪装完整配置）`);
-    if (summary.lkgIDs.length > 0)
-        lines.push(`LKG 提供：${summary.lkgIDs.join("、")}`);
-    if (summary.degradedIDs.length > 0)
-        lines.push(`已接受降级：${summary.degradedIDs.join("、")}（仍标记为降级，非完整配置）`);
-    for (const blocked of summary.blocked.slice(0, 5)) {
-        lines.push(`未完成：${blocked.id} · ${blocked.status}${blocked.gaps.length > 0 ? ` · 缺失 ${blocked.gaps.join("、")}` : ""}`);
+    if (summary.regressions.length > 0) {
+        lines.push(`此前可用、现已撤下：${summary.regressions.join("、")}（这些模型当前不可安全使用；插件不会自动切换到其他模型）`);
     }
-    if (summary.blocked.length > 5)
-        lines.push(`……另有 ${summary.blocked.length - 5} 个未完成模型`);
+    if (summary.lkgIDs.length > 0) {
+        lines.push(`使用已信任的前次完整配置（LKG）：${summary.lkgIDs.join("、")}`);
+        if (summary.lkgDetail)
+            lines.push(`LKG 说明：${summary.lkgDetail}`);
+    }
+    for (const model of summary.withheld.slice(0, 5)) {
+        const reasons = model.reasons.map((item) => item.code).join("+") || "withheld";
+        lines.push(`withheld：${model.id} · ${model.status} · ${reasons}${model.retryable ? " · 可重试" : ""}${model.previouslyPublished ? " · 此前可用" : ""}`);
+    }
+    if (summary.withheld.length > 5)
+        lines.push(`……另有 ${summary.withheld.length - 5} 个 withheld 模型`);
+    for (const fact of summary.discrepancies.slice(0, 5)) {
+        lines.push(`已裁决差异：${fact.model} · ${fact.field} · ${fact.resolution}`);
+    }
+    for (const fact of summary.conflicts.slice(0, 5)) {
+        lines.push(`未决冲突：${fact.model} · ${fact.field} · ${fact.resolution}`);
+    }
     return lines;
+}
+/**
+ * User-facing notice for a materially new or regressed availability problem.
+ *
+ * A first-time gap on a newly discovered model is intentionally silent
+ * (diagnostics only); a regression or an unusable catalog is not.
+ */
+export function catalogNotice(summary) {
+    if (!summary?.acknowledgement.notify)
+        return undefined;
+    switch (summary.acknowledgement.reason) {
+        case "catalog-unusable":
+            return {
+                level: "warning",
+                message: `endpoint 连接成功，发现 ${summary.discovered} 个模型，但当前没有任何模型可以安全发布。${summary.regressions.length > 0 ? `此前可用的模型已被撤下：${summary.regressions.join("、")}。` : ""}可用 /model 重新刷新（Retry），或运行 /litellm-diagnostics 查看每个模型的 withheld 原因。`,
+            };
+        case "regression":
+            return {
+                level: "warning",
+                message: `此前可用的模型已被撤下：${summary.regressions.join("、")}。它们当前不可安全使用，插件不会自动切换到其他模型；请重新刷新（Retry）或改选其他模型。`,
+            };
+        case "new-issues":
+            return {
+                level: "info",
+                message: `LiteLLM 可用模型集合发生变化：${summary.withheld.length} 个模型 withheld（此前已知问题之外的新问题）。运行 /litellm-diagnostics 查看原因。`,
+            };
+        default:
+            return undefined;
+    }
 }
 const STATUS_TEXT = {
     idle: "尚未执行发现",

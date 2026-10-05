@@ -158,7 +158,7 @@ describe("discoverModels", () => {
     expect(outcome.fingerprint.length).toBeGreaterThan(0)
   })
 
-  test("models.dev 失败时不伪装完整配置（降级为空目录、模型保持未完成）", async () => {
+  test("models.dev 失败时不伪装完整配置（空目录、模型保持 withheld）", async () => {
     const outcome = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
@@ -170,10 +170,10 @@ describe("discoverModels", () => {
     // LiteLLM 只声明了 limits，tools/reasoning 无可信证据：不得注册
     // 看似正常的模型；缺口必须可见。
     expect(outcome.models).toHaveLength(0)
-    expect(outcome.publication.blocked.map((model) => model.id)).toEqual(["gpt-6-sol"])
-    expect(outcome.publication.blocked[0]!.gaps).toEqual(
-      expect.arrayContaining(["capabilities.tools", "reasoning"]),
-    )
+    expect(outcome.publication.withheld.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    expect(outcome.publication.withheld[0]!.reasons.map((reason) => reason.code)).toEqual([
+      "metadata-unavailable",
+    ])
   })
 
   test("元数据加载抛错时分类失败并可用有效 LKG 继续提供", async () => {
@@ -184,7 +184,7 @@ describe("discoverModels", () => {
         "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
-      publication: { store, acceptedDegradedIDs: new Set() },
+      publication: { store },
     })
     expect(first.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
     const second = await discoverModels(config(), KEY, undefined, {
@@ -195,7 +195,7 @@ describe("discoverModels", () => {
         throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" })
       },
       logger: silent,
-      publication: { store, acceptedDegradedIDs: new Set() },
+      publication: { store },
     })
     expect(second.publication.failureKind).toBe("unreachable")
     expect(second.models.map((model) => model.id)).toEqual(["gpt-6-sol"])

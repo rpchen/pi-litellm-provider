@@ -403,6 +403,30 @@ try {
     { mode: 0o600 },
   )
 
+  // A deterministic models.dev catalog so evidence source authority is exercised
+  // against a real enrichment source (identity-resolved intrinsic metadata).
+  const catalogFile = join(root, "models-dev-catalog.json")
+  writeFileSync(catalogFile, JSON.stringify({
+    vendor: {
+      models: {
+        "e2e-catalog-model": {
+          id: "e2e-catalog-model",
+          tool_call: true,
+          reasoning: false,
+          modalities: { input: ["text"], output: ["text"] },
+          limit: { context: 128_000, output: 4_096 },
+        },
+        "e2e-conflict-model": {
+          id: "e2e-conflict-model",
+          tool_call: true,
+          reasoning: false,
+          modalities: { input: ["text"], output: ["text"] },
+          limit: { context: 128_000, output: 4_096 },
+        },
+      },
+    },
+  }, null, 2) + "\n")
+
   const fetchHook = join(root, "fetch-hook.mjs")
   // The stub must survive Pi's own startup: `http-dispatcher` installs undici
   // globals with a plain `globalThis.fetch = ...` assignment. A data property
@@ -410,6 +434,7 @@ try {
   // the visible fetch stays ours, so the catalog source is deterministic
   // instead of depending on an external service.
   writeFileSync(fetchHook, `
+import { readFileSync } from "node:fs"
 const originalFetch = globalThis.fetch.bind(globalThis)
 let baseFetch = originalFetch
 let depth = 0
@@ -422,7 +447,9 @@ const isModelsDev = (input) => {
 }
 const hookedFetch = (input, init) => {
   if (isModelsDev(input)) {
-    return new Response(JSON.stringify({}), {
+    let body = "{}"
+    try { body = readFileSync(process.env.E2E_MODELS_DEV_CATALOG, "utf8") } catch {}
+    return new Response(body, {
       status: 200,
       headers: { "content-type": "application/json" },
     })
@@ -478,7 +505,7 @@ export default function bootstrapProbe(pi) {
     ],
     {
       cwd: workDir,
-      env: { ...isolatedEnv, NODE_OPTIONS: nodeOptions },
+      env: { ...isolatedEnv, NODE_OPTIONS: nodeOptions, E2E_MODELS_DEV_CATALOG: catalogFile },
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
     },
@@ -565,14 +592,19 @@ export default function bootstrapProbe(pi) {
   )
   assert(diagnosticNotice.message.includes("状态：正常"), "Diagnostics did not report a ready endpoint")
   assert(diagnosticNotice.message.includes("已注册模型：1"), "Diagnostics model count is not the host-visible count")
-  // [REAL-HOST-E2E] Publication diagnostics name the incomplete model and its gaps.
+  // [REAL-HOST-E2E] Publication diagnostics name the withheld model, its reasons
+  // and the partial-availability counts.
   assert(
-    diagnosticNotice.message.includes("未完成：e2e-incomplete-capabilities"),
-    "Diagnostics did not report the incomplete model as blocked",
+    diagnosticNotice.message.includes("模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0"),
+    "Diagnostics did not report the partial-catalog partition",
   )
   assert(
-    diagnosticNotice.message.includes("capabilities.tools") && diagnosticNotice.message.includes("reasoning"),
-    "Diagnostics did not report which capability fields are unknown",
+    diagnosticNotice.message.includes("withheld：e2e-incomplete-capabilities · discovered-incomplete · incomplete-metadata"),
+    "Diagnostics did not report the withheld model with its reasons",
+  )
+  assert(
+    diagnosticNotice.message.includes("withheld：e2e-zero-limit · invalid-metadata · illegal-metadata"),
+    "Diagnostics did not report the illegal-metadata withholding reason",
   )
   assert(!diagnosticNotice.message.includes(defaultServer.apiKey), "Diagnostics leaked the API key")
   assert(!diagnosticNotice.message.includes(defaultServer.baseUrl), "Diagnostics leaked the LiteLLM URL")
@@ -698,19 +730,6 @@ export default function bootstrapProbe(pi) {
     throw new Error(`real Pi diagnostics never reported: ${label ?? needle}\nlast diagnostics:\n${last}`)
   }
 
-  const acceptDegraded = async (args) => {
-    const run = await rpc.extensionCommand(`/litellm-accept-degraded ${args}`)
-    const notice = await rpc.waitFor(
-      (record) =>
-        record?.type === "extension_ui_request" &&
-        record.method === "notify" &&
-        typeof record.message === "string" &&
-        /已接受降级：|拒绝降级：|已是完整配置|未知或不可降级模型|用法：litellm-accept-degraded/.test(record.message),
-      { after: run.after },
-    )
-    return notice.message
-  }
-
   const publicationModels = async () =>
     pluginModels((await rpc.request({ type: "get_available_models" })).response)
 
@@ -725,53 +744,63 @@ export default function bootstrapProbe(pi) {
     ])
   }
 
-  // Partition: only the fully evidenced model registers; illegal limits and
-  // unknown capabilities stay blocked with their reasons on screen.
+  const notifySince = (cursor, pattern, label) =>
+    rpc.waitFor(
+      (record) =>
+        record?.type === "extension_ui_request" &&
+        record.method === "notify" &&
+        typeof record.message === "string" &&
+        pattern.test(record.message),
+      { after: cursor },
+    )
+
+  // [REAL-HOST-E2E] Scenario 4: partial catalog. Only the fully evidenced model
+  // registers; the illegal-limit and capability-incomplete models stay withheld
+  // with their reasons on screen, and no confirmation is requested.
+  const catalogLoaded = () => diagnosticsNotice("models.dev：ok", "the deterministic models.dev catalog")
+  await catalogLoaded()
+  const baselineCursor = rpc.records.length
   await forceRefresh()
   const baselineNotice = await diagnosticsNotice(
-    "模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 0",
-    "the initial publication partition",
+    "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
+    "the partial-catalog publication partition",
   )
   assert(baselineNotice.message.includes("状态：正常"), `Diagnostics did not report a ready endpoint: ${baselineNotice.message}`)
   console.log(`[publication baseline]\n${baselineNotice.message}`)
-  // Both metadata sources report their own status; neither is ever faked.
+  assert(
+    baselineNotice.message.includes("部分可用：1 个模型正常发布，2 个 withheld"),
+    `partial availability must be stated: ${baselineNotice.message}`,
+  )
+  assert(
+    baselineNotice.message.includes("withheld：e2e-incomplete-capabilities · discovered-incomplete · incomplete-metadata"),
+    `the incomplete model must be withheld with its reason: ${baselineNotice.message}`,
+  )
+  assert(
+    baselineNotice.message.includes("withheld：e2e-zero-limit · invalid-metadata · illegal-metadata"),
+    `illegal limits must stay visible in diagnostics: ${baselineNotice.message}`,
+  )
   assert(
     baselineNotice.message.includes("/v1/model/info：ok · /v1/models：未作为发现源"),
     `the model-info source status must be visible: ${baselineNotice.message}`,
   )
-  assert(
-    baselineNotice.message.includes("models.dev：degraded"),
-    `models.dev unavailability must stay visible in diagnostics: ${baselineNotice.message}`,
-  )
-  assert(
-    baselineNotice.message.includes("未完成：e2e-zero-limit · invalid-metadata"),
-    `illegal limits must stay visible in diagnostics: ${baselineNotice.message}`,
-  )
+  assert(!baselineNotice.message.includes("降级"), "the degraded vocabulary must be gone from diagnostics")
 
-  // Ineligible states never claim a successful accept.
+  // [REAL-HOST-E2E] No degraded-acceptance command or confirmation path exists.
+  const commandList = (await rpc.request({ type: "get_commands" })).response?.data?.commands
+  assert(Array.isArray(commandList), "get_commands did not return a command list")
   assert(
-    (await acceptDegraded("default e2e-zero-limit")).startsWith("拒绝降级：e2e-zero-limit"),
-    "an invalid-metadata model must be rejected by accept-degraded",
-  )
-  assert(
-    (await acceptDegraded("default e2e-default-responses")).includes("已是完整配置"),
-    "a fully configured model must not be accepted as degraded",
-  )
-  assert(
-    (await acceptDegraded("default e2e-unknown-model")).includes("未知或不可降级模型"),
-    "an unknown model must not be accepted as degraded",
-  )
-  assert(
-    (await acceptDegraded("nowhere e2e-incomplete-capabilities")).includes("用法：litellm-accept-degraded"),
-    "an unknown endpoint must not be accepted as degraded",
+    !commandList.some((command) => String(command?.name ?? "").includes("degraded")),
+    `a degraded-acceptance command still exists: ${commandList.map((item) => item?.name).join(", ")}`,
   )
   assert(
     (await publicationModels()).filter((model) => model.provider === "litellm").length === 1,
-    "a rejected accept-degraded must not register anything",
+    "a withheld model must not register",
   )
 
-  // Live capability evidence disappears for a previously configured model:
-  // only a provably belonging LKG snapshot may keep it registered.
+  // [REAL-HOST-E2E] Scenario 2: metadata source unavailable + trusted LKG. The
+  // capability declarations disappear, so live completeness fails; the
+  // previously verified configuration keeps the model available and is labelled
+  // as previously verified, not as a guess or a degraded model.
   defaultServer.state.models = [
     reducedModelInfo("e2e-default-responses", "responses"),
     modelInfo("e2e-zero-limit", "chat", 0, 0),
@@ -781,33 +810,170 @@ export default function bootstrapProbe(pi) {
     }),
   ]
   await forceRefresh()
-  const lkgNotice = await diagnosticsNotice("LKG 提供：e2e-default-responses", "the valid LKG substitution")
+  const lkgNotice = await diagnosticsNotice(
+    "使用已信任的前次完整配置（LKG）：e2e-default-responses",
+    "the trusted LKG substitution",
+  )
   assert(
-    lkgNotice.message.includes("模型配置：可用 1 · 未完成 2 · 降级 0 · LKG 1"),
+    lkgNotice.message.includes("模型配置：发现 3 · 可用 1 · withheld 2 · LKG 1"),
     `unexpected LKG publication summary: ${lkgNotice.message}`,
   )
+  assert(lkgNotice.message.includes("LKG 说明："), "LKG provenance must be explained in diagnostics")
   assert(
     (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
     "the LKG-backed model disappeared from real Pi",
   )
 
-  // An eligible blocked model registers only through the degraded path and
-  // keeps the degraded label with its gaps; it is never re-labelled configured.
-  const accepted = await acceptDegraded("default e2e-incomplete-capabilities")
-  assert(accepted.startsWith("已接受降级：e2e-incomplete-capabilities"), `eligible accept failed: ${accepted}`)
-  const degradedNotice = await diagnosticsNotice("已接受降级：e2e-incomplete-capabilities", "the degraded acceptance")
+  // [REAL-HOST-E2E] Scenarios 6, 9 and 10: the canonical route changes while the
+  // rebuilt metadata is incomplete, so the old trusted snapshot no longer
+  // describes this model. It is withdrawn, the catalog becomes unusable, and the
+  // user is told — never silently substituted, never silently continuing.
+  const regressionCursor = rpc.records.length
+  defaultServer.state.models = [
+    {
+      ...reducedModelInfo("e2e-default-responses", "responses"),
+      litellm_params: { model: "openai/e2e-default-responses-renamed" },
+    },
+    modelInfo("e2e-zero-limit", "chat", 0, 0),
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
+  ]
+  await forceRefresh()
+  const regressionNotice = await notifySince(regressionCursor, /没有任何模型可以安全发布/, "the unusable-catalog notice")
   assert(
-    degradedNotice.message.includes("模型配置：可用 2 · 未完成 1 · 降级 1 · LKG 1"),
-    `unexpected degraded publication summary: ${degradedNotice.message}`,
+    regressionNotice.message.includes("此前可用的模型已被撤下：e2e-default-responses"),
+    `the unusable-catalog notice must name the withdrawn model: ${regressionNotice.message}`,
   )
-  assert(degradedNotice.message.includes("仍标记为降级，非完整配置"), "diagnostics must keep the degraded label")
   assert(
-    !degradedNotice.message.includes("未完成：e2e-incomplete-capabilities"),
-    "an accepted degraded model must leave the blocked list",
+    regressionNotice.message.includes("Retry"),
+    `the notice must point at retry: ${regressionNotice.message}`,
+  )
+  const unusableNotice = await diagnosticsNotice("catalog 当前不可用", "the unusable catalog state")
+  assert(
+    unusableNotice.message.includes("发现 3 · 可用 0 · withheld 3"),
+    `the unusable catalog must report its counts: ${unusableNotice.message}`,
   )
   assert(
-    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-incomplete-capabilities"),
-    "the accepted degraded model did not register",
+    unusableNotice.message.includes("此前可用、现已撤下：e2e-default-responses"),
+    `the regression must be visible in diagnostics: ${unusableNotice.message}`,
+  )
+  assert(
+    !(await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+    "a withdrawn model must leave /models",
+  )
+
+  // [REAL-HOST-E2E] Scenario 5: recovery publishes the model again automatically,
+  // with no user approval anywhere in the flow.
+  defaultServer.state.models = [
+    modelInfo("e2e-default-responses", "responses"),
+    modelInfo("e2e-zero-limit", "chat", 0, 0),
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
+  ]
+  await forceRefresh()
+  const recoveredNotice = await diagnosticsNotice(
+    "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
+    "the automatic recovery",
+  )
+  assert(!recoveredNotice.message.includes("已被撤下"), "the regression must clear after recovery")
+  assert(
+    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
+    "the recovered model did not return to /models",
+  )
+
+  // [REAL-HOST-E2E] Scenario 7: a descriptive LiteLLM output declaration differs
+  // from the trusted models.dev intrinsic value for the same canonical identity.
+  // Core selects the authoritative value, records a resolved discrepancy, and
+  // the model is published normally instead of being blocked.
+  defaultServer.state.models = [
+    {
+      model_name: "e2e-catalog-model",
+      litellm_params: { model: "vendor/e2e-catalog-model" },
+      model_info: {
+        mode: "chat",
+        max_input_tokens: 128_000,
+        max_output_tokens: 2_048,
+        supports_function_calling: true,
+        supports_reasoning: false,
+        supports_vision: false,
+        supports_pdf_input: false,
+        supports_audio_input: false,
+        supports_video_input: false,
+        supports_audio_output: false,
+      },
+    },
+  ]
+  await forceRefresh()
+  const discrepancyNotice = await diagnosticsNotice(
+    "已裁决差异：e2e-catalog-model · limit.output",
+    "the resolved discrepancy",
+  )
+  assert(
+    discrepancyNotice.message.includes("模型配置：发现 1 · 可用 1 · withheld 0"),
+    `a resolved discrepancy must stay publishable: ${discrepancyNotice.message}`,
+  )
+  const catalogModel = (await publicationModels()).find(
+    (model) => model.provider === "litellm" && model.id === "e2e-catalog-model",
+  )
+  assert(catalogModel, "the resolved-discrepancy model did not register")
+  assert(
+    catalogModel.maxTokens === 4_096,
+    `the authoritative intrinsic output must be published, got ${catalogModel.maxTokens}`,
+  )
+
+  // [REAL-HOST-E2E] Scenario 8: two deployments of one host model explicitly
+  // disagree. No authority can decide which route the host will use, so the
+  // model is withheld as an unresolved conflict.
+  defaultServer.state.models = [
+    {
+      model_name: "e2e-conflict-model",
+      litellm_params: { model: "vendor/e2e-conflict-model" },
+      model_info: {
+        mode: "chat",
+        max_input_tokens: 128_000,
+        max_output_tokens: 4_096,
+        supports_function_calling: true,
+        supports_reasoning: false,
+        supports_vision: false,
+        supports_pdf_input: false,
+        supports_audio_input: false,
+        supports_video_input: false,
+        supports_audio_output: false,
+      },
+    },
+    {
+      model_name: "e2e-conflict-model",
+      litellm_params: { model: "vendor/e2e-conflict-model" },
+      model_info: {
+        mode: "chat",
+        max_input_tokens: 128_000,
+        max_output_tokens: 2_048,
+        supports_function_calling: true,
+        supports_reasoning: false,
+        supports_vision: false,
+        supports_pdf_input: false,
+        supports_audio_input: false,
+        supports_video_input: false,
+        supports_audio_output: false,
+      },
+    },
+  ]
+  await forceRefresh()
+  const conflictNotice = await diagnosticsNotice(
+    "未决冲突：e2e-conflict-model · limit.output",
+    "the unresolved conflict",
+  )
+  assert(
+    conflictNotice.message.includes("withheld：e2e-conflict-model · invalid-metadata · authoritative-conflict"),
+    `the conflict reason must be explicit: ${conflictNotice.message}`,
+  )
+  assert(
+    !(await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-conflict-model"),
+    "a conflict-withheld model must not register",
   )
 
   // A real metadata outage is reported, never hidden. `/litellm-endpoints`
@@ -827,30 +993,25 @@ export default function bootstrapProbe(pi) {
   )
   assert(failureNotice.message.includes("下次允许重试："), `the retry state must be visible: ${failureNotice.message}`)
   assert(
-    failureNotice.message.includes("已注册模型：1"),
-    `the outage must keep the last registered models: ${failureNotice.message}`,
+    failureNotice.message.includes("已注册模型：0"),
+    `the outage must keep the last registered catalog: ${failureNotice.message}`,
   )
   assert(!failureNotice.message.includes("状态：正常"), `the endpoint must not look healthy during the outage: ${failureNotice.message}`)
-  assert(
-    (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-    "the endpoint dropped its models instead of keeping the last good catalog",
-  )
   assert(
     rpc.stderr.includes("LiteLLM 发现失败"),
     `the metadata failure must be visible in the host log: ${rpc.stderr.slice(-400)}`,
   )
 
-  // Retry recovery: complete trustworthy metadata returns it to normal.
+  // Retry recovery: complete trustworthy metadata returns the endpoint to normal.
   defaultServer.state.failStatus = 0
   await forceRefresh()
-  const recoveredNotice = await diagnosticsNotice("状态：正常", "the retry recovery")
-  assert(recoveredNotice.message.includes("LKG 提供：e2e-default-responses"), "LKG selection must survive recovery")
+  const retryNotice = await diagnosticsNotice("状态：正常", "the retry recovery")
   assert(
-    recoveredNotice.message.includes("已接受降级：e2e-incomplete-capabilities"),
-    "degraded acceptance must survive recovery",
+    retryNotice.message.includes("模型配置：发现 4 · 可用 2 · withheld 2"),
+    `unexpected post-recovery partition: ${retryNotice.message}`,
   )
   console.log(
-    "real Pi publication E2E ok: partition, reasoning verdict, LKG substitution, degraded accept/reject and metadata-failure diagnostics verified",
+    "real Pi publication E2E ok: partial catalog, withheld reasons, trusted LKG, route-change regression with unusable-catalog notice, automatic recovery, resolved discrepancy, unresolved conflict and metadata-failure diagnostics verified",
   )
 
   // ===== Phase 2: Endpoint Management UX (real host dialogs, full vertical) =====
@@ -892,7 +1053,7 @@ export default function bootstrapProbe(pi) {
       const began = Date.now()
       const child = spawn(PI_BIN, ["--mode", "rpc", "--no-session", "--extension", probeExtensionPath, "--model", "e2e-bootstrap/bootstrap"], {
         cwd: workDir,
-        env: { ...isolatedEnv, NODE_OPTIONS: nodeOptionsValue },
+        env: { ...isolatedEnv, NODE_OPTIONS: nodeOptionsValue, E2E_MODELS_DEV_CATALOG: catalogFile },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       })
@@ -1153,7 +1314,7 @@ export default function bootstrapProbe(pi) {
     const startLegacyPi = (extraEnv = {}) => {
       const child = spawn(PI_BIN, ["--mode", "rpc", "--no-session", "--extension", probeExtensionPath, "--model", "e2e-bootstrap/bootstrap"], {
         cwd: workDir,
-        env: { ...isolatedEnv, ...extraEnv, NODE_OPTIONS: nodeOptionsValue },
+        env: { ...isolatedEnv, ...extraEnv, NODE_OPTIONS: nodeOptionsValue, E2E_MODELS_DEV_CATALOG: catalogFile },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       })
