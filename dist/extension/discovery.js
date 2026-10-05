@@ -297,7 +297,12 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         // round. None of this can change what Core published.
         const acknowledgement = decideAcknowledgement(publicationController.acknowledgement, outcome.catalog, new Date(coordinated.refreshedAt).toISOString());
         publicationController.acknowledgement = acknowledgement.next;
-        publicationController.previouslyPublished = new Set(outcome.models.map((model) => model.id));
+        // Additive: the baseline answers "was this model ever published by the
+        // applied catalog", so a withdrawal stays visible in diagnostics across
+        // later rounds. A recovered model leaves the regression list by becoming
+        // publishable again, never by the baseline forgetting it.
+        for (const model of outcome.models)
+            publicationController.previouslyPublished.add(model.id);
         if (acknowledgement.notify && !deps.publication) {
             publicationController.pendingNotice = {
                 reason: acknowledgement.reason,
