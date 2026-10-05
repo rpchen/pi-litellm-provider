@@ -747,12 +747,17 @@ export default function bootstrapProbe(pi) {
     await publicationModels()
   }
 
-  /** Poll live catalog reads until the host-visible published set reflects the change. */
+  /**
+   * Force fresh discovery rounds (re-registering the providers resets the
+   * discovery coordinator, whose short cache would otherwise serve the previous
+   * round) until the host-visible published set reflects the change.
+   */
   const untilPublished = async (predicate, label) => {
-    for (let attempt = 0; attempt < 40; attempt++) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await rpc.extensionCommand("/litellm-endpoints all")
       const models = await publicationModels()
       if (predicate(models)) return models
-      await new Promise((resolve) => setTimeout(resolve, 250))
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
     throw new Error(`real Pi never reached the expected published set: ${label}`)
   }
@@ -852,13 +857,14 @@ export default function bootstrapProbe(pi) {
       supports_reasoning: undefined,
     }),
   ]
-  // Wait until a discovery round has actually applied the change, then let the
-  // next real activation action surface it exactly once as a notification.
+  // Wait until a discovery round has actually applied the change: the
+  // activation action that drives each round also surfaces the change exactly
+  // once as a host notification.
+  const regressionCursor = rpc.records.length
   await untilPublished(
     (models) => !models.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
     "the withdrawn model",
   )
-  const regressionCursor = rpc.records.length
   await rpc.extensionCommand("/litellm-endpoints all")
   const regressionNotice = await notifySince(regressionCursor, /没有任何模型可以安全发布/, "the unusable-catalog notice")
   assert(
