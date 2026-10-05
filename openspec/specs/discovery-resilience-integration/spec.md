@@ -28,7 +28,7 @@ The extension SHALL register every model Core reports publishable in the same ro
 - **THEN** it is absent from the Pi provider model list and from the persisted endpoint snapshot, and no acceptance state can add it
 
 ### Requirement: Withheld availability changes are surfaced appropriately
-The extension SHALL distinguish a previously published model becoming withheld from a newly discovered model that cannot be published. A regression and an unusable catalog SHALL be surfaced as an immediate user notification naming the affected models and pointing at retry and diagnostics; a first withholding of a newly discovered model SHALL be visible in diagnostics without interrupting the user.
+The extension SHALL distinguish a previously published model becoming withheld from a newly discovered model that cannot be published. A regression and an unusable catalog SHALL be surfaced as an immediate user notification naming the affected models and pointing at retry and diagnostics; a first withholding of a newly discovered model SHALL be visible in diagnostics without interrupting the user. Notification suppression SHALL survive host restarts: Pi SHALL persist the Core-produced publication memory (acknowledgement plus the regression baseline) with the endpoint's persisted catalog and restore it before the next discovery round, so the same fingerprint observed after a restart stays quiet while a materially changed problem set is surfaced again. Unreadable persisted memory SHALL be ignored and SHALL NOT change which models are published.
 
 #### Scenario: Regression is announced
 - **WHEN** a model the previous applied catalog published is withheld this round
@@ -45,6 +45,18 @@ The extension SHALL distinguish a previously published model becoming withheld f
 #### Scenario: Repeated unchanged problems do not spam
 - **WHEN** the same withheld model set with the same material reasons is observed again
 - **THEN** Pi does not repeat the notification
+
+#### Scenario: Suppression survives a host restart
+- **WHEN** the user was told about a problem set and Pi restarts with the same fingerprint
+- **THEN** Pi does not notify again, still lists every withheld model with its reason in diagnostics, and reports that the problem set is already acknowledged
+
+#### Scenario: Material change after a restart is announced
+- **WHEN** a restored acknowledgement exists and the withheld set grows or a model's reason materially changes
+- **THEN** Pi notifies the user again
+
+#### Scenario: Persisted memory never changes publication
+- **WHEN** persisted memory is restored, corrupt, or absent
+- **THEN** the registered model set and the withheld reasons are identical; only the notification decision differs
 
 ### Requirement: Withdrawn models are never silently substituted
 The extension SHALL NOT change the user's model selection or silently route requests to another model when a previously published model becomes withheld, and SHALL keep the notification/acknowledgement machinery free of any effect on publication.

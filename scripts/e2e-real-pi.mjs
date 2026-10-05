@@ -1108,8 +1108,10 @@ export default function bootstrapProbe(pi) {
   // be re-reported after a host restart, while a material change must be.
   // Leave the endpoint in the acknowledged unusable state (0 publishable).
   defaultServer.state.failStatus = 0
+  // The canonical route changes and the metadata is incomplete, so the earlier
+  // trusted snapshot no longer applies: nothing is publishable.
   defaultServer.state.models = [
-    { ...reducedModelInfo("e2e-default-responses", "responses"), litellm_params: { model: "openai/e2e-default-responses" } },
+    { ...reducedModelInfo("e2e-default-responses", "responses"), litellm_params: { model: "openai/e2e-ack-unusable" } },
     modelInfo("e2e-zero-limit", "chat", 0, 0),
     modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
       supports_function_calling: undefined,
