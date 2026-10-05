@@ -748,6 +748,17 @@ export default function bootstrapProbe(pi) {
   }
 
   /**
+   * Interactive manager refresh, used where the canonical error state matters:
+   * only this path records a discovery failure and its retry/backoff state.
+   */
+  const managerRefresh = async () => {
+    await rpc.driveCommand("/litellm-endpoints", [
+      { select: "全部启用" },
+      { select: undefined },
+    ])
+  }
+
+  /**
    * Force fresh discovery rounds (re-registering the providers resets the
    * discovery coordinator, whose short cache would otherwise serve the previous
    * round) until the host-visible published set reflects the change.
@@ -1005,8 +1016,17 @@ export default function bootstrapProbe(pi) {
   // re-registers the provider, so the first failure of that fresh lifecycle is
   // the discovery-error branch: the host keeps the last catalog, and the
   // diagnostics show the failure, its counter and the retry time.
-  defaultServer.state.failStatus = 500
+  defaultServer.state.models = [
+    modelInfo("e2e-default-responses", "responses"),
+    modelInfo("e2e-zero-limit", "chat", 0, 0),
+    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
+      supports_function_calling: undefined,
+      supports_reasoning: undefined,
+    }),
+  ]
   await forceRefresh()
+  defaultServer.state.failStatus = 500
+  await managerRefresh()
   const failureNotice = await diagnosticsNotice("状态：发现失败", "the metadata failure")
   assert(
     failureNotice.message.includes("说明：发现失败；详细错误已通过宿主日志记录。"),
@@ -1018,7 +1038,7 @@ export default function bootstrapProbe(pi) {
   )
   assert(failureNotice.message.includes("下次允许重试："), `the retry state must be visible: ${failureNotice.message}`)
   assert(
-    failureNotice.message.includes("已注册模型：0"),
+    failureNotice.message.includes("已注册模型：1"),
     `the outage must keep the last registered catalog: ${failureNotice.message}`,
   )
   assert(!failureNotice.message.includes("状态：正常"), `the endpoint must not look healthy during the outage: ${failureNotice.message}`)
@@ -1029,11 +1049,15 @@ export default function bootstrapProbe(pi) {
 
   // Retry recovery: complete trustworthy metadata returns the endpoint to normal.
   defaultServer.state.failStatus = 0
-  await forceRefresh()
+  await managerRefresh()
   const retryNotice = await diagnosticsNotice("状态：正常", "the retry recovery")
   assert(
-    retryNotice.message.includes("模型配置：发现 4 · 可用 2 · withheld 2"),
+    retryNotice.message.includes("模型配置：发现 3 · 可用 1 · withheld 2"),
     `unexpected post-recovery partition: ${retryNotice.message}`,
+  )
+  assert(
+    retryNotice.message.includes("withheld：e2e-incomplete-capabilities · discovered-incomplete · incomplete-metadata"),
+    `the withheld reasons must survive recovery: ${retryNotice.message}`,
   )
   console.log(
     "real Pi publication E2E ok: partial catalog, withheld reasons, trusted LKG, route-change regression with unusable-catalog notice, automatic recovery, resolved discrepancy, unresolved conflict and metadata-failure diagnostics verified",
