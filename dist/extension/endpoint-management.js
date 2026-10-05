@@ -104,7 +104,7 @@ export function createEndpointManager(host) {
             configWritten = true;
             host.reload();
             host.sync(ctx);
-            ctx.ui.notify(`已添加 endpoint ${id}（未启用、未连接）。请在列表中选择它来连接 API Key 并启用。`, "info");
+            ctx.ui.notify(`已添加 endpoint ${id}（未启用、未保存 API Key）。请在列表中选择它来连接 API Key 并启用。`, "info");
         }
         catch (error) {
             if (!configWritten) {

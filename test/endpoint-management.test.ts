@@ -100,7 +100,7 @@ describe("endpoint management: listing", () => {
     expect(t.log[0]!.options).toContain("✓ solo · 已启用 · 已生效 · 已保存 API Key")
   })
 
-  test("[LIST-MULTI] active/inactive and connected/not-connected are independent per endpoint", async () => {
+  test("[LIST-MULTI] active/inactive and saved/not-saved credential are independent per endpoint", async () => {
     const t = setup(TWO, { auth: { "litellm-company": { type: "api_key", key: "sk-c" } }, activation: { mode: "selected", endpointIds: ["default"] } })
     await t.run("", [{ select: undefined }])
     expect(t.log[0]!.options).toContain("✓ default · 已启用 · 需要认证 · 未保存 API Key")
@@ -132,13 +132,18 @@ describe("endpoint management: listing", () => {
 })
 
 describe("endpoint management: add", () => {
-  test("[ADD-OK][ADD-INACTIVE][ADD-PRESERVE] add writes only the new endpoint; it is inactive, unconnected and exposes no provider; others stay active", async () => {
+  test("[ADD-OK][ADD-INACTIVE][ADD-PRESERVE] add writes only the new endpoint; it is inactive, has no saved credential and exposes no provider; others stay active", async () => {
     const t = setup(TWO, { activation: { mode: "all" } })
     await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "http://litellm.example:4000" }, { select: undefined }])
     expect(t.json("litellm.json")).toEqual({ ...TWO, endpoints: { ...TWO.endpoints, lab: { baseUrl: "http://litellm.example:4000" } } })
     expect(t.json("litellm.activation.json")).toEqual({ mode: "selected", endpointIds: ["default", "company"] })
     expect([...t.registered.keys()].sort()).toEqual(["litellm", "litellm-company"])
     expect(existsSync(t.file("auth.json"))).toBe(false)
+    // [CRED-STORED-LABEL] regression: the Add notice describes the credential
+    // dimension, never a connection state.
+    const added = t.notes.find((n) => n.message.includes("已添加 endpoint lab"))
+    expect(added?.message).toContain("未启用、未保存 API Key")
+    expect(added?.message).not.toMatch(/已连接|未连接|connected/i)
     await t.run("", [{ select: undefined }])
     expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未保存 API Key")
   })
@@ -489,7 +494,7 @@ describe("endpoint management: delete", () => {
     expect([...t.registered.keys()]).toEqual(["litellm"])
   })
 
-  test("[DEL-NO-GHOST] deleting then re-adding the same id starts inactive, unconnected, without restored models", async () => {
+  test("[DEL-NO-GHOST] deleting then re-adding the same id starts inactive, without a saved credential, without restored models", async () => {
     const t = seed()
     await t.run("", [{ select: /company/ }, { select: "删除 endpoint" }, { confirm: true }, { select: undefined }])
     await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "company" }, { input: "https://b2.example" }, { select: undefined }])

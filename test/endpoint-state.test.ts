@@ -80,10 +80,11 @@ describe("labels", () => {
     expect(credentialLabel("environment")).toBe("API Key 来自环境变量")
     expect(credentialLabel("none")).toBe("未保存 API Key")
     expect(credentialLabel("unknown")).toBe("凭据状态未知")
+    // A credential label must never claim a connection state — including the
+    // negative direction: a missing key is "not saved", not "disconnected".
     for (const value of ["stored", "environment", "none", "unknown"] as const) {
       const label = credentialLabel(value)
-      expect(label.includes("已连接")).toBe(false)
-      expect(label.toLowerCase().includes("connected")).toBe(false)
+      expect(label).not.toMatch(/已连接|未连接|connected|disconnected/i)
     }
   })
 

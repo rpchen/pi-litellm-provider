@@ -951,12 +951,12 @@ export default function bootstrapProbe(pi) {
     ])
 
     stage("2 add")
-    // 2. Add (ID + Base URL only) → inactive / not connected; nothing auto-activated
+    // 2. Add (ID + Base URL only) → inactive / no saved credential; nothing auto-activated
     result = await rpc.driveCommand("/litellm-endpoints", [
       { select: "＋ 新增 endpoint" },
       { input: "e2e-new", check: (r) => assert(/Endpoint ID/.test(r.title), "Add must first ask for the ID") },
       { input: mgmtA.baseUrl, check: (r) => assert(/Base URL/.test(r.title), "Add must then ask for the Base URL") },
-      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 未保存 API Key"), `new endpoint must be inactive/unconnected: ${JSON.stringify(r.options)}`) },
+      { select: undefined, check: (r) => assert(r.options.includes("○ e2e-new · 未启用 · 未保存 API Key"), `new endpoint must be inactive/without a saved key: ${JSON.stringify(r.options)}`) },
     ])
     let config = readJson(configPath)
     assert(config.endpoints["e2e-new"]?.baseUrl === mgmtA.baseUrl, "Add did not write the endpoint")
@@ -968,7 +968,7 @@ export default function bootstrapProbe(pi) {
     assert(mgmtA.requests.length === 0, "creating an endpoint must not trigger discovery")
 
     stage("3 connect")
-    // 3. Connect key (inactive) → connected, still inactive, still no models
+    // 3. Connect key (inactive) → key saved, still inactive, still no models
     result = await rpc.driveCommand("/litellm-endpoints", [
       { select: /e2e-new/ },
       { select: "连接 API Key" },
@@ -979,14 +979,14 @@ export default function bootstrapProbe(pi) {
     noKeyLeak(result, SECRET_A)
     assert(readJson(authFile)["litellm-e2e-new"]?.key === SECRET_A, "credential was not stored under the endpoint's provider id")
     assert(readJson(activationFile).endpointIds.join() === "untouched", "Connect must not change activation")
-    assert(!(await litellmModels(rpc)).some((m) => m.provider === "litellm-e2e-new"), "connected but inactive endpoint exposed a model")
+    assert(!(await litellmModels(rpc)).some((m) => m.provider === "litellm-e2e-new"), "saved-key but inactive endpoint exposed a model")
 
     stage("4 activate")
     // 4. Activate → models appear at once with the right credential
     await rpc.driveCommand("/litellm-endpoints", [{ select: /e2e-new/ }, { select: "启用" }, { select: "返回" }, { select: undefined }])
     let models = await untilModels(rpc, (list) => list.some((m) => m.provider === "litellm-e2e-new" && m.id === "e2e-mgmt-alpha"), "activate")
     assert(models.find((m) => m.id === "e2e-mgmt-alpha").contextWindow === 48_000, "model limits were not mapped")
-    assert(mgmtA.requests.length > 0 && mgmtA.requests.every((r) => r.authorization === `Bearer ${SECRET_A}`), "discovery did not use the connected key")
+    assert(mgmtA.requests.length > 0 && mgmtA.requests.every((r) => r.authorization === `Bearer ${SECRET_A}`), "discovery did not use the saved key")
     assert(models.some((m) => m.provider === "litellm-untouched"), "bystander endpoint lost its models")
 
     stage("5 edit")
@@ -1180,7 +1180,7 @@ export default function bootstrapProbe(pi) {
       { select: undefined },
     ])
 
-    // list: legacy default is a real endpoint (connected + active)
+    // list: legacy default is a real endpoint (saved credential + active)
     let result3 = await rpc.driveCommand("/litellm-endpoints", [
       { select: undefined, check: (r) => assert(r.options.includes("✓ default · 已启用 · 已生效 · 已保存 API Key"), `legacy default missing from list: ${JSON.stringify(r.options)}`) },
     ])

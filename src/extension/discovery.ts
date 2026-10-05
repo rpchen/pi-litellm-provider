@@ -5,7 +5,7 @@
  *  - restore phase (`allowNetwork` false) replays the host-persisted catalog
  *  - network phase performs real discovery and persists the result via `publish`
  *  - failure classification: network/parse/redirect/ratelimit/server/404-exhausted throw
- *    (host keeps the last good catalog); 401/403 and "not connected" return an empty list
+ *    (host keeps the last good catalog); 401/403 and the no-address case return an empty list
  *  - successful results (including empty ones) are persisted so removals survive restarts
  *
  * The API key comes from the host-resolved credential when present, falling back to the
@@ -280,7 +280,7 @@ export async function refreshProviderModels(
     return models
   }
 
-  // Not connected: no address resolved. Tell the user how to configure one (spec:
+  // No address resolved. Tell the user how to configure one (spec:
   // 记录说明性提示) and drop the catalog so stale models disappear.
   if (config.baseUrl.length === 0) {
     logger.warn(
