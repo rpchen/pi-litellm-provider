@@ -1,6 +1,7 @@
 import type { EndpointActivation } from "./activation.ts";
 import { type EndpointRegistryConfig } from "./config.ts";
 import { ConfigStoreError } from "./config-store.ts";
+import { type EndpointState } from "./endpoint-state.ts";
 export interface ManagementContext {
     ui: {
         select(title: string, options: string[]): Promise<string | undefined>;
@@ -28,6 +29,8 @@ export interface ManagementHost {
     sync(ctx: ManagementContext): void;
     /** Drop in-memory diagnostics for a deleted endpoint. */
     forget(endpointId: string): void;
+    /** Canonical state for a configured endpoint (desired × validation × credential × applied). */
+    endpointState(endpointId: string): EndpointState;
     /** Test seams for the config writer. */
     write?: {
         rename?: (from: string, to: string) => void;

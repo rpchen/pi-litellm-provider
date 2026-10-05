@@ -13,7 +13,8 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { getAgentDir } from "@earendil-works/pi-coding-agent"
-import { isEndpointID } from "../core/index.ts"
+import { isEndpointID, normalizeLiteLLMURL } from "../core/index.ts"
+import type { ValidationState } from "./endpoint-state.ts"
 
 export type ConfigProtocol = "chat" | "responses" | "messages"
 
@@ -27,6 +28,14 @@ export interface ExtensionConfig {
   globalConfigPath: string
   /** Kept for discovery/test compatibility; PR9 no longer reads project config. */
   projectConfigPath: string
+/**
+   * Endpoint definition validation. `invalid` means the user's definition is
+   * malformed (bad URL/userinfo/etc.); runtime apply refuses the endpoint and
+   * the canonical state translates it into Enabled/Disabled · Invalid configuration.
+   * A missing credential is NOT a validation failure.
+   * When absent (legacy test fixtures), the effective value is `{ kind: "ok" }`.
+   */
+  validation?: ValidationState
 }
 
 export interface EndpointRegistryConfig {
@@ -48,6 +57,8 @@ export interface ConfigLogger {
 interface EndpointFileConfig {
   baseUrl?: string
   protocolOverrides?: Record<string, ConfigProtocol>
+  /** Raw invalid baseUrl (the loader previously dropped these entries entirely). */
+  invalidBaseUrl?: string
 }
 
 interface GlobalFileConfig extends EndpointFileConfig {
@@ -66,9 +77,11 @@ export function isEndpointId(value: string): boolean {
 }
 
 function isHttpUrl(value: string): boolean {
+  // Use the same entry rule as the runtime. normalizeLiteLLMURL rejects non-http(s)
+  // AND userinfo-bearing URLs, keeping manager validation identical to runtime apply.
   try {
-    const url = new URL(value)
-    return url.protocol === "http:" || url.protocol === "https:"
+    normalizeLiteLLMURL(value)
+    return true
   } catch {
     return false
   }
@@ -106,7 +119,10 @@ function readEndpointConfig(
     if (typeof value === "string" && value.trim().length > 0 && isHttpUrl(value.trim())) {
       out.baseUrl = value.trim()
     } else {
-      logger.warn(`LiteLLM 配置 ${source} 的 baseUrl 非法（需要非空的 http(s) 地址），已跳过`)
+      // Preserve the raw value so the endpoint remains visible as Invalid configuration
+      // rather than silently disappearing from management and diagnostics.
+      if (typeof value === "string") out.invalidBaseUrl = value
+      logger.warn(`LiteLLM 配置 ${source} 的 baseUrl 非法（需要非空的 http(s) 地址），endpoint 将被标记为配置非法`)
     }
   }
   const protocolOverrides = readProtocolOverrides(raw.protocolOverrides, source, logger)
@@ -162,7 +178,11 @@ function readGlobalFile(path: string, logger: ConfigLogger): GlobalFileConfig {
         continue
       }
       const endpoint = readEndpointConfig(value, `${path} endpoints.${id}`, logger)
-      if (!endpoint.baseUrl) {
+      // Endpoints whose baseUrl fails validation are KEPT (marked invalid) so the
+      // management UI and diagnostics can show them as "Invalid configuration"
+      // instead of the endpoint silently disappearing. Only entries with neither
+      // a valid nor an invalid baseUrl (e.g. missing the field entirely) are skipped.
+      if (!endpoint.baseUrl && endpoint.invalidBaseUrl === undefined) {
         logger.warn(`LiteLLM endpoint ${id} 缺少合法 baseUrl，已跳过`)
         continue
       }
@@ -189,6 +209,12 @@ function endpointSnapshot(
   logger: ConfigLogger,
   endpointId?: string,
 ): ExtensionConfig {
+  // Validation is computed here so the runtime, management UI and diagnostics all
+  // share one source of truth. The runtime refuses to apply invalid endpoints.
+  let validation: ValidationState = { kind: "ok" }
+  if (endpoint.invalidBaseUrl !== undefined) {
+    validation = { kind: "invalid", reason: "Base URL 非法（需要非空的 http(s) 地址，且不能包含用户名/密码）" }
+  }
   return {
     endpointId,
     baseUrl: endpoint.baseUrl ?? "",
@@ -197,6 +223,7 @@ function endpointSnapshot(
     protocolOverrides: endpoint.protocolOverrides ?? {},
     globalConfigPath,
     projectConfigPath: "",
+    validation,
   }
 }
 
@@ -259,9 +286,10 @@ export function loadConfig(
     protocolOverrides: {},
     globalConfigPath: registry.globalConfigPath,
     projectConfigPath: "",
+    validation: { kind: "ok" },
   }
 }
 
 export function isConfigured(config: ExtensionConfig): boolean {
-  return config.baseUrl.length > 0
+  return config.baseUrl.length > 0 && (config.validation?.kind ?? "ok") === "ok"
 }

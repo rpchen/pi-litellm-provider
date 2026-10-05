@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isEndpointID } from "../core/index.js";
+import { isEndpointID, normalizeLiteLLMURL } from "../core/index.js";
 export const DEFAULT_POLL_INTERVAL_SECONDS = 300;
 export const MIN_POLL_INTERVAL_SECONDS = 30;
 export const DEFAULT_ENDPOINT_ID = "default";
@@ -25,9 +25,11 @@ export function isEndpointId(value) {
     return isEndpointID(value);
 }
 function isHttpUrl(value) {
+    // Use the same entry rule as the runtime. normalizeLiteLLMURL rejects non-http(s)
+    // AND userinfo-bearing URLs, keeping manager validation identical to runtime apply.
     try {
-        const url = new URL(value);
-        return url.protocol === "http:" || url.protocol === "https:";
+        normalizeLiteLLMURL(value);
+        return true;
     }
     catch {
         return false;
@@ -59,7 +61,11 @@ function readEndpointConfig(raw, source, logger) {
             out.baseUrl = value.trim();
         }
         else {
-            logger.warn(`LiteLLM 配置 ${source} 的 baseUrl 非法（需要非空的 http(s) 地址），已跳过`);
+            // Preserve the raw value so the endpoint remains visible as Invalid configuration
+            // rather than silently disappearing from management and diagnostics.
+            if (typeof value === "string")
+                out.invalidBaseUrl = value;
+            logger.warn(`LiteLLM 配置 ${source} 的 baseUrl 非法（需要非空的 http(s) 地址），endpoint 将被标记为配置非法`);
         }
     }
     const protocolOverrides = readProtocolOverrides(raw.protocolOverrides, source, logger);
@@ -118,7 +124,11 @@ function readGlobalFile(path, logger) {
                 continue;
             }
             const endpoint = readEndpointConfig(value, `${path} endpoints.${id}`, logger);
-            if (!endpoint.baseUrl) {
+            // Endpoints whose baseUrl fails validation are KEPT (marked invalid) so the
+            // management UI and diagnostics can show them as "Invalid configuration"
+            // instead of the endpoint silently disappearing. Only entries with neither
+            // a valid nor an invalid baseUrl (e.g. missing the field entirely) are skipped.
+            if (!endpoint.baseUrl && endpoint.invalidBaseUrl === undefined) {
                 logger.warn(`LiteLLM endpoint ${id} 缺少合法 baseUrl，已跳过`);
                 continue;
             }
@@ -137,6 +147,12 @@ function normalizePollInterval(value, logger) {
     return interval;
 }
 function endpointSnapshot(endpoint, global, globalConfigPath, logger, endpointId) {
+    // Validation is computed here so the runtime, management UI and diagnostics all
+    // share one source of truth. The runtime refuses to apply invalid endpoints.
+    let validation = { kind: "ok" };
+    if (endpoint.invalidBaseUrl !== undefined) {
+        validation = { kind: "invalid", reason: "Base URL 非法（需要非空的 http(s) 地址，且不能包含用户名/密码）" };
+    }
     return {
         endpointId,
         baseUrl: endpoint.baseUrl ?? "",
@@ -145,6 +161,7 @@ function endpointSnapshot(endpoint, global, globalConfigPath, logger, endpointId
         protocolOverrides: endpoint.protocolOverrides ?? {},
         globalConfigPath,
         projectConfigPath: "",
+        validation,
     };
 }
 export function loadEndpointRegistry(_cwd, logger = console, env = process.env, agentDir = getAgentDir()) {
@@ -188,8 +205,9 @@ export function loadConfig(cwd, logger = console, env = process.env, agentDir = 
         protocolOverrides: {},
         globalConfigPath: registry.globalConfigPath,
         projectConfigPath: "",
+        validation: { kind: "ok" },
     };
 }
 export function isConfigured(config) {
-    return config.baseUrl.length > 0;
+    return config.baseUrl.length > 0 && (config.validation?.kind ?? "ok") === "ok";
 }

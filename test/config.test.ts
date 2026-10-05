@@ -125,6 +125,39 @@ describe("PR9 全局 endpoint 配置", () => {
     expect(Object.keys(registry.endpoints)).toEqual(["valid"])
   })
 
+  test("[VALIDATION-INVALID-PRESERVED] 非法 baseUrl 的 endpoint 保留并标记 invalid", () => {
+    const { cwd, agentDir } = makeDirs()
+    writeJson(join(agentDir, "litellm.json"), {
+      endpoints: {
+        valid: { baseUrl: "https://valid.example" },
+        broken_scheme: { baseUrl: "ftp://wrong.example" },
+        broken_userinfo: { baseUrl: "https://user:pass@x.example" },
+      },
+    })
+    const registry = loadEndpointRegistry(cwd, silentLogger, {}, agentDir)
+    expect(Object.keys(registry.endpoints).sort()).toEqual(["broken_scheme", "broken_userinfo", "valid"])
+    expect(registry.endpoints.valid?.validation?.kind).toBe("ok")
+    expect(registry.endpoints.broken_scheme?.validation?.kind).toBe("invalid")
+    expect(registry.endpoints.broken_userinfo?.validation?.kind).toBe("invalid")
+    // Runtime never receives the malformed URL; diagnostics keep the reason.
+    expect(registry.endpoints.broken_scheme?.baseUrl).toBe("")
+    expect(registry.endpoints.broken_scheme?.validation?.kind === "invalid" &&
+      registry.endpoints.broken_scheme?.validation.reason).toContain("Base URL")
+  })
+
+  test("[VALIDATION-CONSISTENCY] 通过 validateBaseUrl 的 URL 在 registry 中是 ok", () => {
+    const { cwd, agentDir } = makeDirs()
+    writeJson(join(agentDir, "litellm.json"), {
+      endpoints: {
+        good: { baseUrl: "http://litellm.example:4000/v1/" },
+        trailing: { baseUrl: "https://x.example/" },
+      },
+    })
+    const registry = loadEndpointRegistry(cwd, silentLogger, {}, agentDir)
+    expect(registry.endpoints.good?.validation?.kind).toBe("ok")
+    expect(registry.endpoints.trailing?.validation?.kind).toBe("ok")
+  })
+
   test("pollInterval 默认 300 且小于 30 被钳制", () => {
     const { cwd, agentDir } = makeDirs()
     expect(loadEndpointRegistry(cwd, silentLogger, {}, agentDir).endpoints.default?.pollInterval)

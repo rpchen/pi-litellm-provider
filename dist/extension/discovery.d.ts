@@ -5,7 +5,7 @@
  *  - restore phase (`allowNetwork` false) replays the host-persisted catalog
  *  - network phase performs real discovery and persists the result via `publish`
  *  - failure classification: network/parse/redirect/ratelimit/server/404-exhausted throw
- *    (host keeps the last good catalog); 401/403 and "not connected" return an empty list
+ *    (host keeps the last good catalog); 401/403 and the no-address case return an empty list
  *  - successful results (including empty ones) are persisted so removals survive restarts
  *
  * The API key comes from the host-resolved credential when present, falling back to the
@@ -16,6 +16,7 @@ import { type DiscoveryCoordinator, type DiscoveryDiagnostics, type LastKnownGoo
 import { type FetchLike } from "../net/fetch.ts";
 import type { ExtensionConfig } from "./config.ts";
 import { type ProviderDiagnosticsState, type PublicationSummary } from "./diagnostics.ts";
+import type { AppliedState } from "./endpoint-state.ts";
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "./types.ts";
 export interface DiscoveryLogger {
     warn(message: string): void;
@@ -36,6 +37,12 @@ export interface DiscoveryDeps {
         readonly acceptedDegradedIDs?: ReadonlySet<string>;
         readonly now?: number;
     };
+    /**
+     * Applied-state sink: the canonical state writer invoked on every terminal
+     * outcome of this refresh (success → active, category-tagged error → error).
+     * Absent means "no canonical state writer" (legacy/discovery-only callers).
+     */
+    appliedWriter?: (next: AppliedState) => void;
 }
 /** Result of one network-phase discovery, before persistence. */
 export interface DiscoveryOutcome {
