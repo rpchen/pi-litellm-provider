@@ -52,6 +52,11 @@ jobs:
       - name: Run tests
         run: bun run test
 
+      - name: Validate the required merge gate (ruleset drift guard)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run test:merge-gate
+
       - name: Validate OpenSpec
         run: npm run validate:spec
 
