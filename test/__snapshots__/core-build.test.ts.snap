@@ -440,7 +440,6 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
       "input": [
         "text",
         "image",
-        "pdf",
       ],
       "output": [
         "text",
@@ -673,7 +672,6 @@ exports[`buildModelSpecs 输出与 fixtures 的完整快照一致 1`] = `
       "input": [
         "text",
         "image",
-        "audio",
         "video",
       ],
       "output": [
