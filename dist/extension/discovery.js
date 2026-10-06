@@ -12,7 +12,7 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildPublicationResult, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, inspectDiscoverySnapshot, lastKnownGoodKey, modelFingerprint, normalizeLiteLLMURL, degradationEligibility, } from "../core/index.js";
+import { buildPublicationResult, catalogFromPublication, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, decideAcknowledgement, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, inspectDiscoverySnapshot, lastKnownGoodKey, modelFingerprint, nextPublishedBaseline, normalizeLiteLLMURL, parsePublicationMemory, serializePublicationMemory, PUBLICATION_MEMORY_SCHEMA_VERSION, } from "../core/index.js";
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog } from "../net/fetch.js";
 import { publicationControllerForState, setProviderDiagnostics, } from "./diagnostics.js";
 import { toProviderModels, toProviderModelsWithPublication } from "./map.js";
@@ -25,10 +25,10 @@ export function createProviderRefreshCoordinator() {
  * pi provider configs. Throws `DiscoveryError` on degradable failures.
  *
  * Publication partition comes from Core `buildPublicationResult`: only
- * configured, configured-lkg, and user-accepted degraded models map to
- * provider configs. A models.dev fetch failure does not abort discovery;
- * it is classified with the Core taxonomy so valid LKG entries can
- * substitute while the rest stay blocked with reasons.
+ * `configured` and `configured-lkg` models map to provider configs. A
+ * models.dev fetch failure does not abort discovery; it is classified with
+ * the Core taxonomy so valid LKG entries can substitute while the rest stay
+ * withheld with reasons. One model's failure never gates another's.
  */
 export async function discoverModels(config, apiKey, signal, deps = {}) {
     const addresses = normalizeLiteLLMURL(config.baseUrl);
@@ -51,7 +51,6 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
     const now = deps.publication?.now ?? Date.now();
     const publication = buildPublicationResult(litellmResponse, catalog, buildOptions, {
         store: deps.publication?.store,
-        acceptedDegradedIDs: deps.publication?.acceptedDegradedIDs,
         failure: catalogFailure,
         now,
     });
@@ -60,17 +59,42 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
     }
     const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions);
     const specs = publication.publishable.map((entry) => entry.spec);
-    const snapshotSpecs = publication.publishable
-        .filter((entry) => entry.degraded === undefined)
-        .map((entry) => entry.spec);
+    // Published specs are the only persisted specs: a withheld model never
+    // survives into a snapshot, and no user confirmation can add one.
+    const snapshotSpecs = [...specs];
+    const catalogFacts = catalogFromPublication(publication, {
+        discovered: diagnosticsModelCount(diagnosed.diagnostics),
+        previouslyPublished: deps.publication?.previouslyPublished,
+    });
     return {
         specs,
         snapshotSpecs,
         models: toProviderModelsWithPublication(publication.publishable, addresses.rootURL),
         fingerprint: modelFingerprint(specs),
         diagnostics: diagnosed.diagnostics,
-        publication: summarizePublication(publication, catalogFailure),
+        publication: summarizePublication(publication, catalogFacts, catalogFailure),
+        catalog: catalogFacts,
     };
+}
+/** Discovered model count from the Core diagnostics (never a synthesized value). */
+function diagnosticsModelCount(diagnostics) {
+    return diagnostics.stats.models;
+}
+/**
+ * Restore the Core-validated publication memory into the endpoint controller.
+ * Unreadable memory is ignored: the worst case is one repeated notification.
+ */
+function restorePublicationMemory(raw, controller) {
+    if (raw === undefined || raw === null)
+        return;
+    const memory = parsePublicationMemory(raw);
+    if (!memory)
+        return;
+    controller.acknowledgement = memory.acknowledgement;
+    if (memory.published.length > 0) {
+        for (const id of memory.published)
+            controller.previouslyPublished.add(id);
+    }
 }
 /** Record complete configured models as Last Known Good for future outages. */
 function seedPublicationLKG(store, litellmResponse, publication, now) {
@@ -89,33 +113,52 @@ function seedPublicationLKG(store, litellmResponse, publication, now) {
         }
     }
 }
-function summarizePublication(publication, failure) {
+function summarizePublication(publication, catalogFacts, failure) {
+    const facts = (id, assessment) => [
+        ...assessment.discrepancies.map((item) => ({
+            model: id,
+            field: item.field,
+            status: item.status,
+            resolution: item.resolution,
+        })),
+        ...assessment.conflicts.map((item) => ({
+            model: id,
+            field: item.field,
+            status: item.status,
+            resolution: item.resolution,
+        })),
+    ];
+    const allFacts = [
+        ...publication.publishable.flatMap((entry) => facts(entry.spec.id, entry.assessment)),
+        ...publication.blocked.flatMap((entry) => facts(entry.spec.id, entry.assessment)),
+    ];
+    const lkgDetail = publication.publishable
+        .map((entry) => entry.assessment.lkgDetail)
+        .find((detail) => detail !== undefined);
     return {
+        discovered: catalogFacts.discovered,
         publishable: publication.publishable.map((entry) => ({
             id: entry.spec.id,
             status: entry.assessment.status,
         })),
-        degradedIDs: publication.publishable
-            .filter((entry) => entry.degraded !== undefined)
-            .map((entry) => entry.spec.id),
         lkgIDs: publication.publishable
             .filter((entry) => entry.assessment.usingLKG)
             .map((entry) => entry.spec.id),
-        blocked: publication.blocked.map((entry) => {
-            const eligibility = degradationEligibility(entry.assessment);
-            return {
-                id: entry.spec.id,
-                status: entry.assessment.status,
-                degradationEligible: eligibility.eligible,
-                degradationReason: eligibility.eligible ? undefined : eligibility.reason,
-                gaps: [
-                    ...entry.assessment.missingFields,
-                    ...entry.assessment.unknownFields,
-                    ...entry.assessment.illegalFields,
-                ],
-            };
-        }),
+        lkgDetail,
+        withheld: catalogFacts.withheld.map((entry) => ({
+            id: entry.id,
+            status: entry.status,
+            reasons: entry.reasons,
+            previouslyPublished: entry.previouslyPublished,
+            retryable: entry.retryability === "retryable",
+        })),
+        partial: catalogFacts.partial,
+        unusable: catalogFacts.unusable,
+        regressions: catalogFacts.regressions.map((entry) => entry.id),
+        discrepancies: allFacts.filter((fact) => fact.status === "resolved-discrepancy"),
+        conflicts: allFacts.filter((fact) => fact.status === "unresolved-conflict"),
         failureKind: failure?.kind,
+        acknowledgement: { notify: false, reason: "unchanged", fingerprint: catalogFacts.fingerprint },
     };
 }
 /**
@@ -170,7 +213,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
     // 记录说明性提示) and drop the catalog so stale models disappear.
     if (config.baseUrl.length === 0) {
         logger.warn("LiteLLM 未配置地址：请设置 LITELLM_BASE_URL，或在全局 ~/.pi/agent/litellm.json 中填写 baseUrl");
-        await publishIfChanged(context, stored, []);
+        await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory);
         setProviderDiagnostics(diagnosticsState, {
             status: "unconfigured",
             modelCount: 0,
@@ -183,7 +226,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
     // A definition-level invalid endpoint must never reach the network. The
     // adapter refuses apply with config-invalid before any request is attempted.
     if ((config.validation?.kind ?? "ok") === "invalid") {
-        await publishIfChanged(context, stored, []);
+        await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory);
         setProviderDiagnostics(diagnosticsState, {
             status: "config-error",
             modelCount: 0,
@@ -205,7 +248,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         // The host only reaches the network phase when a credential resolved; treat a missing
         // key defensively as unconfigured rather than sending an unauthenticated request.
         logger.warn("LiteLLM Key 未配置，跳过发现（请使用 /login 或设置 LITELLM_API_KEY）");
-        await publishIfChanged(context, stored, []);
+        await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory);
         setProviderDiagnostics(diagnosticsState, {
             status: "unconfigured",
             modelCount: 0,
@@ -222,11 +265,15 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
     }
     const discoveryKey = `${config.endpointId ?? ""}\u0000${config.baseUrl}\u0000${apiKey}`;
     const publicationController = publicationControllerForState(diagnosticsState);
+    // Restore the persisted publication memory for this endpoint before the round
+    // runs, so an acknowledgement from a previous process suppresses the same
+    // problem set and the regression baseline survives the restart.
+    restorePublicationMemory(stored?.publicationMemory, publicationController);
     const discoveryDeps = {
         ...deps,
         publication: deps.publication ?? {
             store: publicationController.store,
-            acceptedDegradedIDs: publicationController.acceptedDegradedIDs,
+            previouslyPublished: publicationController.previouslyPublished,
         },
     };
     try {
@@ -264,7 +311,28 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
                 logger.warn(`LiteLLM 发现漂移：added=${diff.added.length}, removed=${diff.removed.length}, protocol=${diff.protocolChanged.length}, capabilities=${diff.capabilityChanged.length}`);
             }
         }
-        await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint);
+        // Availability facts: acknowledge only notification, record the published
+        // set as the regression baseline, and remember whether to surface this
+        // round. None of this can change what Core published.
+        const refreshedAtIso = new Date(coordinated.refreshedAt).toISOString();
+        const acknowledgement = decideAcknowledgement(publicationController.acknowledgement, outcome.catalog, refreshedAtIso);
+        publicationController.acknowledgement = acknowledgement.next;
+        const memory = {
+            schemaVersion: PUBLICATION_MEMORY_SCHEMA_VERSION,
+            acknowledgement: acknowledgement.next,
+            // Additive for models the endpoint still serves, bounded by forgetting
+            // models LiteLLM no longer returns: a withdrawal stays a regression for
+            // later rounds and after a restart.
+            published: nextPublishedBaseline([...publicationController.previouslyPublished], outcome.models.map((model) => model.id), outcome.catalog.withheld.map((entry) => entry.id)),
+        };
+        publicationController.previouslyPublished = new Set(memory.published);
+        await publishIfChanged(context, stored, outcome.models, snapshot, restoreFingerprint, serializePublicationMemory(memory));
+        if (acknowledgement.notify && !deps.publication) {
+            publicationController.pendingNotice = {
+                reason: acknowledgement.reason,
+                message: outcome.publication.acknowledgement.reason,
+            };
+        }
         setProviderDiagnostics(diagnosticsState, {
             status: coordinated.source === "stale"
                 ? "stale"
@@ -272,7 +340,14 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
             modelCount: outcome.models.length,
             models: outcome.models,
             discovery: outcome.diagnostics,
-            publication: outcome.publication,
+            publication: {
+                ...outcome.publication,
+                acknowledgement: {
+                    notify: acknowledgement.notify,
+                    reason: acknowledgement.reason,
+                    fingerprint: acknowledgement.next?.fingerprint ?? "sha256:none",
+                },
+            },
             cache: createDiscoveryCacheDiagnostics({
                 source: coordinated.source === "cache"
                     ? "memory-cache"
@@ -302,7 +377,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         }
         if (error instanceof DiscoveryError && error.kind === "auth") {
             logger.error(`LiteLLM 认证失败，已撤下全部模型：${error.message}`);
-            await publishIfChanged(context, stored, []);
+            await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory);
             setProviderDiagnostics(diagnosticsState, {
                 status: "auth-error",
                 modelCount: 0,
@@ -322,7 +397,7 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
             // Spec: 记录错误、不发起发现请求、不注册模型 — so drop the catalog instead of
             // keeping stale models pointed at a dead address.
             logger.error(`LiteLLM 地址无效（${redactUrl(config.baseUrl)}）：${messageOf(error)}`);
-            await publishIfChanged(context, stored, []);
+            await publishIfChanged(context, stored, [], undefined, undefined, stored?.publicationMemory);
             setProviderDiagnostics(diagnosticsState, {
                 status: "config-error",
                 modelCount: 0,
@@ -440,16 +515,29 @@ function redactUrl(value) {
  * branches too, so repeated identical empty results do not rewrite models-store (spec:
  * 仅在内容变化时更新).
  */
-async function publishIfChanged(context, stored, models, snapshot, restoreFingerprint) {
+async function publishIfChanged(context, stored, models, snapshot, restoreFingerprint, publicationMemory) {
     const sameModels = modelsFingerprint(stored?.models) === modelsFingerprint(models);
     const sameSnapshot = snapshot === undefined
         ? stored?.snapshot === undefined && stored?.restoreFingerprint === undefined
         : stored?.snapshot?.endpointFingerprint === snapshot.endpointFingerprint &&
             stored.snapshot.modelFingerprint === snapshot.modelFingerprint &&
             stored.restoreFingerprint === restoreFingerprint;
-    if (sameModels && sameSnapshot)
+    // A new acknowledgement must be persisted even when models and snapshot are
+    // unchanged, otherwise the suppression would be lost on the next restart.
+    const sameMemory = stableJSON(stored?.publicationMemory ?? null) === stableJSON(publicationMemory ?? null);
+    if (sameModels && sameSnapshot && sameMemory)
         return;
-    await publish(context, models, snapshot, restoreFingerprint);
+    await publish(context, models, snapshot, restoreFingerprint, publicationMemory);
+}
+function stableJSON(value) {
+    if (Array.isArray(value))
+        return `[${value.map(stableJSON).join(",")}]`;
+    if (typeof value !== "object" || value === null)
+        return JSON.stringify(value) ?? "null";
+    return `{${Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right, "en"))
+        .map(([key, item]) => `${JSON.stringify(key)}:${stableJSON(item)}`)
+        .join(",")}}`;
 }
 function asStoredCatalog(stored) {
     if (!stored || !Array.isArray(stored.models))
@@ -459,7 +547,10 @@ function asStoredCatalog(stored) {
     const restoreFingerprint = "restoreFingerprint" in stored && typeof stored.restoreFingerprint === "string"
         ? stored.restoreFingerprint
         : undefined;
-    return { models, checkedAt: 0, snapshot, restoreFingerprint };
+    // The publication memory must survive the host round trip: dropping it
+    // would silently disable acknowledgement suppression and regression history.
+    const publicationMemory = "publicationMemory" in stored ? stored.publicationMemory : undefined;
+    return { models, checkedAt: 0, snapshot, restoreFingerprint, publicationMemory };
 }
 /** Stable fingerprint over the registered model list, for change detection against `stored`. */
 function modelsFingerprint(models) {
@@ -478,14 +569,16 @@ function modelsFingerprint(models) {
     })));
 }
 /** Persist the given model list into the host catalog; failures must not fail the refresh. */
-async function publish(context, models, snapshot, restoreFingerprint) {
+async function publish(context, models, snapshot, restoreFingerprint, publicationMemory) {
     if (!context.publish)
         return;
     // A cancelled refresh must not write the store: skip before racing the abort.
     if (context.signal?.aborted)
         return;
     try {
-        await context.publish({ persist: { models, checkedAt: Date.now(), snapshot, restoreFingerprint } });
+        await context.publish({
+            persist: { models, checkedAt: Date.now(), snapshot, restoreFingerprint, publicationMemory },
+        });
     }
     catch (error) {
         // The host's publish rejects with an abort reason when cancellation lands during the

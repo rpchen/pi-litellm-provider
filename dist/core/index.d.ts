@@ -1,4 +1,6 @@
 export * from "./build.ts";
+export * from "./catalog.ts";
+export * from "./evidence.ts";
 export * from "./capabilities.ts";
 export * from "./diagnostics.ts";
 export * from "./litellm.ts";

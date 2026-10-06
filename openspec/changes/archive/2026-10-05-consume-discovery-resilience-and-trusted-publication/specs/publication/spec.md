@@ -1,13 +1,6 @@
 # publication Specification
 
-## Purpose
-Pi consumes the Core trustworthy-publication verdicts without
-reimplementing policy: only configured, LKG-configured, or explicitly
-degraded models register; everything else stays diagnosable; reasoning
-follows the Core verdict; failures never produce pseudo-complete
-models.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Publication partition governs registration
 The extension SHALL register only models Core reports as `configured` or
@@ -74,3 +67,9 @@ NOT discard a trusted snapshot.
 #### Scenario: Descriptive discrepancy keeps the trusted snapshot
 - **WHEN** Core reports a resolved discrepancy for a model that is otherwise served from LKG
 - **THEN** the model stays registered from the trusted snapshot and diagnostics shows both the discrepancy and the LKG provenance
+
+## REMOVED Requirements
+
+### Requirement: Explicit degraded acceptance
+
+### Requirement: Group-wide evidence flows through the adapter unchanged

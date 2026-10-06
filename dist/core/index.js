@@ -1,4 +1,6 @@
 export * from "./build.js";
+export * from "./catalog.js";
+export * from "./evidence.js";
 export * from "./capabilities.js";
 export * from "./diagnostics.js";
 export * from "./litellm.js";

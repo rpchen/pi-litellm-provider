@@ -16,7 +16,7 @@ import {
 } from "./activation.ts"
 import { getAgentDir } from "@earendil-works/pi-coding-agent"
 import { join } from "node:path"
-import { createEndpointManager } from "./endpoint-management.ts"
+import { createEndpointManager, type ManagementContext } from "./endpoint-management.ts"
 import { createAuditReport } from "./audit.ts"
 import { auditDirectory, auditFailureMessage, writeAuditFile } from "./audit-file.ts"
 import {
@@ -26,10 +26,12 @@ import {
   type ExtensionConfig,
 } from "./config.ts"
 import {
+  catalogNotice,
   createProviderDiagnosticsState,
   formatProviderDiagnostics,
   publicationControllerForState,
   setProviderDiagnostics,
+  takePendingNotice,
   type ProviderDiagnosticsState,
 } from "./diagnostics.ts"
 import {
@@ -269,7 +271,23 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     pollStops.clear()
   }
 
-  const startActivePolling = (ctx: { modelRegistry: { refresh(input: { providers: string[]; force: boolean }): Promise<unknown> } }) => {
+  /** Surface a materially new or regressed availability problem, exactly once. */
+  const notifyCatalog = (ctx: ManagementContext, endpointId: string) => {
+    const pending = takePendingNotice(stateFor(endpointId))
+    if (!pending) return
+    const summary = stateFor(endpointId).current.publication
+    if (!summary) return
+    // The notice text is composed from the current summary (regressed model
+    // names, counts) plus the decision reason — never from stored prose.
+    const notice = catalogNotice({
+      ...summary,
+      acknowledgement: { ...summary.acknowledgement, notify: true, reason: pending.reason },
+    })
+    if (!notice) return
+    ctx.ui.notify(`LiteLLM ${endpointId}：${notice.message}`, notice.level)
+  }
+
+  const startActivePolling = (ctx: ManagementContext) => {
     stopAllPolling()
     for (const endpointId of activeIds()) {
       const endpoint = registry.endpoints[endpointId]
@@ -278,7 +296,9 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
       // Poll cadence is pollInterval-based; the host's own catalog load at session
       // start already triggers the immediate refresh for us (via get_available_models).
       pollStops.set(endpointId, startPolling(endpoint.pollInterval, () =>
-        ctx.modelRegistry.refresh({ providers: [providerId], force: true }).then(() => undefined),
+        ctx.modelRegistry.refresh({ providers: [providerId], force: true }).then(() => {
+          notifyCatalog(ctx, endpointId)
+        }),
       ))
     }
   }
@@ -388,6 +408,9 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     sync: (ctx) => {
       syncProviders()
       startActivePolling(ctx)
+      // The manager has just force-refreshed the active endpoints: surface any
+      // material availability change (regression / unusable catalog) once.
+      for (const id of activeIds()) notifyCatalog(ctx, id)
     },
     forget: (endpointId) => {
       diagnostics.delete(endpointId)
@@ -395,45 +418,6 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
     },
     endpointState: endpointStateFor,
     write: internals.write,
-  })
-
-  pi.registerCommand("litellm-accept-degraded", {
-    description: "接受指定 endpoint 上未完成模型的降级配置（仍标记为 degraded，非完整配置）",
-    handler: async (args, ctx) => {
-      const [endpointId, modelId] = args.trim().split(/\s+/)
-      if (!endpointId || !modelId || !(endpointId in registry.endpoints)) {
-        ctx.ui.notify(
-          `用法：litellm-accept-degraded <endpoint-id> <model-id>；未知 endpoint：${endpointId ?? ""}`,
-          "warning",
-        )
-        return
-      }
-      const state = stateFor(endpointId)
-      const blocked = state.current.publication?.blocked.find((model) => model.id === modelId)
-      if (!blocked || !blocked.degradationEligible) {
-        const registered = (state.current.models ?? []).some((model) => model.id === modelId)
-        ctx.ui.notify(
-          blocked
-            ? `拒绝降级：${modelId}（${blocked.status}；${blocked.degradationReason ?? "当前状态不可接受降级"}）`
-            : registered ? `${modelId} 已是完整配置，无需降级接受。` : `未知或不可降级模型：${modelId}`,
-          "warning",
-        )
-        return
-      }
-      publicationControllerForState(state).acceptedDegradedIDs.add(modelId)
-      try {
-        await ctx.modelRegistry?.refresh?.({
-          providers: [providerIdForEndpoint(endpointId)],
-          force: true,
-        })
-      } catch {
-        // Refresh errors surface through diagnostics; acceptance is kept.
-      }
-      ctx.ui.notify(
-        `已接受降级：${modelId}（${blocked.status}；缺口：${blocked.gaps.join("、") || "无"}），仍标记为降级配置。`,
-        "info",
-      )
-    },
   })
 
   pi.registerCommand("litellm-endpoints", {

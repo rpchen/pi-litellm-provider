@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import type {
+  DegradationAcknowledgement,
   DiscoveryCacheDiagnostics,
   DiscoveryDiagnostics,
   LastKnownGoodStore,
@@ -38,33 +39,75 @@ export interface PublicationModelState {
   readonly status: string
 }
 
-export interface PublicationBlockedModel {
+export interface PublicationWithheldReason {
+  readonly code: string
+  readonly message: string
+  readonly fields: readonly string[]
+}
+
+/** One model that could not be safely published, with every reason. */
+export interface PublicationWithheldModel {
   readonly id: string
   readonly status: string
-  readonly gaps: readonly string[]
-  /** Core eligibility. Adapters must not re-derive this from status strings. */
-  readonly degradationEligible: boolean
-  readonly degradationReason?: string
+  readonly reasons: readonly PublicationWithheldReason[]
+  /** True when the previously applied catalog published this model. */
+  readonly previouslyPublished: boolean
+  /** True when a retry could plausibly obtain trustworthy facts. */
+  readonly retryable: boolean
 }
 
-/** Adapter-visible slice of the Core publication partition (no policy logic). */
+/** A field-level evidence fact worth showing to the user. */
+export interface PublicationFieldFact {
+  readonly model: string
+  readonly field: string
+  readonly status: string
+  readonly resolution: string
+}
+
+/** Adapter-visible slice of the Core publication + catalog partition. */
 export interface PublicationSummary {
+  readonly discovered: number
   readonly publishable: readonly PublicationModelState[]
-  readonly degradedIDs: readonly string[]
+  /** Models published from a previously verified trusted snapshot. */
   readonly lkgIDs: readonly string[]
-  readonly blocked: readonly PublicationBlockedModel[]
+  readonly lkgDetail?: string
+  readonly withheld: readonly PublicationWithheldModel[]
+  /** Some models publishable, some withheld. */
+  readonly partial: boolean
+  /** Discovered models exist and none can be safely published. */
+  readonly unusable: boolean
+  /** Withheld models the previous applied catalog published. */
+  readonly regressions: readonly string[]
+  /** Differences authority already resolved (model stays publishable). */
+  readonly discrepancies: readonly PublicationFieldFact[]
+  /** Genuine conflicts that withhold a model. */
+  readonly conflicts: readonly PublicationFieldFact[]
   readonly failureKind?: string
+  /**
+   * Notification/acknowledgement state. This only decides whether to
+   * surface the current problem set again; it never changes which models
+   * are publishable.
+   */
+  readonly acknowledgement: {
+    readonly notify: boolean
+    readonly reason: string
+    readonly fingerprint: string
+  }
 }
 
-/** Per-endpoint publication controller: LKG store + degraded acceptance. */
+/**
+ * Per-endpoint publication controller.
+ *
+ * `previouslyPublished` and `acknowledgement` are reporting state only:
+ * neither participates in `publishable(model)`, which Core decides alone.
+ */
 export interface PublicationController {
   readonly store: LastKnownGoodStore
-  readonly acceptedDegradedIDs: Set<string>
-}
-
-export interface ProviderDiagnosticsState {
-  current: ProviderDiagnosticSnapshot
-  publication?: PublicationController
+  /** Model ids the previously applied catalog published. */
+  previouslyPublished: Set<string>
+  acknowledgement?: DegradationAcknowledgement
+  /** Unconsumed user-facing notice derived from the acknowledgement decision. */
+  pendingNotice?: { readonly reason: string; readonly message: string }
 }
 
 /** Resolve (creating on first use) the endpoint-scoped publication controller. */
@@ -75,10 +118,26 @@ export function publicationControllerForState(
   if (existing) return existing
   const created: PublicationController = {
     store: createLastKnownGoodStore(),
-    acceptedDegradedIDs: new Set<string>(),
+    previouslyPublished: new Set<string>(),
   }
   if (state) state.publication = created
   return created
+}
+
+/** Consume a pending catalog notice exactly once. */
+export function takePendingNotice(
+  state: ProviderDiagnosticsState | undefined,
+): { readonly reason: string; readonly message: string } | undefined {
+  const controller = state?.publication
+  if (!controller?.pendingNotice) return undefined
+  const notice = controller.pendingNotice
+  controller.pendingNotice = undefined
+  return notice
+}
+
+export interface ProviderDiagnosticsState {
+  current: ProviderDiagnosticSnapshot
+  publication?: PublicationController
 }
 
 export function createProviderDiagnosticsState(): ProviderDiagnosticsState {
@@ -172,20 +231,84 @@ export function formatHostDateTime(
   ].join(" ")
 }
 
-/** Render the Core publication partition: states, gaps, LKG, degraded. */
+/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
 export function formatPublicationSummary(summary: PublicationSummary | undefined): string[] {
   if (!summary) return []
   const lines = [
-    `模型配置：可用 ${summary.publishable.length} · 未完成 ${summary.blocked.length} · 降级 ${summary.degradedIDs.length} · LKG ${summary.lkgIDs.length}`,
+    `模型配置：发现 ${summary.discovered} · 可用 ${summary.publishable.length} · withheld ${summary.withheld.length} · LKG ${summary.lkgIDs.length}`,
   ]
-  if (summary.failureKind) lines.push(`元数据获取失败：${summary.failureKind}（未用默认值伪装完整配置）`)
-  if (summary.lkgIDs.length > 0) lines.push(`LKG 提供：${summary.lkgIDs.join("、")}`)
-  if (summary.degradedIDs.length > 0) lines.push(`已接受降级：${summary.degradedIDs.join("、")}（仍标记为降级，非完整配置）`)
-  for (const blocked of summary.blocked.slice(0, 5)) {
-    lines.push(`未完成：${blocked.id} · ${blocked.status}${blocked.gaps.length > 0 ? ` · 缺失 ${blocked.gaps.join("、")}` : ""}`)
+  if (summary.unusable) {
+    lines.push(
+      "catalog 当前不可用：endpoint 连接成功，但本轮没有任何模型达到可信发布标准。",
+      "下一步：稍后刷新（Retry）重新发现，或运行 /litellm-diagnostics <endpoint-id> 查看每个模型的 withheld 原因。插件不会用默认值或确认动作强行发布模型。",
+    )
+  } else if (summary.partial) {
+    lines.push(
+      `部分可用：${summary.publishable.length} 个模型正常发布，${summary.withheld.length} 个 withheld（其余模型不受影响，无需确认）。`,
+    )
   }
-  if (summary.blocked.length > 5) lines.push(`……另有 ${summary.blocked.length - 5} 个未完成模型`)
+  if (summary.failureKind) lines.push(`元数据获取失败：${summary.failureKind}（未用默认值伪装完整配置）`)
+  // Notification state, not publication state: tells the user why the same
+  // problem set stays quiet across restarts.
+  if (summary.acknowledgement.reason === "unchanged") {
+    lines.push("提醒状态：该问题集合已确认（跨重启保留），不重复提醒")
+  } else if (summary.acknowledgement.reason === "improved") {
+    lines.push("提醒状态：问题集合较已确认状态减少，基线已更新")
+  }
+  if (summary.regressions.length > 0) {
+    lines.push(
+      `此前可用、现已撤下：${summary.regressions.join("、")}（这些模型当前不可安全使用；插件不会自动切换到其他模型）`,
+    )
+  }
+  if (summary.lkgIDs.length > 0) {
+    lines.push(`使用已信任的前次完整配置（LKG）：${summary.lkgIDs.join("、")}`)
+    if (summary.lkgDetail) lines.push(`LKG 说明：${summary.lkgDetail}`)
+  }
+  for (const model of summary.withheld.slice(0, 5)) {
+    const reasons = model.reasons.map((item) => item.code).join("+") || "withheld"
+    lines.push(
+      `withheld：${model.id} · ${model.status} · ${reasons}${model.retryable ? " · 可重试" : ""}${model.previouslyPublished ? " · 此前可用" : ""}`,
+    )
+  }
+  if (summary.withheld.length > 5) lines.push(`……另有 ${summary.withheld.length - 5} 个 withheld 模型`)
+  for (const fact of summary.discrepancies.slice(0, 5)) {
+    lines.push(`已裁决差异：${fact.model} · ${fact.field} · ${fact.resolution}`)
+  }
+  for (const fact of summary.conflicts.slice(0, 5)) {
+    lines.push(`未决冲突：${fact.model} · ${fact.field} · ${fact.resolution}`)
+  }
   return lines
+}
+
+/**
+ * User-facing notice for a materially new or regressed availability problem.
+ *
+ * A first-time gap on a newly discovered model is intentionally silent
+ * (diagnostics only); a regression or an unusable catalog is not.
+ */
+export function catalogNotice(
+  summary: PublicationSummary | undefined,
+): { readonly level: "info" | "warning"; readonly message: string } | undefined {
+  if (!summary?.acknowledgement.notify) return undefined
+  switch (summary.acknowledgement.reason) {
+    case "catalog-unusable":
+      return {
+        level: "warning",
+        message: `endpoint 连接成功，发现 ${summary.discovered} 个模型，但当前没有任何模型可以安全发布。${summary.regressions.length > 0 ? `此前可用的模型已被撤下：${summary.regressions.join("、")}。` : ""}可用 /model 重新刷新（Retry），或运行 /litellm-diagnostics 查看每个模型的 withheld 原因。`,
+      }
+    case "regression":
+      return {
+        level: "warning",
+        message: `此前可用的模型已被撤下：${summary.regressions.join("、")}。它们当前不可安全使用，插件不会自动切换到其他模型；请重新刷新（Retry）或改选其他模型。`,
+      }
+    case "new-issues":
+      return {
+        level: "info",
+        message: `LiteLLM 可用模型集合发生变化：${summary.withheld.length} 个模型 withheld（此前已知问题之外的新问题）。运行 /litellm-diagnostics 查看原因。`,
+      }
+    default:
+      return undefined
+  }
 }
 
 const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {

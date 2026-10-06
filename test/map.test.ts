@@ -72,7 +72,9 @@ describe("toProviderModels", () => {
   test("PR8 的总 context 语义贯穿 Core 到 Pi 模型配置", () => {
     const glm = byID.get("glm-5.3")!
     expect(glm.contextWindow).toBe(200000)
-    expect(glm.maxTokens).toBe(131072)
+    // models.dev is authoritative for intrinsic limits; the LiteLLM
+    // descriptive 131072 is retained as a resolved discrepancy.
+    expect(glm.maxTokens).toBe(32000)
   })
 
   test("hy4-preview 通过 OpenRouter 能力 fallback 映射为可用 Pi 模型", () => {

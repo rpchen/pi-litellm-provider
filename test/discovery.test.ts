@@ -7,6 +7,7 @@ import {
 } from "../src/core/index.ts"
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
+import { createProviderDiagnosticsState, takePendingNotice } from "../src/extension/diagnostics.ts"
 import { resetModelsDevCacheForTest, type FetchLike } from "../src/net/fetch.ts"
 import type { ProviderModelConfigLike, RefreshModelsContextLike } from "../src/extension/types.ts"
 
@@ -158,7 +159,7 @@ describe("discoverModels", () => {
     expect(outcome.fingerprint.length).toBeGreaterThan(0)
   })
 
-  test("models.dev 失败时不伪装完整配置（降级为空目录、模型保持未完成）", async () => {
+  test("models.dev 失败时不伪装完整配置（空目录、模型保持 withheld）", async () => {
     const outcome = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
@@ -170,10 +171,10 @@ describe("discoverModels", () => {
     // LiteLLM 只声明了 limits，tools/reasoning 无可信证据：不得注册
     // 看似正常的模型；缺口必须可见。
     expect(outcome.models).toHaveLength(0)
-    expect(outcome.publication.blocked.map((model) => model.id)).toEqual(["gpt-6-sol"])
-    expect(outcome.publication.blocked[0]!.gaps).toEqual(
-      expect.arrayContaining(["capabilities.tools", "reasoning"]),
-    )
+    expect(outcome.publication.withheld.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    expect(outcome.publication.withheld[0]!.reasons.map((reason) => reason.code)).toEqual([
+      "metadata-unavailable",
+    ])
   })
 
   test("元数据加载抛错时分类失败并可用有效 LKG 继续提供", async () => {
@@ -184,7 +185,7 @@ describe("discoverModels", () => {
         "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
-      publication: { store, acceptedDegradedIDs: new Set() },
+      publication: { store },
     })
     expect(first.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
     const second = await discoverModels(config(), KEY, undefined, {
@@ -195,7 +196,7 @@ describe("discoverModels", () => {
         throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" })
       },
       logger: silent,
-      publication: { store, acceptedDegradedIDs: new Set() },
+      publication: { store },
     })
     expect(second.publication.failureKind).toBe("unreachable")
     expect(second.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
@@ -295,14 +296,43 @@ describe("refreshProviderModels 两阶段", () => {
       first.specs,
       "2026-09-28T00:00:00.000Z",
     )
+    const stored: { value: unknown } = {
+      // A host that already persisted this round's publication memory (the
+      // acknowledgement/baseline record) must not be written again.
+      value: undefined,
+    }
     const { published, context } = fakeContext({
-      stored: {
-        models: first.models,
-        snapshot: storedSnapshot,
-        restoreFingerprint: restoreFingerprintFor(),
+      stored: undefined,
+      publish: async (publication: { persist?: unknown }) => {
+        if (publication.persist !== undefined) {
+          published.push(publication.persist)
+          stored.value = publication.persist
+        }
+        return true
       },
     })
-    const models = await refreshProviderModels(config(), context, {
+    const firstRound = await refreshProviderModels(config(), context, {
+      fetchImpl: fetchRouter({
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+      }),
+      logger: silent,
+    })
+    expect(firstRound).toHaveLength(1)
+    expect(published).toHaveLength(1)
+    const persisted = published[0] as { models: unknown; snapshot?: unknown; publicationMemory?: unknown }
+    expect(persisted.publicationMemory).toBeDefined()
+
+    // Second round with the host state we just wrote: nothing new to persist.
+    const publishedAgain: unknown[] = []
+    const models = await refreshProviderModels(config(), {
+      ...context,
+      stored: persisted,
+      publish: async (publication: { persist?: unknown }) => {
+        if (publication.persist !== undefined) publishedAgain.push(publication.persist)
+        return true
+      },
+    } as typeof context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
         "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
@@ -310,7 +340,122 @@ describe("refreshProviderModels 两阶段", () => {
       logger: silent,
     })
     expect(models).toHaveLength(1)
-    expect(published).toHaveLength(0)
+    expect(publishedAgain).toHaveLength(0)
+  })
+})
+
+
+describe("publication memory persistence across restarts", () => {
+  /** Endpoint metadata with no capability/limit evidence: always withheld. */
+  const withheldBody = (names: string[]) => ({
+    data: names.map((model_name) => ({
+      model_name,
+      litellm_params: { model: `custom/${model_name}` },
+      model_info: { mode: "chat" },
+    })),
+  })
+
+  function host() {
+    const writes: Array<{ persist?: unknown }> = []
+    let stored: unknown
+    return {
+      writes,
+      context: {
+        signal: new AbortController().signal,
+        credential: { type: "api_key", key: KEY },
+        allowNetwork: true,
+        get stored() {
+          return stored
+        },
+        publish: async (publication: { persist?: unknown }) => {
+          if (publication.persist !== undefined) {
+            writes.push(publication)
+            stored = publication.persist
+          }
+          return true
+        },
+      } as unknown as RefreshModelsContextLike,
+    }
+  }
+
+  const providerDeps = (body: () => unknown) => ({
+    fetchImpl: fetchRouter({
+      [`${BASE}/v1/model/info`]: () => jsonResponse(200, body()),
+    }),
+    loadModelsDevCatalog: async () => ({}),
+    logger: silent,
+  })
+
+  test("an acknowledged problem set is not re-notified after a restart, and material change re-notifies", async () => {
+    const { writes, context } = host()
+
+    // Round 1 (process A): the endpoint is unusable -> surfaced and stored.
+    const stateA = createProviderDiagnosticsState()
+    const first = await refreshProviderModels(config(), context, providerDeps(() => withheldBody(["gap-a"])), undefined, stateA)
+    expect(first).toEqual([])
+    expect(takePendingNotice(stateA)?.reason).toBe("catalog-unusable")
+    const persisted = writes.at(-1)!.persist as { publicationMemory?: unknown }
+    const memory = persisted.publicationMemory as { acknowledgement: unknown; published: string[] }
+    expect(memory.acknowledgement).not.toBeNull()
+    expect(memory.published).toEqual([])
+
+    // Round 2 (process B): a brand new controller restores from the persisted
+    // payload and the identical problem set stays quiet.
+    const stateB = createProviderDiagnosticsState()
+    const again = await refreshProviderModels(config(), context, providerDeps(() => withheldBody(["gap-a"])), undefined, stateB)
+    expect(again).toEqual([])
+    expect(takePendingNotice(stateB)).toBeUndefined()
+    expect(stateB.current.publication?.acknowledgement.notify).toBeFalse()
+    expect(stateB.current.publication?.acknowledgement.reason).toBe("unchanged")
+
+    // Round 3 (process C): a materially bigger problem set is surfaced again.
+    const stateC = createProviderDiagnosticsState()
+    await refreshProviderModels(config(), context, providerDeps(() => withheldBody(["gap-a", "gap-b"])), undefined, stateC)
+    expect(takePendingNotice(stateC)?.reason).toBe("catalog-unusable")
+
+    // Round 4 (process D): the recovered endpoint clears the acknowledgement.
+    const stateD = createProviderDiagnosticsState()
+    const recovered = await refreshProviderModels(
+      config(),
+      context,
+      {
+        fetchImpl: fetchRouter({
+          [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+          "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        }),
+        logger: silent,
+      },
+      undefined,
+      stateD,
+    )
+    expect(recovered.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    const cleared = (writes.at(-1)!.persist as { publicationMemory?: { acknowledgement: unknown; published: string[] } })
+      .publicationMemory!
+    expect(cleared.acknowledgement).toBeNull()
+    expect(cleared.published).toEqual(["gpt-6-sol"])
+  })
+
+  test("unreadable persisted memory is inert: it never suppresses and never blocks publication", async () => {
+    const { context } = host()
+    const state = createProviderDiagnosticsState()
+    const corrupted = {
+      ...context,
+      stored: {
+        models: [],
+        checkedAt: 1,
+        publicationMemory: { schemaVersion: 99, acknowledgement: { nonsense: true }, published: 5 },
+      },
+    } as unknown as RefreshModelsContextLike
+    const models = await refreshProviderModels(config(), corrupted, {
+      fetchImpl: fetchRouter({
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+      }),
+      logger: silent,
+    }, undefined, state)
+    // Publication is decided by Core alone: the corrupt memory changes nothing.
+    expect(models.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    expect(state.current.publication?.publishable.map((entry) => entry.id)).toEqual(["gpt-6-sol"])
   })
 })
 

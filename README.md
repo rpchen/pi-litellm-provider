@@ -80,7 +80,6 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 | `/thinking` | 切换当前模型的 thinking level |
 | `/litellm-diagnostics [endpoint-id]` | 无参数查看 endpoint 总览；传 id 查看该 endpoint 的发现、缓存、models.dev、协议、Core 诊断与 Runtime Identity |
 | `/litellm-audit-export [endpoint-id]` | 导出已注册模型清单与完整 Runtime Identity 到本地 JSON 文件；无参数导出全部已激活 endpoint |
-| `/litellm-accept-degraded <endpoint-id> <model-id>` | 显式接受某个未完成模型的降级配置（仍标记为降级，非完整配置，重启后需重新接受） |
 | `/litellm-endpoints` | endpoint 管理中心：新增、修改 Base URL、删除、启用/停用、连接/替换/断开 API Key；也支持 `all` / `none` / `<endpoint-id>` 参数快速切换启用状态 |
 | `/login` / `/logout` | 保存、切换或移除 LiteLLM 凭据 |
 | `/reload` | 修改 `litellm.json` 后重新读取配置 |
@@ -99,13 +98,53 @@ endpoint id 是用户定义的稳定 ASCII slug，必须匹配 `[a-z0-9][a-z0-9-
 
 `/litellm-audit-export` 每次执行都会在 `<agentDir>/litellm-audit/` 下生成一个新 JSON 文件，不覆盖已有报告。报告包含已注册模型的 allowlist 字段与完整的 Runtime Identity，不包含 API Key、LiteLLM 地址或原始上游响应；分享前请自行检查。导出失败不会影响 provider 注册与轮询。
 
-### 模型配置状态（正常发布 / 未完成 / 降级 / LKG）
+### 模型可用性：为什么某个模型可能暂时不可用
 
-endpoint 里发现了模型，不等于模型已经正确配置完成。只有能力信息完整可信（上下文窗口、输出上限、工具调用、reasoning 等足以让宿主正确使用）的模型，才会作为正常模型注册。`/litellm-diagnostics` 的“模型配置”段会列出：可用、未完成（含缺失字段）、已接受降级、以及正使用历史完整快照（LKG）的模型。
+endpoint 里发现了模型，不等于这个模型已经可以被安全使用。只有能力信息完整可信（上下文窗口、输出上限、工具调用、reasoning、输入/输出模态等足以让宿主正确调用）的模型才会进入 `/models`；其余模型保持 **withheld**，并在 `/litellm-diagnostics` 中连同原因列出。插件不会为了让模型出现而降低单个模型的配置可信度，也不存在任何「确认后强行发布」的动作。
 
-- 未完成模型不会伪装成正常模型；元数据获取失败（超时、5xx、网络不可达等）不会用默认值拼出看似正常的配置。
-- 元数据暂时失败但存在仍可信的历史完整快照时，模型继续可用并标注为 LKG（标注来源与数据年龄；年龄本身不会使快照失效）。
-- 确认了解缺失仍想使用某个模型时，用 `/litellm-accept-degraded <endpoint-id> <model-id>` 显式接受降级；只接受身份已确认但能力不完整、或元数据暂时不可用的模型。身份不明、元数据非法、或无法匹配的模型会被拒绝，不会显示接受成功。接受后模型仍标记为降级，可用 `/litellm-diagnostics` 查看剩余缺口。
+**这不会影响其他模型。** 一次发现的结果是逐个模型判定的：
+
+```text
+发现 20 个模型
+→ 17 个立即正常进入 /models
+→ 3 个 withheld（在 diagnostics 中说明原因）
+```
+
+这叫 **partial availability**，是正常可用状态，不需要你确认任何内容。
+
+模型被 withheld 的常见原因：
+
+- **元数据来源暂时不可用**（models.dev 超时、5xx、网络不可达）且没有可信的历史完整配置；
+- **元数据不完整**：缺少上下文/输出上限，或工具调用、reasoning、模态没有可信证据；
+- **身份无法可靠确定**：同一模型名对应多个 models.dev 记录，或 deployment 之间无法证明是同一个模型；
+- **权威冲突无法裁决**：例如同一模型的两条部署声明互相矛盾；
+- **元数据非法**：显式声明了非法的上限值。
+
+如果你之前用过的模型**现在**被 withheld，这是一次 regression，插件会明确告诉你哪个模型失去了可用状态、为什么、以及可以刷新（打开 `/model` 重新发现）后重试；它**不会**自动把你的请求切到另一个模型，也不会静默继续使用失去可信配置的模型。已经发出的请求不会被打断。
+
+**metadata 暂时不可用时，插件会保护已经验证过的配置。** 如果该模型此前完整通过过可信发布标准，且它的身份（provider / canonical 身份）没有变化、也没有出现新的高权威矛盾事实，插件会继续使用这份**此前验证过的完整配置**（LKG）：
+
+```text
+当前元数据刷新不可用
+使用此前验证过的配置
+identity 未变化
+publication 仍然可信
+```
+
+LKG 不是猜测，也不是「降级模型」：它就是一份曾经整体成立的可信配置。它没有固定过期时间——是否继续使用由身份、provider、schema 与 live 事实是否一致决定，而不是由年龄决定。LiteLLM 已经不再提供的模型不会因为存在 LKG 而重新出现。
+
+**如果整个 endpoint 当前没有任何模型可以安全发布**，diagnostics 会明确说明「endpoint 连接成功、发现了 N 个模型、当前 0 个可以安全发布」，并提示刷新（Retry）与诊断入口，而不是看起来像插件没有反应。
+
+**Retry 的作用**是重新尝试获得可信事实，不是绕过检查。刷新成功且模型重新达到可信标准后，它会自动回到 `/models`，无需你再次批准。被 withheld 的模型会继续参与正常的 discovery / 刷新 / 轮询，一旦恢复就自动恢复可用。
+
+`/litellm-diagnostics` 会显示：
+
+- 本轮发现、可用、withheld 的数量；
+- 每个 withheld 模型的原因与是否可重试；
+- 哪些模型正在使用此前验证过的配置（LKG），以及该配置的来源时间与年龄；
+- **已裁决的字段差异**：例如 LiteLLM 的描述性上限与 models.dev 该模型的内禀上限不同时，插件会采用更权威的来源并记录这次差异，而不是因此把模型判为不可用；
+- **未决冲突**与对应的 withheld 原因；
+- 此前可用、现在被撤下的模型（regression）。
 
 ### Runtime Identity
 
