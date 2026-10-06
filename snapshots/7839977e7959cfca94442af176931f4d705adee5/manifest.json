@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "kind": "merged-main",
+  "repository": "rpchen/pi-litellm-provider",
+  "commit": "7839977e7959cfca94442af176931f4d705adee5",
+  "tree": "c5b4130e082277045dbbc1d6530287f9b05bbae6",
+  "project": "pi-litellm-provider-main-7839977e7959cfca94442af176931f4d705adee5",
+  "cbm_version": "0.11.0",
+  "source": {
+    "kind": "isolated-git",
+    "commit": "7839977e7959cfca94442af176931f4d705adee5",
+    "tree": "c5b4130e082277045dbbc1d6530287f9b05bbae6",
+    "clean": true
+  },
+  "sha256": {
+    "graph.db.zst": "da595c9c7ad6e199d168a42a15c11933fd964d657fb4c76cf0068732bb3a2dc6",
+    "artifact.json": "8db966ea2d3e6b613d3d3edb85a09e7c3fa0ec30092701e6829319eb5559322e"
+  }
+}
