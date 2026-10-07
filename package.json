@@ -33,7 +33,8 @@
     "test:openspec-closure": "node --test scripts/check-openspec-closure.test.mjs && node scripts/check-openspec-closure.mjs",
     "test:release-metadata": "node scripts/check-release-metadata.mjs",
     "test:e2e:pi": "node scripts/e2e-real-pi.mjs",
-    "test:codebase-memory": "node --test scripts/codebase-memory.test.mjs scripts/codebase-memory-main.test.mjs"
+    "test:codebase-memory": "node --test scripts/codebase-memory.test.mjs scripts/codebase-memory-main.test.mjs",
+    "test:merge-gate": "node scripts/check-merge-gate.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

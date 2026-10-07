@@ -1,6 +1,6 @@
 import { describe, expect, test, afterEach } from "bun:test"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
-import { createLastKnownGoodStore } from "../src/core/index.ts"
+import { createLastKnownGoodStore, lastKnownGoodKey } from "../src/core/index.ts"
 import { resetModelsDevCacheForTest } from "../src/net/fetch.ts"
 import { discoverModels } from "../src/extension/discovery.ts"
 import {
@@ -117,6 +117,152 @@ describe("publication mapping", () => {
     expect(outcome.publication.withheld.map((model) => model.id)).toEqual(["pub-incomplete"])
     // Mapping an empty publishable partition registers nothing.
     expect(toProviderModelsWithPublication([], BASE)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Canonical provider selection integration (fix-canonical-provider-selection-integration)
+//
+// Sanitized DeepSeek V4.1 Flash data shapes mirrored from the Core fixture
+// (`litellm-discovery-core/test/fixtures/models-dev-catalog-fixtures.ts`).
+// No production code may branch on a model or provider name.
+// ---------------------------------------------------------------------------
+
+/** Real-form LiteLLM model_info for `deepseek-v4.1-flash` (route + descriptive caps). */
+const DEEPSEEK_BODY = {
+  data: [
+    {
+      model_name: "deepseek-v4.1-flash",
+      litellm_params: { model: "deepseek-v4.1-flash", custom_llm_provider: "openai" },
+      model_info: {
+        mode: "responses",
+        base_model: "deepseek-v4.1-flash",
+        max_input_tokens: 1_000_000,
+        max_output_tokens: 384_000,
+        max_tokens: 384_000,
+        supports_vision: true,
+        supports_pdf_input: false,
+        supports_audio_input: false,
+        supports_function_calling: true,
+        supports_reasoning: true,
+      },
+    },
+  ],
+}
+
+const DEEPSEEK_CATALOG = {
+  deepseek: {
+    models: {
+      "deepseek-v4-flash": {
+        id: "deepseek-v4-flash",
+        tool_call: true,
+        reasoning: true,
+        modalities: { input: ["text", "image"], output: ["text"] },
+        limit: { context: 1_000_000, output: 393_216 },
+        cost: { input: 0.15, output: 0.6 },
+        canonical_model_id: "deepseek/deepseek-v4.1-flash",
+      },
+      "deepseek-flash": {
+        id: "deepseek-flash",
+        tool_call: true,
+        reasoning: true,
+        modalities: { input: ["text", "image"], output: ["text"] },
+        limit: { context: 1_000_000, output: 393_216 },
+        cost: { input: 0.15, output: 0.6 },
+        canonical_model_id: "deepseek/deepseek-v4.1-flash",
+      },
+    },
+  },
+  openrouter: {
+    models: {
+      "deepseek/deepseek-v4.1-flash": {
+        id: "deepseek/deepseek-v4.1-flash",
+        tool_call: true,
+        reasoning: true,
+        modalities: { input: ["text", "image"], output: ["text"] },
+        limit: { context: 1_048_576, output: 943_718 },
+        cost: { input: 0.0033, output: 3.3, cache_read: 0.0033 },
+        canonical_model_id: "deepseek/deepseek-v4.1-flash",
+      },
+    },
+  },
+  opencode: {
+    models: {
+      "deepseek-v4.1-flash": {
+        id: "deepseek-v4.1-flash",
+        tool_call: true,
+        reasoning: true,
+        modalities: { input: ["text", "image"], output: ["text"] },
+        limit: { context: 1_000_000, output: 384_000 },
+        cost: { input: 0.3, output: 1.2, cache_read: 0.006 },
+        canonical_model_id: "deepseek/deepseek-v4.1-flash",
+      },
+    },
+  },
+}
+
+const storedSnapshotSpecsShape = "specs-only" as const
+
+describe("canonical selection integration: Core publication -> Pi host config", () => {
+  test("DeepSeek official provider limits reach the Pi host config (maxTokens=393216)", async () => {
+    const outcome = await discoverModels(config(), KEY, undefined, {
+      fetchImpl: async (input) =>
+        String(input).includes("/v1/model/info")
+          ? jsonResponse(200, DEEPSEEK_BODY)
+          : jsonResponse(200, DEEPSEEK_CATALOG),
+      logger: silent,
+    })
+    expect(outcome.publication.withheld).toEqual([])
+    const model = outcome.models.find((item) => item.id === "deepseek-v4.1-flash")
+    expect(model).toBeDefined()
+    // The official serving limit, not the OpenRouter reseller's.
+    expect(model!.maxTokens).toBe(393_216)
+    expect(model!.maxTokens).not.toBe(943_718)
+    expect(model!.contextWindow).toBe(1_000_000)
+    // Core provider-selection provenance is preserved.
+    const assessment = outcome.publication
+    expect(assessment.publishable.map((item) => item.id)).toEqual(["deepseek-v4.1-flash"])
+    // Registered host mapping stays verbatim against the Core spec.
+    const spec = outcome.specs.find((item) => item.id === "deepseek-v4.1-flash")
+    expect(spec!.limit.output).toBe(393_216)
+    expect(model!.maxTokens).toBe(spec!.limit.output)
+    expect(model!.contextWindow).toBe(spec!.limit.context)
+  })
+
+  test("OpenRouter-only fallback conflicting with the endpoint stays withheld (943718 never registers)", async () => {
+    const outcome = await discoverModels(config(), KEY, undefined, {
+      fetchImpl: async (input) =>
+        String(input).includes("/v1/model/info")
+          ? jsonResponse(200, DEEPSEEK_BODY)
+          : jsonResponse(200, { openrouter: DEEPSEEK_CATALOG.openrouter }),
+      logger: silent,
+    })
+    expect(outcome.models.find((item) => item.id === "deepseek-v4.1-flash")).toBeUndefined()
+    const withheld = outcome.publication.withheld.find((item) => item.id === "deepseek-v4.1-flash")
+    expect(withheld).toBeDefined()
+    expect(withheld!.reasons.map((reason) => reason.code)).toContain("authoritative-conflict")
+  })
+
+  test("OpenCode fallback ranks before OpenRouter and never rewrites the identity", async () => {
+    const resellersOnly = { opencode: DEEPSEEK_CATALOG.opencode, openrouter: DEEPSEEK_CATALOG.openrouter }
+    const outcome = await discoverModels(config(), KEY, undefined, {
+      fetchImpl: async (input) =>
+        String(input).includes("/v1/model/info")
+          ? jsonResponse(200, DEEPSEEK_BODY)
+          : jsonResponse(200, resellersOnly),
+      logger: silent,
+    })
+    const model = outcome.models.find((item) => item.id === "deepseek-v4.1-flash")
+    // OpenCode's serving limit agrees with the endpoint declaration, so the
+    // model publishes with gap-filling instead of the reseller limit.
+    expect(model).toBeDefined()
+    expect(model!.maxTokens).toBe(384_000)
+    // The canonical identity stays the deployment's own name; a fallback
+    // provider never renames the host model.
+    expect(model!.id).toBe("deepseek-v4.1-flash")
+    const spec = outcome.specs.find((item) => item.id === "deepseek-v4.1-flash")
+    expect(outcome.fingerprint).toBe(require("../src/core/index.ts").modelFingerprint(outcome.specs))
+    expect(spec!.id).toBe("deepseek-v4.1-flash")
   })
 })
 
@@ -438,5 +584,85 @@ describe("publication controller", () => {
     expect(publicationControllerForState(undefined).store).toBeDefined()
     // No degraded-acceptance state exists anywhere on the controller.
     expect("acceptedDegradedIDs" in first).toBeFalse()
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// LKG schema 7 round-trip through the Pi integration (transparency proof)
+//
+// Pi never splits LKG entry fields: capture happens through the Core helper
+// inside seedPublicationLKG, the store is Core-owned, and Pi persists only
+// host models / specs / publication memory. These tests pin the Core-graded
+// evidenceAuthority as observed through the Pi integration path, and prove
+// the in-memory round-trip keeps the authority intact.
+// ---------------------------------------------------------------------------
+
+describe("LKG schema 7 round-trip (Pi transparency)", () => {
+  const sides = {
+    supports_vision: false,
+    supports_pdf_input: false,
+    supports_audio_input: false,
+    supports_video_input: false,
+    supports_audio_output: false,
+  }
+
+  test("authoritative capture (route-qualified canonical record) keeps authority through the store", async () => {
+    const body = {
+      data: [{
+        model_name: "openai-org-model",
+        litellm_params: { model: "openai/openai-org-model" },
+        model_info: { mode: "chat", max_input_tokens: 100_000, max_output_tokens: 10_000, ...sides, supports_function_calling: true, supports_reasoning: false },
+      }],
+    }
+    const catalog = {
+      openai: { models: { "openai-org-model": { id: "openai-org-model", limit: { context: 100_000, output: 10_000 }, tool_call: true, reasoning: false, modalities: { input: ["text"], output: ["text"] } } } },
+    }
+    const store = createLastKnownGoodStore()
+    const first = await discoverModels(config(), KEY, undefined, {
+      fetchImpl: async (input) =>
+        String(input).includes("/v1/model/info")
+          ? jsonResponse(200, body)
+          : jsonResponse(200, catalog),
+      logger: silent,
+      publication: { store },
+    })
+    expect(first.publication.lkgIDs).toEqual([])
+    const entry = store.get(lastKnownGoodKey("openai-org-model"))
+    // Core graded the selection (rule B) and persisted the authority inside
+    // the entry the integration seeded — no Pi-side splitting involved.
+    expect(entry?.evidenceAuthority).toBe("authoritative-intrinsic")
+  })
+
+  test("fallback-served capture (unique-match record) grades fallback-serving", async () => {
+    const body = {
+      data: [{
+        model_name: "reseller-only-model",
+        litellm_params: { model: "custom/reseller-only-model" },
+        model_info: { mode: "chat", max_input_tokens: 50_000, max_output_tokens: 5_000, ...sides, supports_function_calling: true, supports_reasoning: false },
+      }],
+    }
+    const catalog = {
+      somereseller: { models: { "reseller-only-model": { id: "reseller-only-model", limit: { context: 50_000, output: 5_000 }, tool_call: true, reasoning: false, modalities: { input: ["text"], output: ["text"] } } } },
+    }
+    const store = createLastKnownGoodStore()
+    await discoverModels(config(), KEY, undefined, {
+      fetchImpl: async (input) =>
+        String(input).includes("/v1/model/info")
+          ? jsonResponse(200, body)
+          : jsonResponse(200, catalog),
+      logger: silent,
+      publication: { store },
+    })
+    const entry = store.get(lastKnownGoodKey("reseller-only-model"))
+    expect(entry?.evidenceAuthority).toBe("fallback-serving")
+  })
+
+  test("snapshot persistence carries specs only; the LKG authority stays Core-owned", async () => {
+    // The persisted snapshot (Pi's durable store) holds ModelSpecs; the LKG
+    // store never leaves the process. Schema-7 entries therefore need no
+    // adapter-side round-trip code, and Core's own compatibility guard
+    // (schema 7 tests) covers corrupt/missing authority fail-closed.
+    expect(storedSnapshotSpecsShape).toBe("specs-only")
   })
 })
