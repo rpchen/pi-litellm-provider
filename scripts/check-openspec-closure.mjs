@@ -590,30 +590,93 @@ function resolveArchiveChronology(archiveNames) {
     if (commit) commitByArchive.set(name, commit)
   }
 
-  // Chronology fixture: env (test injection) first, then the committed repo
-  // fixture (`openspec/openspec-chronology.json`). A committed fixture exists
-  // for squashed archives whose git introduction commits collapse into one
-  // SHA (ancestry cannot order them); it is reviewed like code.
-  const fixtureRaw = process.env.OPENSPEC_CLOSURE_ORDER_JSON ??
-    (existsSync(path.join(openspecRoot, "openspec-chronology.json"))
-      ? readFileSync(path.join(openspecRoot, "openspec-chronology.json"), "utf8")
-      : undefined)
+  // Chronology sources: Git ancestry is PRIMARY. Two fixture channels with
+  // different scopes:
+  // - committed openspec/openspec-chronology.json (production): refines ONLY
+  //   pairs whose Git introduction commit is identical (a squash collision);
+  //   it may not touch Git-provable pairs (a contradiction fails the gate)
+  //   nor pairs with unknown/incomparable Git history.
+  // - env OPENSPEC_CLOSURE_ORDER_JSON (unit-test injection only): keeps the
+  //   original exclusive-substitution semantics so offline tests can
+  //   simulate Git order deterministically.
+  const committedFixturePath = path.join(openspecRoot, "openspec-chronology.json")
+  const committedRaw = existsSync(committedFixturePath) ? readFileSync(committedFixturePath, "utf8") : undefined
+  const envFixture = process.env.OPENSPEC_CLOSURE_ORDER_JSON
+  const isEnvInjection = envFixture !== undefined
+  const fixtureRaw = isEnvInjection ? envFixture : committedRaw
   const fixture = fixtureRaw ? parseChronologyFixture(fixtureRaw) : null
-
-  const relation = (left, right) => {
-    if (fixture) return fixture.relation(left, right)
-    const leftCommit = commitByArchive.get(left)
-    const rightCommit = commitByArchive.get(right)
-    if (!leftCommit || !rightCommit) return "unknown"
-    if (leftCommit === rightCommit) return "same"
-    if (gitIsAncestor(leftCommit, rightCommit)) return "before"
-    if (gitIsAncestor(rightCommit, leftCommit)) return "after"
-    return "incomparable"
+  // An empty committed fixture (no collisions to refine) is a no-op.
+  let fixtureEffective = fixture
+  if (!isEnvInjection && fixture) {
+    // parseChronologyFixture rejects empty expressions; treat that as none.
+    try {
+      const parsed = JSON.parse(committedRaw ?? "")
+      const empty = (!Array.isArray(parsed?.groups) || parsed.groups.length === 0) &&
+        (!Array.isArray(parsed?.edges) || parsed.edges.length === 0)
+      if (empty) fixtureEffective = null
+    } catch {
+      // Malformed JSON fails through the parser.
+    }
   }
+  // Scope check: a committed fixture pair contradicting Git ancestry fails
+  // the gate; Git-provable pairs never need a fixture entry.
+  const conflicts = []
+  const names2 = archiveNames ?? []
+  if (!isEnvInjection && fixtureEffective) {
+    for (let left = 0; left < names2.length; left += 1) {
+      for (let right = 0; right < names2.length; right += 1) {
+        const a = names2[left]
+        const b = names2[right]
+        if (!a || !b || a === b) continue
+        const aCommit = commitByArchive.get(a)
+        const bCommit = commitByArchive.get(b)
+        if (!aCommit || !bCommit || aCommit === bCommit) continue
+        let gitOrder = "incomparable"
+        if (gitIsAncestor(aCommit, bCommit)) gitOrder = "before"
+        else if (gitIsAncestor(bCommit, aCommit)) gitOrder = "after"
+        const fixtureOrder = fixtureEffective.relation(a, b)
+        if (gitOrder === "before" && fixtureOrder === "after") {
+          conflicts.push(`${a} < ${b} (Git ancestry) but the fixture orders them opposite`)
+        }
+        if (gitOrder === "after" && fixtureOrder === "before") {
+          conflicts.push(`${b} < ${a} (Git ancestry) but the fixture orders them opposite`)
+        }
+      }
+    }
+  }
+
+  const gitResolvedPairs = new Set()
+  const relation = isEnvInjection && fixture
+    ? (left, right) => fixture.relation(left, right)
+    : (left, right) => {
+      const leftCommit = commitByArchive.get(left)
+      const rightCommit = commitByArchive.get(right)
+      if (!leftCommit || !rightCommit) return "unknown"
+      if (leftCommit === rightCommit) {
+        if (fixtureEffective) {
+          const refined = fixtureEffective.relation(left, right)
+          if (refined === "before" || refined === "after") return refined
+        }
+        return "same"
+      }
+      if (gitIsAncestor(leftCommit, rightCommit)) {
+        gitResolvedPairs.add(`${left}->${right}`)
+        gitResolvedPairs.add(`${right}->${left}`)
+        return "before"
+      }
+      if (gitIsAncestor(rightCommit, leftCommit)) {
+        gitResolvedPairs.add(`${left}->${right}`)
+        gitResolvedPairs.add(`${right}->${left}`)
+        return "after"
+      }
+      return "incomparable"
+    }
 
   return {
     relation,
-    source: fixture ? "fixture" : "git",
+    source: isEnvInjection ? "fixture" : fixtureEffective ? "hybrid" : "git",
+    conflicts,
+    gitResolvedPairs,
     commitByArchive,
   }
 }
