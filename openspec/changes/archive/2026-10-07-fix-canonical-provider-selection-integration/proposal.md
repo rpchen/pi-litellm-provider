@@ -2,7 +2,7 @@
 
 ## Why
 
-Core 仓库 `litellm-discovery-core` 的 OpenSpec change `fix-canonical-provider-selection-precedence`（对应 Core PR rpchen/litellm-discovery-core#29）修复了通用 canonical provider selection：
+Core 仓库 `litellm-discovery-core` 的 OpenSpec change `fix-canonical-provider-selection-precedence`（对应 Core PR rpchen/litellm-discovery-core#29 + 后续 rule-B 补全 #30，Core main SHA `f07951d7ac85f756bba8cfa64fa5215de0dad664`）修复了通用 canonical provider selection：
 
 1. **真实 BUG**：Pi 用户选择 `deepseek-v4.1-flash` 时被 LiteLLM 拒绝——`max_tokens (943718) exceeds model's maximum output tokens (393216)`。Core 旧 selector 未把 DeepSeek 官方 provider 的 serving-SKU 记录（通过 `canonical_model_id` 关系指向 canonical identity）识别为 canonical-original，fallback 落到 OpenRouter，并把 reseller serving limit `943718` 当成模型内禀高权威事实发布，Pi `toProviderModels` 忠实映射为 `maxTokens=943718`。
 2. Provider selection precedence 修正为：explicit provider proof > canonical-original > OpenCode > OpenRouter > unique trusted match > ambiguous。
