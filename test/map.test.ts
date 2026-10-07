@@ -112,10 +112,13 @@ describe("toProviderModels", () => {
         },
       },
     }, { contextTierCap: true, protocolOverrides: {} })
+    // Frozen precedence: OpenCode ranks before OpenRouter when the original
+    // provider record is absent, so the OpenCode serving record supplies the
+    // mapping inputs.
     const mapped = toProviderModels(discovered, ROOT)[0]!
     expect(mapped.id).toBe("hy4-preview")
-    expect(mapped.contextWindow).toBe(1024000)
-    expect(mapped.maxTokens).toBe(64000)
+    expect(mapped.contextWindow).toBe(1000000)
+    expect(mapped.maxTokens).toBe(32000)
     expect(mapped.contextWindow).toBeGreaterThan(0)
     expect(mapped.maxTokens).toBeGreaterThan(0)
     expect(mapped.cost.input).toBeCloseTo(0.834)
