@@ -3,6 +3,7 @@ import {
   createDiscoverySnapshot,
   createLastKnownGoodStore,
   endpointFingerprint,
+  PUBLICATION_SCHEMA_VERSION,
   type ModelSpec,
 } from "../src/core/index.ts"
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
@@ -90,7 +91,20 @@ const LITELLM_BODY = {
     {
       model_name: "gpt-6-sol",
       litellm_params: { model: "openai/gpt-6-sol" },
-      model_info: { mode: "responses", max_input_tokens: 100000, max_output_tokens: 10000 },
+      // Fully declared: old Core agrees with the record, new Core publishes
+      // LiteLLM-only when the provider-map catalog classifies providers-only.
+      model_info: {
+        mode: "responses",
+        max_input_tokens: 100000,
+        max_output_tokens: 10000,
+        supports_function_calling: true,
+        supports_reasoning: false,
+        supports_vision: false,
+        supports_pdf_input: false,
+        supports_audio_input: false,
+        supports_video_input: false,
+        supports_audio_output: false,
+      },
     },
   ],
 }
@@ -122,6 +136,33 @@ function fetchRouter(routes: Record<string, () => Response>): FetchLike {
 
 const silent = { warn: () => {}, error: () => {} }
 
+/** Core capability gate for version-divergent catalog expectations. */
+const CORE_V8 = (PUBLICATION_SCHEMA_VERSION as number) === 8
+
+/** LKG outage 用例的 catalog：v7 沿用 provider-map，v8 用 registry 补足的 shape。 */
+const OUTAGE_CATALOG_V8 = {
+  models: {
+    "openai/gpt-6-sol": {
+      limit: { context: 100000, output: 10000 },
+      modalities: { input: ["text"], output: ["text"] },
+      tool_call: true,
+      reasoning: false,
+    },
+  },
+  providers: {},
+}
+
+/** LKG outage 用例的 body：只声明 limits，有 catalog 可发布、无则缺口可见。 */
+const OUTAGE_BODY = {
+  data: [
+    {
+      model_name: "gpt-6-sol",
+      litellm_params: { model: "openai/gpt-6-sol" },
+      model_info: { mode: "responses", max_input_tokens: 100000, max_output_tokens: 10000 },
+    },
+  ],
+}
+
 function fakeContext(overrides: Record<string, unknown> = {}) {
   const published: unknown[] = []
   return {
@@ -146,7 +187,7 @@ describe("discoverModels", () => {
     const outcome = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -160,11 +201,22 @@ describe("discoverModels", () => {
   })
 
   test("models.dev 失败时不伪装完整配置（空目录、模型保持 withheld）", async () => {
+    // 该用例刻意只声明 limits：有 catalog 时记录补足（旧 Core）/ registry 补足
+    // （新 Core）可发布；无 catalog 时缺口必须可见，不得注册。
+    const limitsOnly = {
+      data: [
+        {
+          model_name: "gpt-6-sol",
+          litellm_params: { model: "openai/gpt-6-sol" },
+          model_info: { mode: "responses", max_input_tokens: 100000, max_output_tokens: 10000 },
+        },
+      ],
+    }
     const outcome = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
-        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, limitsOnly),
         // getModelsDevCatalog degrades a 500 to an empty catalog with a warning.
-        "https://models.dev/api.json": () => jsonResponse(500, {}),
+        "https://models.dev/catalog.json": () => jsonResponse(500, {}),
       }),
       logger: silent,
     })
@@ -179,18 +231,29 @@ describe("discoverModels", () => {
 
   test("元数据加载抛错时分类失败并可用有效 LKG 继续提供", async () => {
     const store = createLastKnownGoodStore()
+    const catalog = CORE_V8 ? OUTAGE_CATALOG_V8 : MODELS_DEV
+    const body = CORE_V8 ? OUTAGE_BODY : LITELLM_BODY
     const first = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
-        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, body),
+        "https://models.dev/catalog.json": () => jsonResponse(200, catalog),
       }),
       logger: silent,
       publication: { store },
     })
     expect(first.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
+    // v7 outage 保留旧用例（仅能力 flag，无 limits）；v8 outage 用与 capture
+    // 相同的 limits-only 声明（modalities 缺口触发 LKG，declarations 不变）。
+    const outageBody = CORE_V8 ? body : {
+      data: [{
+        model_name: "gpt-6-sol",
+        litellm_params: { model: "openai/gpt-6-sol" },
+        model_info: { mode: "responses", supports_function_calling: true, supports_reasoning: false },
+      }],
+    }
     const second = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
-        [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
+        [`${BASE}/v1/model/info`]: () => jsonResponse(200, outageBody),
       }),
       loadModelsDevCatalog: async () => {
         throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" })
@@ -270,7 +333,7 @@ describe("refreshProviderModels 两阶段", () => {
     const models = await refreshProviderModels(config(), context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -283,7 +346,7 @@ describe("refreshProviderModels 两阶段", () => {
     const first = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -314,7 +377,7 @@ describe("refreshProviderModels 两阶段", () => {
     const firstRound = await refreshProviderModels(config(), context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -335,7 +398,7 @@ describe("refreshProviderModels 两阶段", () => {
     } as typeof context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -421,7 +484,7 @@ describe("publication memory persistence across restarts", () => {
       {
         fetchImpl: fetchRouter({
           [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-          "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+          "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
         }),
         logger: silent,
       },
@@ -449,7 +512,7 @@ describe("publication memory persistence across restarts", () => {
     const models = await refreshProviderModels(config(), corrupted, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     }, undefined, state)
@@ -659,7 +722,7 @@ describe("refreshProviderModels 失败分类", () => {
     const models = await refreshProviderModels(config(), context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, { data: [] }),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -686,7 +749,7 @@ describe("refreshProviderModels 失败分类", () => {
     const models = await refreshProviderModels(config(), context, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: silent,
     })
@@ -706,7 +769,7 @@ describe("refreshProviderModels 失败分类", () => {
       await refreshProviderModels(config(), context, {
         fetchImpl: fetchRouter({
           [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-          "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+          "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
         }),
         logger: silent,
       })
@@ -764,7 +827,7 @@ describe("refreshProviderModels 失败分类", () => {
     const models = await refreshProviderModels(config(), racingContext, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, LITELLM_BODY),
-        "https://models.dev/api.json": () => jsonResponse(200, MODELS_DEV),
+        "https://models.dev/catalog.json": () => jsonResponse(200, MODELS_DEV),
       }),
       logger: { warn: (message: string) => warns.push(message), error: () => {} },
     })

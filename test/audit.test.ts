@@ -35,6 +35,13 @@ const body = {
       supported_endpoints: ["/v1/responses"],
       max_input_tokens: 100000,
       max_output_tokens: 10000,
+      supports_function_calling: false,
+      supports_reasoning: false,
+      supports_vision: false,
+      supports_pdf_input: false,
+      supports_audio_input: false,
+      supports_video_input: false,
+      supports_audio_output: false,
     },
   }],
 }

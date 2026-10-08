@@ -445,7 +445,7 @@ const isModelsDev = (input) => {
   if (typeof input === "string") url = input
   else if (input instanceof URL) url = input.href
   else if (input && typeof input.url === "string") url = input.url
-  return url === "https://models.dev/api.json"
+  return url === "https://models.dev/api.json" || url === "https://models.dev/catalog.json"
 }
 const hookedFetch = (input, init) => {
   if (isModelsDev(input)) {

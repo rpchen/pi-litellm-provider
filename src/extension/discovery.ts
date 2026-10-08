@@ -35,6 +35,7 @@ import {
   parsePublicationMemory,
   serializePublicationMemory,
   PUBLICATION_MEMORY_SCHEMA_VERSION,
+  type BuildOptions,
   type CatalogPublication,
   type DiscoveryCoordinator,
   type DiscoveryDiagnostics,
@@ -162,7 +163,7 @@ export async function discoverModels(
     now,
   })
   if (deps.publication?.store) {
-    seedPublicationLKG(deps.publication.store, litellmResponse, publication, now)
+    seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now)
   }
   const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions)
   const specs = publication.publishable.map((entry) => entry.spec)
@@ -210,6 +211,8 @@ function restorePublicationMemory(
 function seedPublicationLKG(
   store: LastKnownGoodStore,
   litellmResponse: unknown,
+  catalog: unknown,
+  buildOptions: BuildOptions,
   publication: { publishable: readonly PublishableEntry[] },
   now: number,
 ): void {
@@ -226,7 +229,9 @@ function seedPublicationLKG(
           entry.assessment.identity.selected,
           entry.spec,
           now,
-          capturedPublicationVerdict(entry.assessment),
+          capturedPublicationVerdict(entry.assessment, entry.spec),
+          catalog,
+          buildOptions,
         ),
       )
     } catch {

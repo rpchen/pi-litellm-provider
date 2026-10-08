@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import litellmFixture from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDevFixture from "./fixtures/models-dev.json" with { type: "json" }
+import catalogShapeFixture from "./fixtures/models-dev-catalog-shape.json" with { type: "json" }
 
 const FORBIDDEN_KEYS = new Set([
   "api_base",
@@ -64,6 +65,16 @@ describe("fixtures", () => {
     expect(data.some((item) => item.model_name === undefined)).toBeTrue()
     // mode-less image model excluded by name
     expect(data.some((item) => item.model_name === "dall-e-3")).toBeTrue()
+  })
+
+  test("catalog 形状样本含 registry 与 serving 四态且无敏感信息", () => {
+    const text = JSON.stringify(catalogShapeFixture)
+    expect(text).not.toMatch(/sk-[A-Za-z0-9_-]{8,}/)
+    const doc = catalogShapeFixture as { models: Record<string, unknown>; providers: Record<string, { models: Record<string, any> }> }
+    // canonical + declared-serving + relation-only + LiteLLM-only 覆盖
+    expect(Object.keys(doc.models)).toEqual(["labA/alpha", "labB/beta"])
+    expect(doc.providers.labA!.models.alpha.reasoning_options[0]?.type).toBe("effort")
+    expect(doc.providers.gatewayX!.models["beta-free"].canonical_model_id).toBe("labB/beta")
   })
 
   test("models.dev 样本可加载且覆盖记录选择与档位来源", () => {

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import { PUBLICATION_SCHEMA_VERSION } from "../src/core/index.ts"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
 import {
   createProviderDiagnosticsState,
   formatHostDateTime,
+  formatModelDetails,
   formatProviderDiagnostics,
 } from "../src/extension/diagnostics.ts"
 import piLitellmProvider, { buildProviderConfig } from "../src/extension/index.ts"
@@ -29,20 +31,38 @@ const body = {
       supported_endpoints: ["/v1/responses"],
       max_input_tokens: 100000,
       max_output_tokens: 10000,
+      supports_function_calling: false,
+      supports_reasoning: false,
+      supports_vision: false,
+      supports_pdf_input: false,
+      supports_audio_input: false,
+      supports_video_input: false,
+      supports_audio_output: false,
     },
   }],
 }
 
 const catalog = {
-  openai: {
-    models: {
-      "gpt-diagnostics": {
-        id: "gpt-diagnostics",
-        release_date: "2026-05-01",
-        modalities: { input: ["text"], output: ["text"] },
-        limit: { context: 100000, output: 10000 },
-        tool_call: false,
-        reasoning: false,
+  models: {
+    "labA/gpt-diagnostics": {
+      limit: { context: 100000, output: 10000 },
+      modalities: { input: ["text"], output: ["text"] },
+      tool_call: false,
+      reasoning: false,
+      release_date: "2026-05-01",
+    },
+  },
+  providers: {
+    openai: {
+      models: {
+        "gpt-diagnostics": {
+          id: "gpt-diagnostics",
+          release_date: "2026-05-01",
+          modalities: { input: ["text"], output: ["text"] },
+          limit: { context: 100000, output: 10000 },
+          tool_call: false,
+          reasoning: false,
+        },
       },
     },
   },
@@ -139,7 +159,12 @@ describe("PR7 Pi diagnostics closure", () => {
     expect(notifications[0]!.message).toContain("状态：正常")
     expect(notifications[0]!.message).toContain("已注册模型：1")
     expect(notifications[0]!.message).toContain("缓存：network")
-    expect(notifications[0]!.message).toContain("models.dev：ok · 命中 1/1")
+    // Catalog-shape fixture: new Core resolves complete with no serving
+    // record matched; old Core cannot read the shape (degraded, LiteLLM-only).
+    expect(notifications[0]!.message).toContain("命中 0/1")
+    expect(notifications[0]!.message).toContain(
+      (PUBLICATION_SCHEMA_VERSION as number) === 8 ? "models.dev：ok" : "models.dev：degraded",
+    )
     expect(notifications[0]!.message).toContain("协议 fallback：0")
     expect(notifications[0]!.message).toContain("Core：main@")
     expect(notifications[0]!.message).not.toContain("sk-diagnostics-secret")
@@ -165,7 +190,10 @@ describe("PR7 Pi diagnostics closure", () => {
     await built.refreshModels!(refreshContext())
     expect(state.current.status).toBe("ready")
     expect(state.current.cache?.source).toBe("network")
-    expect(state.current.discovery?.modelsDev.status).toBe("ok")
+    // Catalog-shape fixture：新 Core 判 complete，旧 Core 读不出 shape（degraded）。
+    expect(state.current.discovery?.modelsDev.status).toBe(
+      (PUBLICATION_SCHEMA_VERSION as number) === 8 ? "ok" : "degraded",
+    )
 
     await built.refreshModels!(refreshContext())
     expect(state.current.cache?.source).toBe("memory-cache")
@@ -213,5 +241,53 @@ describe("PR7 Pi diagnostics closure", () => {
     expect(restoredState.current.status).toBe("restored")
     expect(restoredState.current.cache?.source).toBe("snapshot")
     expect(restoredState.current.cache?.stale).toBeTrue()
+  })
+})
+
+describe("canonical catalog model details", () => {
+  function discoveryWith(models: unknown[]) {
+    return { models } as never
+  }
+
+  test("新 Core 全字段渲染 canonical/serving/档位/operator-config/候选/shape", () => {
+    const lines = formatModelDetails(discoveryWith([{
+      id: "m",
+      deploymentCount: 1,
+      quality: {
+        identity: { canonicalModelID: "labA/m", canonicalEvidence: "registry-unique", canonicalStatus: "proven" },
+        serving: { status: "serving-record-unresolved", providerID: "gatewayX" },
+        reasoningLevelsState: "unknown",
+        operatorConfigurationKeys: ["litellm_params.reasoning_effort"],
+        diagnosticCandidates: [{ providerID: "gatewayX", recordID: "m-free", why: "relation-only SKU" }],
+        catalogKind: "complete",
+      },
+      publication: { reasoningLevels: [] },
+    }]))
+    const text = lines.join("\n")
+    expect(text).toContain("canonical labA/m（registry-unique）")
+    expect(text).toContain("serving serving-record-unresolved gatewayX")
+    expect(text).toContain("档位 unknown")
+    expect(text).toContain("operator configuration")
+    expect(text).not.toContain("hard-enforced")
+    expect(text).toContain("gatewayX/m-free")
+  })
+
+  test("旧 Core 缺失字段时省略对应行", () => {
+    const lines = formatModelDetails(discoveryWith([{
+      id: "m",
+      deploymentCount: 1,
+      quality: {},
+      publication: {},
+    }]))
+    const text = lines.join("\n")
+    expect(text).toContain("m · 部署 1")
+    expect(text).not.toContain("canonical")
+    expect(text).not.toContain("serving")
+    expect(text).not.toContain("档位")
+  })
+
+  test("空模型列表无明细块", () => {
+    expect(formatModelDetails(undefined)).toEqual([])
+    expect(formatModelDetails(discoveryWith([]))).toEqual([])
   })
 })
