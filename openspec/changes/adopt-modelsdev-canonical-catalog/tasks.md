@@ -26,7 +26,7 @@
 - [x] 4.1 README：catalog URL、`models_dev_provider` + 精确 SKU（恢复 serving 值）、operator configuration 与晋升门槛、行为变化清单（DeepSeek/档位/kimi-k3/无收窄/LiteLLM-only/serving 缺字段/LKG v8）、迁移说明
 - [x] 4.2 OpenSpec：本 change proposal/design/tasks + specs deltas（`model-discovery`、`provider-diagnostics`、`publication`）；`openspec validate --all --strict` 通过
 - [x] 4.3 提交前门禁：`bun run typecheck`、`bun test`（旧 Core 388 pass / 新 Core 9328706 329 pass，双轨全绿）、`bun run test:package`、`npm run validate:spec`、`test:openspec-closure`、`test:release-metadata`、`test:scenario-coverage` 通过；`bun run verify:dist` 在本 PR 为预期红（src 已按新设计修改，`dist/` 保持旧 Core，差异即本次 src 变更；§5 重建后恢复零差异）；删除 `test/core-*.test.ts` 副本与快照（Core 算法只在 Core 仓测试，adapter 不重复覆盖）
-- [ ] 4.4 Real Pi 0.87.1 E2E（旧 dist，宿主契约回归）：通过则记证据；环境阻断则明确记录未运行项，交 CI 验证
+- [x] 4.4 Real Pi 0.87.1 E2E（旧 dist，宿主契约回归）：通过（2026-10-08，隔离安装 `@earendil-works/pi-coding-agent@0.87.1` 于 `%TEMP%\litellm-e2e-fixed\pi`，`PI_BIN` 注入，不改全局 Pi 1.0.4；`E2E_PACKAGE_SPEC=git:github.com/rpchen/pi-litellm-provider@ba4fe3dbac363b409e0488b9e0699d65e189bfb7`）：安装/凭据/模型注册与 limits/diagnostics/LKG/route-change regression+unusable 提醒/自动恢复/endpoint 管理全套（add/edit/connect/activate/replace/disconnect/deactivate/delete/重启）/ack 重启持久化全绿；E2E catalog stub 已做 era 感知（v7 dist → provider map；v8 dist 重建后 → catalog registry，G30 下 e2e wire id 需要 registry 条目才能发布）
 
 ## 5. Core 稳定 SHA 后（BLOCKED：等 Core PR 合入 main）
 
