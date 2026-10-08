@@ -1,8 +1,8 @@
 import { createServer } from "node:http"
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { pathToFileURL } from "node:url"
+import { join, dirname } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
 import { strict as nodeAssert } from "node:assert"
 
@@ -10,6 +10,8 @@ const EXPECTED_PI_VERSION = process.env.E2E_PI_VERSION ?? "0.87.1"
 const PACKAGE_SPEC = process.env.E2E_PACKAGE_SPEC?.trim()
 const PI_BIN = process.env.PI_BIN?.trim() || (process.platform === "win32" ? "pi.cmd" : "pi")
 const TIMEOUT_MS = Number(process.env.E2E_TIMEOUT_MS ?? 30_000)
+/** The candidate checkout (repository root of this script). */
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
 if (!PACKAGE_SPEC) {
   throw new Error("E2E_PACKAGE_SPEC is required and must point at an immutable Git commit or tag")
@@ -407,27 +409,58 @@ try {
 
   // A deterministic models.dev catalog so evidence source authority is exercised
   // against a real enrichment source (identity-resolved intrinsic metadata).
+  // Era-aware: the committed dist pins one discovery-core era. A Core v8 dist
+  // consumes the catalog shape ({ models, providers }) and — under the frozen
+  // dimension-isolation rule (G30) — cannot publish LiteLLM-only groups, so
+  // the registry must carry entries for the e2e wire ids. A v7-era dist
+  // consumes the legacy provider map and published from declarations alone,
+  // so it keeps the historical (small) provider-map fixture.
+  const distCoreEra = (() => {
+    // Pi dist layout: dist/core/publication.js (compiled core modules at the
+    // dist root). Fall back to 7 when the file is missing.
+    for (const relative of ["dist/core/publication.js", "dist/generated/discovery-core/core/publication.js"]) {
+      try {
+        const publication = readFileSync(join(repoRoot, relative), "utf8")
+        const match = /PUBLICATION_SCHEMA_VERSION\s*=\s*(\d+)/u.exec(publication)
+        if (match) return Number(match[1])
+      } catch {}
+    }
+    return 7
+  })()
+  const e2eRegistryEntries = () => Object.fromEntries(
+    ["e2e-default-responses", "e2e-company-chat", "e2e-company-reasoning", "e2e-catalog-model"].map((name) => [
+      `vendora/${name}`,
+      {
+        limit: { context: 128_000, output: 32_000 },
+        tool_call: true,
+        reasoning: name === "e2e-company-reasoning",
+        modalities: { input: ["text"], output: ["text"] },
+      },
+    ]),
+  )
   const catalogFile = join(root, "models-dev-catalog.json")
-  writeFileSync(catalogFile, JSON.stringify({
-    vendor: {
-      models: {
-        "e2e-catalog-model": {
-          id: "e2e-catalog-model",
-          tool_call: true,
-          reasoning: false,
-          modalities: { input: ["text"], output: ["text"] },
-          limit: { context: 128_000, output: 4_096 },
-        },
-        "e2e-conflict-model": {
-          id: "e2e-conflict-model",
-          tool_call: true,
-          reasoning: false,
-          modalities: { input: ["text"], output: ["text"] },
-          limit: { context: 128_000, output: 4_096 },
+  writeFileSync(catalogFile, JSON.stringify(distCoreEra >= 8
+    ? { models: e2eRegistryEntries(), providers: {} }
+    : {
+      vendor: {
+        models: {
+          "e2e-catalog-model": {
+            id: "e2e-catalog-model",
+            tool_call: true,
+            reasoning: false,
+            modalities: { input: ["text"], output: ["text"] },
+            limit: { context: 128_000, output: 4_096 },
+          },
+          "e2e-conflict-model": {
+            id: "e2e-conflict-model",
+            tool_call: true,
+            reasoning: false,
+            modalities: { input: ["text"], output: ["text"] },
+            limit: { context: 128_000, output: 4_096 },
+          },
         },
       },
-    },
-  }, null, 2) + "\n")
+    }, null, 2) + "\n")
 
   const fetchHook = join(root, "fetch-hook.mjs")
   // The stub must survive Pi's own startup: `http-dispatcher` installs undici
