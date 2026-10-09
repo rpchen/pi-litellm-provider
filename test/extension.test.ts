@@ -197,9 +197,10 @@ describe("Core refresh coordinator 接入", () => {
       {
         model_name: "coordinated-model",
         litellm_params: { model: "openai/coordinated-model" },
-        // Fully declared LiteLLM-only model: complete without models.dev.
-        // Every input modality flag is declared so the sparse-flag rule is
-        // satisfied by endpoint declarations alone.
+        // Fully declared endpoint metadata; identity resolves through the
+        // canonical registry (catalog below). Under the frozen Core v8 the
+        // LiteLLM-only branch can no longer publish (G30 dimension isolation),
+        // so every coordinator test injects the catalog.
         model_info: {
           mode: "chat",
           max_input_tokens: 1000,
@@ -214,6 +215,19 @@ describe("Core refresh coordinator 接入", () => {
         },
       },
     ],
+  }
+
+  /** Catalog shape ({ models, providers }): frozen Core v8 era. */
+  const catalog = {
+    models: {
+      "openai/coordinated-model": {
+        limit: { context: 1000, output: 100 },
+        tool_call: true,
+        reasoning: false,
+        modalities: { input: ["text"], output: ["text"] },
+      },
+    },
+    providers: {},
   }
 
   function context(force = false): RefreshModelsContextLike {
@@ -233,7 +247,7 @@ describe("Core refresh coordinator 接入", () => {
         calls += 1
         return new Response(JSON.stringify(body), { status: 200 })
       },
-      loadModelsDevCatalog: async () => ({}),
+      loadModelsDevCatalog: async () => catalog,
       logger: { warn: () => {}, error: () => {} },
     })
 
@@ -253,7 +267,7 @@ describe("Core refresh coordinator 接入", () => {
         if (fail) throw new Error("temporary outage")
         return new Response(JSON.stringify(body), { status: 200 })
       },
-      loadModelsDevCatalog: async () => ({}),
+      loadModelsDevCatalog: async () => catalog,
       logger: { warn: (message) => warnings.push(message), error: () => {} },
     })
 
@@ -267,7 +281,7 @@ describe("Core refresh coordinator 接入", () => {
     let persisted: unknown
     const built = buildProviderConfig(() => config(), {
       fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
-      loadModelsDevCatalog: async () => ({}),
+      loadModelsDevCatalog: async () => catalog,
       logger: { warn: () => {}, error: () => {} },
     })
     const networkContext: RefreshModelsContextLike = {
@@ -298,7 +312,7 @@ describe("Core refresh coordinator 接入", () => {
     let persisted: unknown
     const first = buildProviderConfig(() => config(), {
       fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
-      loadModelsDevCatalog: async () => ({}),
+      loadModelsDevCatalog: async () => catalog,
       logger: { warn: () => {}, error: () => {} },
     })
     await first.refreshModels!({
@@ -312,7 +326,7 @@ describe("Core refresh coordinator 接入", () => {
     let publishes = 0
     const second = buildProviderConfig(() => config({ baseUrl: "http://other.example:4000" }), {
       fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
-      loadModelsDevCatalog: async () => ({}),
+      loadModelsDevCatalog: async () => catalog,
       logger: { warn: () => {}, error: () => {} },
     })
     await second.refreshModels!({

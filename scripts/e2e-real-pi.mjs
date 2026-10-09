@@ -427,20 +427,60 @@ try {
     }
     return 7
   })()
+  // v8 registry entries keyed by the exact wire ids served by the fake
+  // endpoints (`openai/<name>`; there is no base_model and no
+  // models_dev_provider). They are intentionally tool/reasoning-free: the
+  // gated capability dimensions are declared by LiteLLM itself, which is what
+  // makes the round-2 outage restore exercise the LiteLLM fingerprint. The
+  // phase 2/3 endpoints mirror the declarations' limits so their mapped
+  // context/output stay exactly as asserted.
   const e2eRegistryEntries = () => Object.fromEntries(
-    ["e2e-default-responses", "e2e-company-chat", "e2e-company-reasoning", "e2e-catalog-model"].map((name) => [
-      `vendora/${name}`,
+    [
+      ["e2e-default-responses", 128_000, 32_000],
+      ["e2e-company-chat", 128_000, 32_000],
+      ["e2e-company-reasoning", 128_000, 32_000],
+      ["e2e-mgmt-alpha", 48_000, 6_000],
+      ["e2e-mgmt-beta", 96_000, 8_000],
+      ["e2e-untouched", 32_000, 4_096],
+      ["e2e-legacy-alpha", 48_000, 6_000],
+      ["e2e-legacy-beta", 48_000, 6_000],
+    ].map(([name, context, output]) => [
+      `openai/${name}`,
       {
-        limit: { context: 128_000, output: 32_000 },
-        tool_call: true,
-        reasoning: name === "e2e-company-reasoning",
+        limit: { context, output },
         modalities: { input: ["text"], output: ["text"] },
       },
     ]),
   )
   const catalogFile = join(root, "models-dev-catalog.json")
-  writeFileSync(catalogFile, JSON.stringify(distCoreEra >= 8
-    ? { models: e2eRegistryEntries(), providers: {} }
+  const catalogPayload = distCoreEra >= 8
+    ? {
+      models: {
+        ...e2eRegistryEntries(),
+        // Scenario 7/8 identities: the registry decides the authoritative
+        // output value 4096, differing from the endpoint's 2048 declaration.
+        "vendor/e2e-catalog-model": {
+          limit: { context: 128_000, output: 4_096 },
+          modalities: { input: ["text"], output: ["text"] },
+        },
+        "vendor/e2e-conflict-model": {
+          limit: { context: 128_000, output: 4_096 },
+          modalities: { input: ["text"], output: ["text"] },
+        },
+      },
+      // At least one provider record keeps diagnostics at `models.dev：ok`.
+      providers: {
+        e2e: {
+          models: {
+            "e2e-default-responses": {
+              id: "e2e-default-responses",
+              limit: { context: 128_000, output: 32_000 },
+              modalities: { input: ["text"], output: ["text"] },
+            },
+          },
+        },
+      },
+    }
     : {
       vendor: {
         models: {
@@ -460,7 +500,8 @@ try {
           },
         },
       },
-    }, null, 2) + "\n")
+    }
+  writeFileSync(catalogFile, JSON.stringify(catalogPayload, null, 2) + "\n")
 
   const fetchHook = join(root, "fetch-hook.mjs")
   // The stub must survive Pi's own startup: `http-dispatcher` installs undici
@@ -468,11 +509,21 @@ try {
   // lets that assignment land (Pi keeps its intended dispatcher wiring) while
   // the visible fetch stays ours, so the catalog source is deterministic
   // instead of depending on an external service.
+  //
+  // The hook also exposes a real metadata outage: when the control file exists
+  // it answers models.dev with a 500 and — on EVERY fetch, before the catalog
+  // step of the same refresh — calls `resetModelsDevCacheForTest` through the
+  // SAME module instance the jiti-loaded extension uses (dist/net/fetch.js), so
+  // the 6 h TTL cache is genuinely cleared and the round re-fetches. This is
+  // the only honest way to exercise the frozen v8 LKG outage path inside one
+  // host process, whose real trigger is a TTL expiry plus a models.dev outage.
   writeFileSync(fetchHook, `
 import { readFileSync } from "node:fs"
+import { pathToFileURL } from "node:url"
 const originalFetch = globalThis.fetch.bind(globalThis)
 let baseFetch = originalFetch
 let depth = 0
+let outageActive = false
 const isModelsDev = (input) => {
   let url = ""
   if (typeof input === "string") url = input
@@ -480,20 +531,49 @@ const isModelsDev = (input) => {
   else if (input && typeof input.url === "string") url = input.url
   return url === "https://models.dev/api.json" || url === "https://models.dev/catalog.json"
 }
+const outageRequested = () => {
+  try { readFileSync(process.env.E2E_MODELS_DEV_OUTAGE); return true } catch { return false }
+}
+const clearModelsDevCache = async () => {
+  try {
+    const fetchModule = await import(pathToFileURL(process.env.E2E_FETCH_MODULE).href)
+    fetchModule.resetModelsDevCacheForTest()
+  } catch {}
+}
+// Edge-triggered: clear the 6 h catalog cache when the injected outage starts
+// (the next catalog step must genuinely hit the network) and again when it
+// ends (the failed-fetch retry backoff must not keep the catalog unavailable).
+const syncOutageEdge = () => {
+  const requested = outageRequested()
+  if (requested === outageActive) return Promise.resolve()
+  outageActive = requested
+  return clearModelsDevCache()
+}
 const hookedFetch = (input, init) => {
+  const edge = syncOutageEdge()
   if (isModelsDev(input)) {
-    let body = "{}"
-    try { body = readFileSync(process.env.E2E_MODELS_DEV_CATALOG, "utf8") } catch {}
-    return new Response(body, {
-      status: 200,
-      headers: { "content-type": "application/json" },
+    return edge.then(() => {
+      if (outageActive) {
+        return new Response(JSON.stringify({ detail: "injected models.dev outage" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      let body = "{}"
+      try { body = readFileSync(process.env.E2E_MODELS_DEV_CATALOG, "utf8") } catch {}
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
     })
   }
-  // A wrapper installed on top of this hook may call back into it; fall back to
-  // the underlying implementation instead of recursing.
-  if (depth > 0) return originalFetch(input, init)
-  depth += 1
-  try { return baseFetch(input, init) } finally { depth -= 1 }
+  return edge.then(() => {
+    // A wrapper installed on top of this hook may call back into it; fall back
+    // to the underlying implementation instead of recursing.
+    if (depth > 0) return originalFetch(input, init)
+    depth += 1
+    return Promise.resolve(baseFetch(input, init)).finally(() => { depth -= 1 })
+  })
 }
 Object.defineProperty(globalThis, "fetch", {
   configurable: true,
@@ -530,6 +610,43 @@ export default function bootstrapProbe(pi) {
     .join(" ")
   const nodeOptionsValue = nodeOptions
   const probeExtensionPath = probeExtension
+  const outageFile = join(root, "models-dev-outage.flag")
+  // The hook imports this exact module URL lazily to clear the 6 h models.dev
+  // catalog cache during an injected outage. It is resolved from the installed
+  // package (found under the isolated agent dir), NOT from the candidate
+  // checkout, so the E2E exercises exactly the artifact under review.
+  const installedPackage = (() => {
+    const candidates = []
+    const visit = (dir, depth = 0) => {
+      if (depth > 6 || candidates.length > 0) return
+      let names = []
+      try {
+        names = readdirSync(dir)
+      } catch {
+        return
+      }
+      if (names.includes("runtime-identity.json") && names.includes("core-provenance.json")) {
+        candidates.push(dir)
+        return
+      }
+      for (const name of names) {
+        if (name === "node_modules" || name.startsWith(".")) continue
+        let entry = null
+        try {
+          entry = statSync(join(dir, name))
+        } catch {
+          continue
+        }
+        if (entry.isDirectory()) visit(join(dir, name), depth + 1)
+      }
+    }
+    for (const dir of [agentDir, home, xdgState, xdgConfig]) visit(dir)
+    assert(candidates.length > 0, "Installed package was not found under the isolated Pi dirs")
+    // candidates[0] is the directory holding runtime-identity.json and
+    // core-provenance.json — the package's dist/ dir. net/fetch.js sits beside
+    // them, and it is the exact module the jiti-loaded extension imports.
+    return join(candidates[0], "net", "fetch.js")
+  })()
   const startPhase1Pi = () => {
     const process_ = spawn(
       PI_BIN,
@@ -541,7 +658,13 @@ export default function bootstrapProbe(pi) {
       ],
       {
         cwd: workDir,
-        env: { ...isolatedEnv, NODE_OPTIONS: nodeOptions, E2E_MODELS_DEV_CATALOG: catalogFile },
+        env: {
+          ...isolatedEnv,
+          NODE_OPTIONS: nodeOptions,
+          E2E_MODELS_DEV_CATALOG: catalogFile,
+          E2E_MODELS_DEV_OUTAGE: outageFile,
+          E2E_FETCH_MODULE: installedPackage,
+        },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       },
@@ -863,17 +986,13 @@ export default function bootstrapProbe(pi) {
   )
 
   // [REAL-HOST-E2E] Scenario 2: metadata source unavailable + trusted LKG. The
-  // capability declarations disappear, so live completeness fails; the
-  // previously verified configuration keeps the model available and is labelled
-  // as previously verified, not as a guess or a degraded model.
-  defaultServer.state.models = [
-    reducedModelInfo("e2e-default-responses", "responses"),
-    modelInfo("e2e-zero-limit", "chat", 0, 0),
-    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
-      supports_function_calling: undefined,
-      supports_reasoning: undefined,
-    }),
-  ]
+  // capability declarations stay EXACTLY the same, but the models.dev source
+  // goes down (the hook fails the fetch and clears the warm catalog cache, the
+  // in-process equivalent of the 6 h TTL expiry). Live completeness cannot be
+  // re-proved against a source that is down, so the previously verified
+  // configuration keeps the model available and is labelled as previously
+  // verified, not as a guess or a degraded model.
+  writeFileSync(outageFile, "injected\n")
   await forceRefresh()
   const lkgNotice = await diagnosticsNotice(
     "使用已信任的前次完整配置（LKG）：e2e-default-responses",
@@ -885,8 +1004,24 @@ export default function bootstrapProbe(pi) {
   )
   assert(lkgNotice.message.includes("LKG 说明："), "LKG provenance must be explained in diagnostics")
   assert(
+    lkgNotice.message.includes("live unavailable"),
+    `the LKG detail must name the live unavailability: ${lkgNotice.message}`,
+  )
+  assert(
     (await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
     "the LKG-backed model disappeared from real Pi",
+  )
+  // End the outage: the source returns, so the next live round re-proves the
+  // same configuration freshly (no LKG label, no stale substitution).
+  rmSync(outageFile, { force: true })
+  await forceRefresh()
+  const recoveredAfterOutage = await diagnosticsNotice(
+    "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
+    "the post-outage recovery",
+  )
+  assert(
+    !recoveredAfterOutage.message.includes("使用已信任的前次完整配置（LKG）：e2e-default-responses"),
+    "the recovered model must be freshly configured, not served from LKG",
   )
 
   // [REAL-HOST-E2E] Scenarios 6, 9 and 10: the canonical route changes while the
@@ -1246,7 +1381,7 @@ export default function bootstrapProbe(pi) {
       const began = Date.now()
       const child = spawn(PI_BIN, ["--mode", "rpc", "--no-session", "--extension", probeExtensionPath, "--model", "e2e-bootstrap/bootstrap"], {
         cwd: workDir,
-        env: { ...isolatedEnv, NODE_OPTIONS: nodeOptionsValue, E2E_MODELS_DEV_CATALOG: catalogFile },
+        env: { ...isolatedEnv, NODE_OPTIONS: nodeOptionsValue, E2E_MODELS_DEV_CATALOG: catalogFile, E2E_MODELS_DEV_OUTAGE: outageFile, E2E_FETCH_MODULE: installedPackage },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       })
@@ -1507,7 +1642,7 @@ export default function bootstrapProbe(pi) {
     const startLegacyPi = (extraEnv = {}) => {
       const child = spawn(PI_BIN, ["--mode", "rpc", "--no-session", "--extension", probeExtensionPath, "--model", "e2e-bootstrap/bootstrap"], {
         cwd: workDir,
-        env: { ...isolatedEnv, ...extraEnv, NODE_OPTIONS: nodeOptionsValue, E2E_MODELS_DEV_CATALOG: catalogFile },
+        env: { ...isolatedEnv, ...extraEnv, NODE_OPTIONS: nodeOptionsValue, E2E_MODELS_DEV_CATALOG: catalogFile, E2E_MODELS_DEV_OUTAGE: outageFile, E2E_FETCH_MODULE: installedPackage },
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       })

@@ -47,18 +47,16 @@ const body = {
 }
 
 const catalog = {
-  openai: {
-    models: {
-      "gpt-audit": {
-        id: "gpt-audit",
-        release_date: "2026-05-01",
-        modalities: { input: ["text"], output: ["text"] },
-        limit: { context: 100000, output: 10000 },
-        tool_call: false,
-        reasoning: false,
-      },
+  models: {
+    "openai/gpt-audit": {
+      limit: { context: 100000, output: 10000 },
+      modalities: { input: ["text"], output: ["text"] },
+      tool_call: false,
+      reasoning: false,
+      release_date: "2026-05-01",
     },
   },
+  providers: {},
 }
 
 function fakePi() {

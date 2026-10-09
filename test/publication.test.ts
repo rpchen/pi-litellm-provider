@@ -416,9 +416,33 @@ describe("publication discovery: partial catalog", () => {
     return { data }
   }
 
-  const ambiguousCatalog = {
-    a: { models: { shared: { id: "shared", limit: { context: 1000, output: 10 }, tool_call: true, modalities: { input: ["text"], output: ["text"] } } } },
-    b: { models: { shared: { id: "shared", limit: { context: 1000, output: 10 }, tool_call: true, modalities: { input: ["text"], output: ["text"] } } } },
+  const registryEntry = (context = 1000, output = 10) => ({
+    limit: { context, output },
+    tool_call: true,
+    reasoning: false,
+    modalities: { input: ["text"], output: ["text"] },
+  })
+
+  /**
+   * Era-aware blocking catalog. The frozen Core v8 needs canonical registry
+   * entries for the private `custom/*` wire ids (G30: a LiteLLM-only group can
+   * no longer publish); the bare `shared` id additionally matches two registry
+   * entries, keeping it blocked. The legacy provider map keeps the same three
+   * blockers through its own selection rules.
+   */
+  function ambiguousCatalog(withheldRecovered = false): unknown {
+    if (!CORE_V8) {
+      return {
+        a: { models: { shared: { id: "shared", limit: { context: 1000, output: 10 }, tool_call: true, modalities: { input: ["text"], output: ["text"] } } } },
+        b: { models: { shared: { id: "shared", limit: { context: 1000, output: 10 }, tool_call: true, modalities: { input: ["text"], output: ["text"] } } } },
+      }
+    }
+    const models: Record<string, unknown> = {}
+    for (let index = 0; index < 17; index += 1) models[`custom/ok-${index}`] = registryEntry()
+    models["a/shared"] = registryEntry()
+    models["b/shared"] = registryEntry()
+    if (withheldRecovered) models["custom/withheld-incomplete"] = registryEntry(100_000, 10_000)
+    return { models, providers: {} }
   }
 
   test("17 of 20 models register immediately; 3 stay withheld and blocking is per model", async () => {
@@ -426,23 +450,23 @@ describe("publication discovery: partial catalog", () => {
       fetchImpl: async (input) =>
         String(input).includes("/v1/model/info")
           ? jsonResponse(200, catalogBody())
-          : jsonResponse(200, ambiguousCatalog),
+          : jsonResponse(200, ambiguousCatalog()),
       logger: silent,
     })
-    // v7: provider-map catalog keeps `shared` ambiguous (withheld).
-    // v8: the same payload classifies providers-only, so LiteLLM-complete
-    // `shared` publishes and only 2 stay withheld.
-    expect(outcome.models).toHaveLength(CORE_V8 ? 18 : 17)
-    expect(outcome.publication.publishable).toHaveLength(CORE_V8 ? 18 : 17)
+    // Both eras block the same three models for their own reasons: an
+    // incomplete declaration, an illegal explicit limit, and an unresolved
+    // identity (`shared`). The per-model isolation is the point.
+    expect(outcome.models).toHaveLength(17)
+    expect(outcome.publication.publishable).toHaveLength(17)
     expect(outcome.publication.withheld.map((entry) => entry.id).sort()).toEqual(
-      CORE_V8 ? ["withheld-illegal", "withheld-incomplete"] : ["shared", "withheld-illegal", "withheld-incomplete"],
+      ["shared", "withheld-illegal", "withheld-incomplete"],
     )
     expect(outcome.publication.discovered).toBe(20)
     expect(outcome.publication.partial).toBeTrue()
     expect(outcome.publication.unusable).toBeFalse()
     expect(outcome.publication.regressions).toEqual([])
     // Withheld models never enter the persisted snapshot either.
-    expect(outcome.snapshotSpecs).toHaveLength(CORE_V8 ? 18 : 17)
+    expect(outcome.snapshotSpecs).toHaveLength(17)
     // Only the healthy subset maps to host registration.
     expect(outcome.models.some((model) => model.id === "withheld-incomplete")).toBeFalse()
   })
@@ -451,21 +475,20 @@ describe("publication discovery: partial catalog", () => {
     const state: ProviderDiagnosticsState = { current: { status: "idle", modelCount: 0 } }
     const controller = publicationControllerForState(state)
     const first = await discoverModels(config(), KEY, undefined, {
-      fetchImpl: async (input) =>
-        String(input).includes("/v1/model/info")
-          ? jsonResponse(200, catalogBody())
-          : jsonResponse(200, ambiguousCatalog),
+      fetchImpl: async () => jsonResponse(200, catalogBody()),
+      // The catalog is injected per round through the adapter's documented test
+      // seam: the production TTL cache intentionally reuses one snapshot, and the
+      // v8 recovery is precisely a NEW catalog gaining a complete registry entry.
+      loadModelsDevCatalog: async () => ambiguousCatalog(),
       logger: silent,
       publication: { store: controller.store, previouslyPublished: controller.previouslyPublished },
     })
-    expect(first.models).toHaveLength(CORE_V8 ? 18 : 17)
+    expect(first.models).toHaveLength(17)
     controller.previouslyPublished = new Set(first.models.map((model) => model.id))
 
     const second = await discoverModels(config(), KEY, undefined, {
-      fetchImpl: async (input) =>
-        String(input).includes("/v1/model/info")
-          ? jsonResponse(200, catalogBody(true))
-          : jsonResponse(200, ambiguousCatalog),
+      fetchImpl: async () => jsonResponse(200, catalogBody(true)),
+      loadModelsDevCatalog: async () => ambiguousCatalog(true),
       logger: silent,
       publication: { store: controller.store, previouslyPublished: controller.previouslyPublished },
     })
@@ -886,7 +909,15 @@ describe("LKG schema 7 round-trip (Pi transparency, legacy Core only)", () => {
       }],
     }
     const catalog = {
-      openai: { models: { "seed-complete": { id: "seed-complete", limit: { context: 100_000, output: 10_000 }, tool_call: true, reasoning: false, modalities: { input: ["text"], output: ["text"] } } } },
+      models: {
+        "openai/seed-complete": {
+          limit: { context: 100_000, output: 10_000 },
+          tool_call: true,
+          reasoning: false,
+          modalities: { input: ["text"], output: ["text"] },
+        },
+      },
+      providers: {},
     }
     const store = createLastKnownGoodStore()
     await discoverModels(config(), KEY, undefined, {

@@ -165,6 +165,10 @@ Pi 现从 `https://models.dev/catalog.json` 获取 canonical registry 与 servin
   不产生档位；价格按声明 → 已证明 serving 逐组件解析。
 - serving 缺字段（如 `base_model_omit` 删除的 `limit.input`）不再用 canonical
   回填，有同维度 LiteLLM 声明则补缺，否则 unknown。
+- **LiteLLM-only（无 canonical 身份、无 serving 证明）更严格**：`max_input_tokens`
+  只是 input 容量，绝不当作总 context。此类私有模型若没有 context 语义的声明
+  （models.dev registry 未命中）保持 missing 并被 withheld，需在 models.dev 中
+  存在对应记录或依赖有效 LKG。
 - LKG 为 schema 8（group-wide proof）：升级后首轮 outage 期间旧条目不恢复，
   下一轮 live 自动重捕获。
 

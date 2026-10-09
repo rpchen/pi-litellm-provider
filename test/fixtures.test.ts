@@ -78,13 +78,16 @@ describe("fixtures", () => {
   })
 
   test("models.dev 样本可加载且覆盖记录选择与档位来源", () => {
-    const fixture = modelsDevFixture as Record<string, { models: Record<string, any> }>
-    expect(fixture.openai!.models["gpt-5.5"]!.reasoning_options[0]?.type).toBe("effort")
-    expect(fixture.anthropic!.models["claude-sonnet-4-5"]!.reasoning_options[0]?.max).toBe(64000)
-    expect(fixture.anthropic!.models["claude-opus-4-1"]!.reasoning_options[0]).toEqual({ type: "budget_tokens" })
-    expect(fixture.zai!.models["glm-5.3"]!.reasoning_options[0]?.type).toBe("toggle")
-    expect(fixture.minimax!.models["MiniMax-M3"]!.id).toBe("MiniMax-M3")
-    expect(fixture["reseller-a"]!.models["shared-model"]).toBeDefined()
-    expect(fixture["reseller-b"]!.models["shared-model"]).toBeDefined()
+    const fixture = modelsDevFixture as {
+      models: Record<string, any>
+      providers: Record<string, { models: Record<string, any> }>
+    }
+    expect(fixture.providers.openai!.models["gpt-5.5"]!.reasoning_options[0]?.type).toBe("effort")
+    expect(fixture.providers.anthropic!.models["claude-sonnet-4-5"]!.reasoning_options[0]?.max).toBe(64000)
+    expect(fixture.providers.anthropic!.models["claude-opus-4-1"]!.reasoning_options[0]).toEqual({ type: "budget_tokens" })
+    expect(fixture.providers.zai!.models["glm-5.3"]!.reasoning_options[0]?.type).toBe("toggle")
+    expect(fixture.providers.minimax!.models["MiniMax-M3"]!.id).toBe("MiniMax-M3")
+    expect(fixture.providers["reseller-a"]!.models["shared-model"]).toBeDefined()
+    expect(fixture.providers["reseller-b"]!.models["shared-model"]).toBeDefined()
   })
 })

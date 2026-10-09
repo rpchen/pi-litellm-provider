@@ -1,5 +1,6 @@
 export * from "./build.ts";
 export * from "./catalog.ts";
+export * from "./catalog-input.ts";
 export * from "./evidence.ts";
 export * from "./capabilities.ts";
 export * from "./diagnostics.ts";
@@ -8,4 +9,6 @@ export * from "./modelsdev.ts";
 export * from "./protocol.ts";
 export * from "./publication.ts";
 export * from "./refresh.ts";
+export * from "./resolve.ts";
 export * from "./snapshot.ts";
+export * from "./wire-id.ts";

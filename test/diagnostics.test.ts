@@ -44,7 +44,7 @@ const body = {
 
 const catalog = {
   models: {
-    "labA/gpt-diagnostics": {
+    "openai/gpt-diagnostics": {
       limit: { context: 100000, output: 10000 },
       modalities: { input: ["text"], output: ["text"] },
       tool_call: false,
@@ -57,6 +57,7 @@ const catalog = {
       models: {
         "gpt-diagnostics": {
           id: "gpt-diagnostics",
+          canonical_model_id: "openai/gpt-diagnostics",
           release_date: "2026-05-01",
           modalities: { input: ["text"], output: ["text"] },
           limit: { context: 100000, output: 10000 },

@@ -25,8 +25,9 @@ function deployment(name: string) {
   return {
     model_name: name,
     litellm_params: { model: `openai/${name}` },
-    // Fully declared LiteLLM-only model so the poll-follow path exercises
-    // registration churn rather than publication blocking.
+    // Fully declared metadata; identity resolves through the canonical
+    // registry (below). The frozen Core v8 cannot publish a LiteLLM-only
+    // group (G30), so the registry entry is required for registration.
     model_info: {
       mode: "chat",
       max_input_tokens: 10000,
@@ -40,6 +41,31 @@ function deployment(name: string) {
       supports_audio_output: false,
     },
   }
+}
+
+/** Catalog shape ({ models, providers }): frozen Core v8 era. */
+const POLL_CATALOG = {
+  models: {
+    "openai/model-a": {
+      limit: { context: 10000, output: 1000 },
+      tool_call: false,
+      reasoning: false,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+    "openai/model-b": {
+      limit: { context: 10000, output: 1000 },
+      tool_call: false,
+      reasoning: false,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+    "openai/model-c": {
+      limit: { context: 10000, output: 1000 },
+      tool_call: false,
+      reasoning: false,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+  },
+  providers: {},
 }
 
 describe("轮询跟随 LiteLLM 端变更", () => {
@@ -68,10 +94,11 @@ describe("轮询跟随 LiteLLM 端变更", () => {
       },
     }
     // Offline: inject the models.dev catalog so the test never depends on the real
-    // 5MB api.json (which timed out CI without this).
+    // 5MB api.json (which timed out CI without this). Catalog shape for the frozen
+    // Core v8 era.
     const deps = {
       logger: { warn: () => {}, error: () => {} },
-      loadModelsDevCatalog: async () => ({}),
+      loadModelsDevCatalog: async () => POLL_CATALOG,
     }
 
     try {

@@ -91,8 +91,8 @@ const LITELLM_BODY = {
     {
       model_name: "gpt-6-sol",
       litellm_params: { model: "openai/gpt-6-sol" },
-      // Fully declared: old Core agrees with the record, new Core publishes
-      // LiteLLM-only when the provider-map catalog classifies providers-only.
+      // Fully declared: the frozen Core v8 resolves identity against the
+      // canonical registry (below) and publishes from registry facts.
       model_info: {
         mode: "responses",
         max_input_tokens: 100000,
@@ -109,19 +109,18 @@ const LITELLM_BODY = {
   ],
 }
 
+/** Catalog shape ({ models, providers }): the frozen Core v8 era. */
 const MODELS_DEV = {
-  openai: {
-    models: {
-      "gpt-6-sol": {
-        id: "gpt-6-sol",
-        release_date: "2026-05-01",
-        limit: { context: 100000, output: 10000 },
-        tool_call: true,
-        reasoning: false,
-        modalities: { input: ["text"], output: ["text"] },
-      },
+  models: {
+    "openai/gpt-6-sol": {
+      limit: { context: 100000, output: 10000 },
+      tool_call: true,
+      reasoning: false,
+      modalities: { input: ["text"], output: ["text"] },
+      release_date: "2026-05-01",
     },
   },
+  providers: {},
 }
 
 function fetchRouter(routes: Record<string, () => Response>): FetchLike {
