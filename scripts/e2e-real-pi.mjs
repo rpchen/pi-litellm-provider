@@ -45,10 +45,12 @@ function runChecked(command, args, options = {}) {
 async function startFakeLiteLLM(name, initialKey, models) {
   const requests = []
   const state = { apiKey: initialKey, models, failStatus: 0 }
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const apiKey = state.apiKey
     const authorization = req.headers.authorization ?? ""
-    requests.push({ method: req.method, url: req.url, authorization })
+    const requestPath = new URL(req.url, "http://127.0.0.1").pathname
+    const captured = { method: req.method, url: requestPath, authorization }
+    requests.push(captured)
 
     // [REAL-HOST-E2E] An injected outage must surface as a metadata failure
     // in diagnostics instead of silently republishing pseudo-complete models.
@@ -58,6 +60,31 @@ async function startFakeLiteLLM(name, initialKey, models) {
       return
     }
 
+    if (req.method === "POST" && ["/v1/chat/completions", "/v1/responses", "/v1/messages"].includes(requestPath)) {
+      assert(authorization === `Bearer ${apiKey}` || req.headers["x-api-key"] === apiKey, "request credential mismatch")
+      let raw = ""
+      for await (const chunk of req) raw += chunk
+      captured.body = JSON.parse(raw)
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      const event = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
+      if (requestPath === "/v1/responses") {
+        const response = { id: "resp_e2e", object: "response", status: "completed", model: captured.body.model, output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }
+        event({ type: "response.created", response: { ...response, status: "in_progress" } })
+        event({ type: "response.completed", response })
+      } else if (requestPath === "/v1/messages") {
+        for (const data of [
+          { type: "message_start", message: { id: "msg_e2e", type: "message", role: "assistant", model: captured.body.model, content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
+          { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+          { type: "message_stop" },
+        ]) res.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`)
+      } else {
+        event({ id: "chat_e2e", object: "chat.completion.chunk", created: 1, model: captured.body.model, choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] })
+        event({ id: "chat_e2e", object: "chat.completion.chunk", created: 1, model: captured.body.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })
+        res.write("data: [DONE]\n\n")
+      }
+      res.end()
+      return
+    }
     if (req.method !== "GET" || (req.url !== "/v1/model/info" && req.url !== "/model/info")) {
       res.writeHead(404, { "content-type": "application/json" })
       res.end(JSON.stringify({ detail: "not found" }))
@@ -407,101 +434,36 @@ try {
     { mode: 0o600 },
   )
 
-  // A deterministic models.dev catalog so evidence source authority is exercised
-  // against a real enrichment source (identity-resolved intrinsic metadata).
-  // Era-aware: the committed dist pins one discovery-core era. A Core v8 dist
-  // consumes the catalog shape ({ models, providers }) and — under the frozen
-  // dimension-isolation rule (G30) — cannot publish LiteLLM-only groups, so
-  // the registry must carry entries for the e2e wire ids. A v7-era dist
-  // consumes the legacy provider map and published from declarations alone,
-  // so it keeps the historical (small) provider-map fixture.
-  const distCoreEra = (() => {
-    // Pi dist layout: dist/core/publication.js (compiled core modules at the
-    // dist root). Fall back to 7 when the file is missing.
-    for (const relative of ["dist/core/publication.js", "dist/generated/discovery-core/core/publication.js"]) {
-      try {
-        const publication = readFileSync(join(repoRoot, relative), "utf8")
-        const match = /PUBLICATION_SCHEMA_VERSION\s*=\s*(\d+)/u.exec(publication)
-        if (match) return Number(match[1])
-      } catch {}
-    }
-    return 7
-  })()
-  // v8 registry entries keyed by the exact wire ids served by the fake
-  // endpoints (`openai/<name>`; there is no base_model and no
-  // models_dev_provider). They are intentionally tool/reasoning-free: the
-  // gated capability dimensions are declared by LiteLLM itself, which is what
-  // makes the round-2 outage restore exercise the LiteLLM fingerprint. The
-  // phase 2/3 endpoints mirror the declarations' limits so their mapped
-  // context/output stay exactly as asserted.
-  const e2eRegistryEntries = () => Object.fromEntries(
-    [
-      ["e2e-default-responses", 128_000, 32_000],
-      ["e2e-company-chat", 128_000, 32_000],
-      ["e2e-company-reasoning", 128_000, 32_000],
-      ["e2e-mgmt-alpha", 48_000, 6_000],
-      ["e2e-mgmt-beta", 96_000, 8_000],
-      ["e2e-untouched", 32_000, 4_096],
-      ["e2e-legacy-alpha", 48_000, 6_000],
-      ["e2e-legacy-beta", 48_000, 6_000],
-    ].map(([name, context, output]) => [
-      `openai/${name}`,
-      {
-        limit: { context, output },
-        modalities: { input: ["text"], output: ["text"] },
-      },
-    ]),
-  )
+  // Frozen public metadata plus complete synthetic API records for lifecycle cases.
+  const frozenDiscovery = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/metadata-priority/synthetic-discovery.json"), "utf8"))
+  const frozenCatalog = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/metadata-priority/modelsdev-subset.json"), "utf8"))
+  const oracle = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/metadata-priority/expected-16.json"), "utf8"))
+  const catalogPayload = structuredClone(frozenCatalog)
+  const addRecord = (owner, name, context, output, reasoning = false, reasoning_options = []) => {
+    const canonical = owner + "/" + name
+    const record = { id: name, canonical_model_id: canonical, tool_call: true, reasoning, reasoning_options,
+      modalities: { input: ["text"], output: ["text"] }, limit: { context, output } }
+    catalogPayload.models[canonical] = structuredClone(record)
+    catalogPayload.providers[owner] ??= { models: {} }
+    catalogPayload.providers[owner].models[name] = record
+  }
+  for (const [name, context, output] of [
+    ["e2e-default-responses",32000,4096], ["e2e-company-chat",64000,8192],
+    ["e2e-mgmt-alpha",48000,6000], ["e2e-mgmt-beta",96000,8000], ["e2e-untouched",32000,4096],
+    ["e2e-legacy-alpha",48000,6000], ["e2e-legacy-beta",48000,6000], ["e2e-zero-limit",0,0],
+  ]) addRecord("openai", name, context, output)
+  addRecord("openai", "e2e-company-reasoning",32000,4096,true)
+  addRecord("openai", "e2e-incomplete-capabilities",16000,2048)
+  delete catalogPayload.providers.openai.models["e2e-incomplete-capabilities"].tool_call
+  delete catalogPayload.providers.openai.models["e2e-incomplete-capabilities"].reasoning
+  addRecord("vendor", "e2e-catalog-model",128000,4096)
+  addRecord("vendor", "e2e-conflict-model",128000,4096)
+  addRecord("openai", "e2e-no-effort",32000,4096,true)
+  addRecord("openai", "e2e-disabled",32000,4096,false)
+  addRecord("anthropic", "e2e-messages",200000,64000,true,[{type:"budget_tokens",max:64000}])
   const catalogFile = join(root, "models-dev-catalog.json")
-  const catalogPayload = distCoreEra >= 8
-    ? {
-      models: {
-        ...e2eRegistryEntries(),
-        // Scenario 7/8 identities: the registry decides the authoritative
-        // output value 4096, differing from the endpoint's 2048 declaration.
-        "vendor/e2e-catalog-model": {
-          limit: { context: 128_000, output: 4_096 },
-          modalities: { input: ["text"], output: ["text"] },
-        },
-        "vendor/e2e-conflict-model": {
-          limit: { context: 128_000, output: 4_096 },
-          modalities: { input: ["text"], output: ["text"] },
-        },
-      },
-      // At least one provider record keeps diagnostics at `models.dev：ok`.
-      providers: {
-        e2e: {
-          models: {
-            "e2e-default-responses": {
-              id: "e2e-default-responses",
-              limit: { context: 128_000, output: 32_000 },
-              modalities: { input: ["text"], output: ["text"] },
-            },
-          },
-        },
-      },
-    }
-    : {
-      vendor: {
-        models: {
-          "e2e-catalog-model": {
-            id: "e2e-catalog-model",
-            tool_call: true,
-            reasoning: false,
-            modalities: { input: ["text"], output: ["text"] },
-            limit: { context: 128_000, output: 4_096 },
-          },
-          "e2e-conflict-model": {
-            id: "e2e-conflict-model",
-            tool_call: true,
-            reasoning: false,
-            modalities: { input: ["text"], output: ["text"] },
-            limit: { context: 128_000, output: 4_096 },
-          },
-        },
-      },
-    }
-  writeFileSync(catalogFile, JSON.stringify(catalogPayload, null, 2) + "\n")
+  const writeCatalog = () => writeFileSync(catalogFile, JSON.stringify(catalogPayload) + "\n")
+  writeCatalog()
 
   const fetchHook = join(root, "fetch-hook.mjs")
   // The stub must survive Pi's own startup: `http-dispatcher` installs undici
@@ -524,6 +486,7 @@ const originalFetch = globalThis.fetch.bind(globalThis)
 let baseFetch = originalFetch
 let depth = 0
 let outageActive = false
+let lastCatalog = ""
 const isModelsDev = (input) => {
   let url = ""
   if (typeof input === "string") url = input
@@ -545,7 +508,9 @@ const clearModelsDevCache = async () => {
 // ends (the failed-fetch retry backoff must not keep the catalog unavailable).
 const syncOutageEdge = () => {
   const requested = outageRequested()
-  if (requested === outageActive) return Promise.resolve()
+  const currentCatalog = readFileSync(process.env.E2E_MODELS_DEV_CATALOG, "utf8")
+  if (requested === outageActive && currentCatalog === lastCatalog) return Promise.resolve()
+  lastCatalog = currentCatalog
   outageActive = requested
   return clearModelsDevCache()
 }
@@ -871,6 +836,100 @@ export default function bootstrapProbe(pi) {
     `Unexpected persisted activation state: ${JSON.stringify(activation)}`,
   )
 
+  // [T01 T13 T14 T16 T17 T28 T29 T30 T31] Real loader, registry, picker and request bodies.
+  const initialModels = defaultServer.state.models
+  defaultServer.state.models = [...frozenDiscovery.data, modelInfo("e2e-no-effort", "chat"), modelInfo("e2e-disabled", "chat"),
+    { ...modelInfo("e2e-messages", "chat"), litellm_params: { model: "anthropic/e2e-messages" } }]
+  await rpc.extensionCommand("/litellm-endpoints all")
+  const registered = pluginModels((await rpc.request({ type: "get_available_models" })).response).filter(model => model.provider === "litellm")
+  assert(registered.length === 19, "16 frozen models plus 3 controls must enter the real Pi registry")
+  let requestCount = 0
+  const callModel = async (id, level, expectedEffort, protocol) => {
+    await rpc.request({ type: "set_thinking_level", level })
+    const start = defaultServer.requests.length
+    const run = await rpc.request({ type: "prompt", message: "Reply ok without tools." })
+    await rpc.waitFor(record => record.type === "agent_end", { after: run.after })
+    const requests = defaultServer.requests.slice(start).filter(request => request.method === "POST")
+    assert(requests.length === 1, id + ": real host must send exactly one request")
+    const request = requests[0]
+    assert(request.body, id + ": SDK request reached an unexpected path " + request.url)
+    assert(request.body.model === id, "request must retain original model_name")
+    const path = protocol === "responses" ? "/v1/responses" : protocol === "messages" ? "/v1/messages" : "/v1/chat/completions"
+    assert(request.url === path, id + ": wrong API path")
+    const effort = request.body.reasoning_effort ?? request.body.reasoning?.effort
+    nodeAssert.equal(effort, expectedEffort, id + ": request effort differs from selected option")
+    if (expectedEffort === undefined && protocol !== "messages") {
+      nodeAssert.equal(request.body.reasoning, undefined, id + ": undeclared reasoning parameters")
+      nodeAssert.equal(request.body.thinking, undefined, id + ": undeclared thinking parameters")
+    }
+    if (protocol === "messages") assert(request.body.thinking?.type === "enabled", "Messages budget control missing")
+    requestCount++
+  }
+  for (const expected of oracle.models) {
+    const model = registered.find(model => model.id === expected.id)
+    assert(model, expected.id + ": absent from real registry")
+    nodeAssert.equal(model.name, expected.id)
+    nodeAssert.equal(model.contextWindow, expected.limit.context)
+    nodeAssert.equal(model.maxTokens, expected.limit.output)
+    nodeAssert.equal(model.reasoning, expected.reasoningSupported === "supported")
+    nodeAssert.deepEqual(model.input, expected.input.filter(value => value === "text" || value === "image"))
+    nodeAssert.equal(model.api, expected.protocol === "responses" ? "openai-responses" : "openai-completions")
+    nodeAssert.deepEqual(model.cost, { input: expected.cost.input ?? 0, output: expected.cost.output ?? 0,
+      cacheRead: expected.cost.cache_read ?? 0, cacheWrite: expected.cost.cache_write ?? 0 })
+    await rpc.request({ type: "set_model", provider: "litellm", modelId: expected.id })
+    const picker = (await rpc.request({ type: "get_available_thinking_levels" })).response.data.levels
+    nodeAssert.deepEqual(picker, expected.piLevels, expected.id + ": extra/default picker levels")
+    if (picker.length === 0) await callModel(expected.id, "off", undefined, expected.protocol)
+    for (const level of picker) await callModel(expected.id, level, level === "off" ? "none" : level, expected.protocol)
+  }
+  for (const [id, reasoning, picker, protocol] of [
+    ["e2e-no-effort",true,[],"chat"], ["e2e-disabled",false,["off"],"chat"], ["e2e-messages",true,["off","high","max"],"messages"],
+  ]) {
+    const model = registered.find(model => model.id === id)
+    nodeAssert.equal(model.reasoning, reasoning)
+    await rpc.request({ type: "set_model", provider: "litellm", modelId: id })
+    nodeAssert.deepEqual((await rpc.request({ type: "get_available_thinking_levels" })).response.data.levels,picker)
+    for (const level of protocol === "messages" ? ["high","max"] : ["off"]) await callModel(id,level,undefined,protocol)
+  }
+  // [T31] Display the real picker names, retaining the separate wire-effort map.
+  const gptPicker = oracle.models.find(model => model.id === "gpt-5.6-luna").piLevels
+  const matrixAudit = await rpc.extensionCommand("/litellm-audit-export default")
+  const matrixAuditNotice = await rpc.waitFor(record => record?.type === "extension_ui_request" && record.method === "notify"
+    && record.message?.includes("LiteLLM 审查报告已导出"), { after: matrixAudit.after })
+  const matrixAuditPath = (matrixAuditNotice.message.match(/([A-Za-z]:[\\/][^\s"']+?litellm-audit-[^\s"']+\.json|\/[^\s"']+?litellm-audit-[^\s"']+\.json)/u) ?? [])[1]
+  assert(matrixAuditPath, "Metadata matrix audit export path missing")
+  const matrixAuditModels = JSON.parse(readFileSync(matrixAuditPath, "utf8")).endpoints[0].models
+  for (const expected of oracle.models) {
+    const actual = matrixAuditModels.find(model => model.id === expected.id)
+    nodeAssert.deepEqual(actual.metadata.reasoningLevels, expected.piLevels, expected.id + ": audit differs from picker")
+    nodeAssert.deepEqual(actual.thinkingLevelMap, registered.find(model => model.id === expected.id).thinkingLevelMap)
+  }
+  const messagesAudit = matrixAuditModels.find(model => model.id === "e2e-messages")
+  nodeAssert.deepEqual(messagesAudit.metadata.reasoningLevels, ["off", "high", "max"])
+  assert(!Object.hasOwn(messagesAudit.thinkingLevelMap, "off"), "Audit must preserve absent Messages map.off")
+  nodeAssert.equal(matrixAuditModels.find(model => model.id === "gpt-5.6-luna").thinkingLevelMap.off, "none")
+  // Only price data changes: publication, limits, picker and capability notifications stay stable.
+  for (const provider of Object.values(catalogPayload.providers)) for (const record of Object.values(provider.models)) record.cost = { input:-1,output:"bad" }
+  writeCatalog()
+  await rpc.extensionCommand("/litellm-endpoints all")
+  const zeroPrices = pluginModels((await rpc.request({ type:"get_available_models" })).response).filter(model=>model.provider==="litellm")
+  assert(zeroPrices.length===19,"price errors withdrew models")
+  for(const model of zeroPrices) assert(Object.values(model.cost).every(value=>value===0),"bad prices must become zero")
+  // Default diagnostics show five rows; isolate these two models after the full matrix.
+  defaultServer.state.models = defaultServer.state.models.filter(model => ["e2e-messages", "gpt-5.6-luna"].includes(model.model_name))
+  await rpc.extensionCommand("/litellm-endpoints all")
+  const messagesOnly = pluginModels((await rpc.request({ type: "get_available_models" })).response).filter(model => model.provider === "litellm")
+  nodeAssert.deepEqual(messagesOnly.map(model => model.id).sort(), ["e2e-messages", "gpt-5.6-luna"])
+  const messagesDiagnostics = await rpc.extensionCommand("/litellm-diagnostics default")
+  const messagesNotice = await rpc.waitFor(record => record?.type === "extension_ui_request" && record.method === "notify"
+    && record.message?.includes("Endpoint：default"), { after: messagesDiagnostics.after })
+  assert(messagesNotice.message.includes("e2e-messages · configured · 来源 anthropic · 推理 off,high,max"), "Messages diagnostics omit real picker off")
+  assert(messagesNotice.message.includes("gpt-5.6-luna · configured · 来源 openai · 推理 " + gptPicker.join(",")), "GPT diagnostics differ from real Pi picker")
+  console.log("real Pi diagnostics/audit picker parity: 16 frozen models and Messages off passed")
+  console.log("real Pi metadata priority: 16/16 final registrations and picker lists; " + requestCount + " actual Chat/Responses/Messages requests passed")
+  defaultServer.state.models = initialModels
+  await rpc.extensionCommand("/litellm-endpoints all")
+
   // ===== Phase 1b: trusted publication verdicts through the real host =====
   const diagnosticsNotice = async (needle, label) => {
     let last = "<none>"
@@ -1025,206 +1084,18 @@ export default function bootstrapProbe(pi) {
     "the recovered model must be freshly configured, not served from LKG",
   )
 
-  // [REAL-HOST-E2E] Scenarios 6, 9 and 10: the canonical route changes while the
-  // rebuilt metadata is incomplete, so the old trusted snapshot no longer
-  // describes this model. It is withdrawn, the catalog becomes unusable, and the
-  // user is told — never silently substituted, never silently continuing.
-  defaultServer.state.models = [
-    {
-      ...reducedModelInfo("e2e-default-responses", "responses"),
-      litellm_params: { model: "openai/e2e-default-responses-renamed" },
-    },
-    modelInfo("e2e-zero-limit", "chat", 0, 0),
-    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
-      supports_function_calling: undefined,
-      supports_reasoning: undefined,
-    }),
-  ]
-  // Wait until a discovery round has actually applied the change: the
-  // activation action that drives each round also surfaces the change exactly
-  // once as a host notification.
-  const regressionCursor = rpc.records.length
-  await untilPublished(
-    (models) => !models.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-    "the withdrawn model",
-  )
-  await rpc.extensionCommand("/litellm-endpoints all")
-  const regressionNotice = await notifySince(regressionCursor, /已被撤下：e2e-default-responses/, "the regression notice")
-  assert(
-    regressionNotice.message.includes("此前可用的模型已被撤下：e2e-default-responses"),
-    `the unusable-catalog notice must name the withdrawn model: ${regressionNotice.message}`,
-  )
-  assert(
-    regressionNotice.message.includes("Retry"),
-    `the notice must point at retry: ${regressionNotice.message}`,
-  )
-  const unusableNotice = await diagnosticsNotice("catalog 当前不可用", "the unusable catalog state")
-  assert(
-    unusableNotice.message.includes("发现 3 · 可用 0 · withheld 3"),
-    `the unusable catalog must report its counts: ${unusableNotice.message}`,
-  )
-  assert(
-    unusableNotice.message.includes("此前可用、现已撤下：e2e-default-responses"),
-    `the regression must be visible in diagnostics: ${unusableNotice.message}`,
-  )
-  assert(
-    !(await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-    "a withdrawn model must leave /models",
-  )
-
-  // [REAL-HOST-E2E] Scenario 5: recovery publishes the model again automatically,
-  // with no user approval anywhere in the flow.
-  //
-  // The snapshot below is the *withdrawn* state (0 publishable) exactly as it was
-  // asserted above; the recovery step must change the target model from withheld
-  // to published+configured without any user action.
-  const withdrawnModels = await publicationModels()
-  const before = {
-    models: withdrawnModels.filter((model) => model.provider === "litellm").map((model) => model.id),
-    inHost: withdrawnModels.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-  }
-  console.log(`[recovery before] target=e2e-default-responses inHost=${before.inHost} hostModels=${JSON.stringify(before.models)}`)
-  assert(before.inHost === false, "the recovery scenario must start from a withdrawn model")
-
-  defaultServer.state.models = [
-    modelInfo("e2e-default-responses", "responses"),
-    modelInfo("e2e-zero-limit", "chat", 0, 0),
-    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
-      supports_function_calling: undefined,
-      supports_reasoning: undefined,
-    }),
-  ]
+  // [T20] Internal route changes do not invalidate the same public model.
+  defaultServer.state.models[0] = { ...defaultServer.state.models[0], litellm_params: { model:"private/changed",base_model:"different",deployment_id:"different" } }
+  writeFileSync(outageFile,"injected\n")
   await forceRefresh()
-  const recoveredNotice = await diagnosticsNotice(
-    "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
-    "the automatic recovery",
-  )
-  const recoveredModels = await publicationModels()
-  const after = {
-    models: recoveredModels.filter((model) => model.provider === "litellm").map((model) => model.id),
-    inHost: recoveredModels.some((model) => model.provider === "litellm" && model.id === "e2e-default-responses"),
-  }
-  console.log(`[recovery after] target=e2e-default-responses inHost=${after.inHost} hostModels=${JSON.stringify(after.models)}`)
-  assert(after.inHost === true, "the recovered model did not return to /models")
-
-  // Counts and the per-model state must both move: 0/3 -> 1/2, the target leaves
-  // the withheld list, no LKG is involved, and its status is a fresh configuration
-  // (the LKG line would be present for a snapshot-backed publication).
-  const beforeCounts = /模型配置：发现 (\d+) · 可用 (\d+) · withheld (\d+) · LKG (\d+)/u.exec(unusableNotice.message)
-  const afterCounts = /模型配置：发现 (\d+) · 可用 (\d+) · withheld (\d+) · LKG (\d+)/u.exec(recoveredNotice.message)
-  assert(beforeCounts && afterCounts, "both recovery snapshots must report their publication counts")
-  assert(
-    beforeCounts[1] === "3" && beforeCounts[2] === "0" && beforeCounts[3] === "3" && beforeCounts[4] === "0",
-    `unexpected pre-recovery counts: ${beforeCounts[0]}`,
-  )
-  assert(
-    afterCounts[1] === "3" && afterCounts[2] === "1" && afterCounts[3] === "2" && afterCounts[4] === "0",
-    `unexpected post-recovery counts: ${afterCounts[0]}`,
-  )
-  assert(
-    unusableNotice.message.includes("withheld：e2e-default-responses · discovered-incomplete"),
-    "the withdrawn model must be listed as withheld before recovery",
-  )
-  assert(
-    !recoveredNotice.message.includes("withheld：e2e-default-responses"),
-    "the recovered model must leave the withheld list",
-  )
-  assert(!recoveredNotice.message.includes("已被撤下"), "the regression must clear after recovery")
-  assert(
-    !/LKG：e2e-default-responses/u.test(recoveredNotice.message),
-    "the recovered model must be freshly configured, not served from LKG",
-  )
-
-  // [REAL-HOST-E2E] Scenario 7: a descriptive LiteLLM output declaration differs
-  // from the trusted models.dev intrinsic value for the same canonical identity.
-  // Core selects the authoritative value, records a resolved discrepancy, and
-  // the model is published normally instead of being blocked.
-  defaultServer.state.models = [
-    {
-      model_name: "e2e-catalog-model",
-      litellm_params: { model: "vendor/e2e-catalog-model" },
-      model_info: {
-        mode: "chat",
-        max_input_tokens: 128_000,
-        max_output_tokens: 2_048,
-        supports_function_calling: true,
-        supports_reasoning: false,
-        supports_vision: false,
-        supports_pdf_input: false,
-        supports_audio_input: false,
-        supports_video_input: false,
-        supports_audio_output: false,
-      },
-    },
-  ]
+  nodeAssert.equal((await publicationModels()).find(model=>model.provider==="litellm" && model.id==="e2e-default-responses")?.maxTokens,4096)
+  rmSync(outageFile,{force:true})
   await forceRefresh()
-  const discrepancyNotice = await diagnosticsNotice(
-    "已裁决差异：e2e-catalog-model · limit.output",
-    "the resolved discrepancy",
-  )
-  assert(
-    discrepancyNotice.message.includes("模型配置：发现 1 · 可用 1 · withheld 0"),
-    `a resolved discrepancy must stay publishable: ${discrepancyNotice.message}`,
-  )
-  const catalogModel = (await publicationModels()).find(
-    (model) => model.provider === "litellm" && model.id === "e2e-catalog-model",
-  )
-  assert(catalogModel, "the resolved-discrepancy model did not register")
-  assert(
-    catalogModel.maxTokens === 4_096,
-    `the authoritative intrinsic output must be published, got ${catalogModel.maxTokens}`,
-  )
 
-  // [REAL-HOST-E2E] Scenario 8: two deployments of one host model explicitly
-  // disagree. No authority can decide which route the host will use, so the
-  // model is withheld as an unresolved conflict.
-  defaultServer.state.models = [
-    {
-      model_name: "e2e-conflict-model",
-      litellm_params: { model: "vendor/e2e-conflict-model" },
-      model_info: {
-        mode: "chat",
-        max_input_tokens: 128_000,
-        max_output_tokens: 4_096,
-        supports_function_calling: true,
-        supports_reasoning: false,
-        supports_vision: false,
-        supports_pdf_input: false,
-        supports_audio_input: false,
-        supports_video_input: false,
-        supports_audio_output: false,
-      },
-    },
-    {
-      model_name: "e2e-conflict-model",
-      litellm_params: { model: "vendor/e2e-conflict-model" },
-      model_info: {
-        mode: "chat",
-        max_input_tokens: 128_000,
-        max_output_tokens: 2_048,
-        supports_function_calling: true,
-        supports_reasoning: false,
-        supports_vision: false,
-        supports_pdf_input: false,
-        supports_audio_input: false,
-        supports_video_input: false,
-        supports_audio_output: false,
-      },
-    },
-  ]
+  // [T08 T12] Descriptions and differing deployments cannot override the selected record.
+  defaultServer.state.models = [modelInfo("e2e-conflict-model","chat",128000,2048),modelInfo("e2e-conflict-model","chat",128000,4096)]
   await forceRefresh()
-  const conflictNotice = await diagnosticsNotice(
-    "未决冲突：e2e-conflict-model · limit.output",
-    "the unresolved conflict",
-  )
-  assert(
-    conflictNotice.message.includes("withheld：e2e-conflict-model · invalid-metadata · authoritative-conflict"),
-    `the conflict reason must be explicit: ${conflictNotice.message}`,
-  )
-  assert(
-    !(await publicationModels()).some((model) => model.provider === "litellm" && model.id === "e2e-conflict-model"),
-    "a conflict-withheld model must not register",
-  )
+  nodeAssert.equal((await publicationModels()).find(model=>model.provider==="litellm" && model.id==="e2e-conflict-model")?.maxTokens,4096)
 
   // A real metadata outage is reported, never hidden. Stable provider
   // registrations keep their refresh coordinator, so a degradable server
@@ -1284,16 +1155,10 @@ export default function bootstrapProbe(pi) {
   // be re-reported after a host restart, while a material change must be.
   // Leave the endpoint in the acknowledged unusable state (0 publishable).
   defaultServer.state.failStatus = 0
-  // The canonical route changes and the metadata is incomplete, so the earlier
-  // trusted snapshot no longer applies: nothing is publishable.
-  defaultServer.state.models = [
-    { ...reducedModelInfo("e2e-default-responses", "responses"), litellm_params: { model: "openai/e2e-ack-unusable" } },
-    modelInfo("e2e-zero-limit", "chat", 0, 0),
-    modelInfo("e2e-incomplete-capabilities", "chat", 16_000, 2_048, {
-      supports_function_calling: undefined,
-      supports_reasoning: undefined,
-    }),
-  ]
+  // Actual invalid selected critical metadata withdraws a model; route changes do not.
+  catalogPayload.providers.openai.models["e2e-default-responses"].limit.output = 0
+  writeCatalog()
+  defaultServer.state.models = initialModels
   await forceRefresh()
   await diagnosticsNotice("catalog 当前不可用", "the acknowledged unusable state")
   const ackPersisted = JSON.parse(readFileSync(join(agentDir, "models-store.json"), "utf8"))
@@ -1360,7 +1225,7 @@ export default function bootstrapProbe(pi) {
   console.log(`[ack restart] suppressed duplicate, re-notified on material change`)
 
   console.log(
-    "real Pi publication E2E ok: partial catalog, withheld reasons, trusted LKG, route-change regression with unusable-catalog notice, automatic recovery, resolved discrepancy, unresolved conflict, metadata-failure diagnostics and acknowledgement restart persistence verified",
+    "real Pi publication E2E ok: partial catalog, critical metadata withholding, LKG, internal-route independence, selected-record deployment independence, network recovery and acknowledgement restart persistence verified",
   )
 
   // ===== Phase 2: Endpoint Management UX (real host dialogs, full vertical) =====

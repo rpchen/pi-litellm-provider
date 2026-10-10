@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai"
 import type {
   DegradationAcknowledgement,
   DiscoveryCacheDiagnostics,
@@ -57,14 +58,6 @@ export interface PublicationWithheldModel {
   readonly retryable: boolean
 }
 
-/** A field-level evidence fact worth showing to the user. */
-export interface PublicationFieldFact {
-  readonly model: string
-  readonly field: string
-  readonly status: string
-  readonly resolution: string
-}
-
 /** Adapter-visible slice of the Core publication + catalog partition. */
 export interface PublicationSummary {
   readonly discovered: number
@@ -79,10 +72,6 @@ export interface PublicationSummary {
   readonly unusable: boolean
   /** Withheld models the previous applied catalog published. */
   readonly regressions: readonly string[]
-  /** Differences authority already resolved (model stays publishable). */
-  readonly discrepancies: readonly PublicationFieldFact[]
-  /** Genuine conflicts that withhold a model. */
-  readonly conflicts: readonly PublicationFieldFact[]
   readonly failureKind?: string
   /**
    * Notification/acknowledgement state. This only decides whether to
@@ -232,7 +221,7 @@ export function formatHostDateTime(
   ].join(" ")
 }
 
-/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
+/** Render the Core publication partition: availability, withheld reasons and LKG. */
 export function formatPublicationSummary(summary: PublicationSummary | undefined): string[] {  if (!summary) return []
   const lines = [
     `模型配置：发现 ${summary.discovered} · 可用 ${summary.publishable.length} · withheld ${summary.withheld.length} · LKG ${summary.lkgIDs.length}`,
@@ -271,12 +260,6 @@ export function formatPublicationSummary(summary: PublicationSummary | undefined
     )
   }
   if (summary.withheld.length > 5) lines.push(`……另有 ${summary.withheld.length - 5} 个 withheld 模型`)
-  for (const fact of summary.discrepancies.slice(0, 5)) {
-    lines.push(`已裁决差异：${fact.model} · ${fact.field} · ${fact.resolution}`)
-  }
-  for (const fact of summary.conflicts.slice(0, 5)) {
-    lines.push(`未决冲突：${fact.model} · ${fact.field} · ${fact.resolution}`)
-  }
   return lines
 }
 
@@ -325,63 +308,22 @@ const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {
   error: "发现失败",
 }
 
-/**
- * Per-model canonical/serving/LKG facts from Core diagnostics
- * (adopt-modelsdev-canonical-catalog). Every new field is optional: older
- * Core shapes omit them and the lines are skipped, never fabricated.
- */
-interface ModelQualityNewFacts {
-  readonly identity?: {
-    readonly canonicalModelID?: string;
-    readonly canonicalEvidence?: string;
-    readonly canonicalStatus?: string;
-    readonly adapterSegment?: string;
-    readonly customLLMProvider?: string;
-  };
-  readonly serving?: { readonly status?: string; readonly providerID?: string; readonly recordID?: string };
-  readonly fieldBasis?: Readonly<Record<string, string>>;
-  readonly reasoningLevelsState?: string;
-  readonly operatorConfigurationKeys?: readonly string[];
-  readonly diagnosticCandidates?: ReadonlyArray<{ readonly providerID: string; readonly recordID: string; readonly why: string }>;
-  readonly catalogKind?: string;
-}
-
-export function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit = 5): string[] {
-  const models = discovery?.models ?? [];
-  if (models.length === 0) return [];
-  const lines = ["模型明细："];
+/** Public metadata source and selectable levels from the registered Pi model. */
+export function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit = 5, registered: readonly ProviderModelConfigLike[] = [], lkgIDs: readonly string[] = []): string[] {
+  const models = discovery?.models ?? []
+  if (models.length === 0) return []
+  const lines = ["模型明细："]
   for (const model of models.slice(0, limit)) {
-    const quality = (model as ModelDiagnostic & { quality: ModelQualityNewFacts }).quality ?? {};
-    const parts = [`${model.id} · 部署 ${model.deploymentCount}`];
-    const canonical = quality.identity?.canonicalModelID;
-    if (canonical) {
-      parts.push(`canonical ${canonical}${quality.identity?.canonicalEvidence ? `（${quality.identity.canonicalEvidence}）` : ""}`);
-    } else if (quality.identity?.canonicalStatus && quality.identity.canonicalStatus !== "proven") {
-      parts.push(`identity ${quality.identity.canonicalStatus}`);
-    }
-    const serving = quality.serving;
-    if (serving?.status && serving.status !== "unproven") {
-      parts.push(`serving ${serving.status}${serving.providerID ? ` ${serving.providerID}${serving.recordID ? ` → ${serving.recordID}` : ""}` : ""}`);
-    }
-    if (quality.reasoningLevelsState === "unknown") {
-      parts.push("档位 unknown（声明 models_dev_provider 可恢复）");
-    } else if (quality.reasoningLevelsState === "known") {
-      const levels = model.publication?.reasoningLevels;
-      parts.push(`档位 known[${levels && levels.length > 0 ? levels.join(",") : "无可选档"}]`);
-    }
-    lines.push(parts.join(" · "));
-    const operatorKeys = quality.operatorConfigurationKeys ?? [];
-    if (operatorKeys.length > 0) lines.push(`  operator configuration：${operatorKeys.join("、")}（非 enforcement，只诊断）`);
-    const candidates = quality.diagnosticCandidates ?? [];
-    if (candidates.length > 0) {
-      lines.push(`  候选声明：${candidates.map((item) => `${item.providerID}/${item.recordID}`).join("、")}`);
-    }
-    if (quality.catalogKind && quality.catalogKind !== "complete") {
-      lines.push(`  catalog：${quality.catalogKind}（canonical 不可用，仅 LiteLLM 声明 + LKG）`);
-    }
+    const source = model.quality.metadataSource
+    const actual = registered.find((item) => item.id === model.id)
+    const levels = actual ? getSupportedThinkingLevels({ ...actual, provider: "litellm", api: actual.api ?? "openai-completions", baseUrl: actual.baseUrl ?? "" }) : model.publication.reasoningLevels
+    const support = actual ? (actual.reasoning ? "supported" : "unsupported") : model.publication.reasoningState
+    const reasoning = support === "supported" ? (levels.length ? levels.join(",") : "支持，无可选档位") : support === "unsupported" ? "不支持" : "未知"
+    const lkg = lkgIDs.includes(model.id)
+    lines.push(`${model.id} · ${lkg ? "configured-lkg" : model.publication.status} · 来源 ${lkg ? "前次配置" : source ? source.providerID : "未匹配"} · 推理 ${reasoning}`)
   }
-  if (models.length > limit) lines.push(`……另有 ${models.length - limit} 个模型`);
-  return lines;
+  if (models.length > limit) lines.push(`……另有 ${models.length - limit} 个模型`)
+  return lines
 }
 
 export function formatProviderDiagnostics(
@@ -430,7 +372,7 @@ export function formatProviderDiagnostics(
   }
 
   lines.push(...formatPublicationSummary(snapshot.publication))
-  lines.push(...formatModelDetails(snapshot.discovery))
+  lines.push(...formatModelDetails(snapshot.discovery, 5, snapshot.models, snapshot.publication?.lkgIDs))
 
   if (snapshot.note) lines.push(`说明：${snapshot.note}`)
   lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)

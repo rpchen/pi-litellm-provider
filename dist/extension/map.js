@@ -26,8 +26,6 @@ const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
  * not from this map -- the registration API has no per-model budget channel.
  */
 export function thinkingLevelMapFor(spec) {
-    if (spec.variants.length === 0)
-        return undefined;
     const variantIDs = new Set(spec.variants.map((variant) => variant.id));
     const isBudget = spec.variants.some((variant) => variant.id === "high" && "thinking" in variant.settings);
     const map = {};
@@ -69,9 +67,6 @@ function toPiInput(modalities) {
         if (modality === "text" || modality === "image")
             result.push(modality);
     }
-    // pi requires text support on every conversational model.
-    if (!result.includes("text"))
-        result.unshift("text");
     return result;
 }
 /**
@@ -79,13 +74,10 @@ function toPiInput(modalities) {
  *
  * Follows the Core verdict when present: `supported` (even with zero
  * selectable levels) maps to true; `unsupported` and `unknown` map to
- * false. Specs predating the Core verdict field keep the legacy
- * variant-count inference.
+ * false. Missing verdicts never infer support from variant count.
  */
 export function reasoningForHost(spec) {
-    if (spec.reasoningSupported !== undefined)
-        return spec.reasoningSupported === "supported";
-    return spec.variants.length > 0;
+    return spec.reasoningSupported === "supported";
 }
 /**
  * Map discovery specs to pi provider model configs.
@@ -117,10 +109,7 @@ export function toProviderModels(specs, rootURL) {
  * Map Core publication entries to pi provider model configs.
  *
  * Consumes the Core partition without reimplementing policy: only
- * entries Core reports publishable (configured, configured-lkg,
- * user-accepted degraded) are passed in. Degraded entries map to the
- * same provider shape with conservative flags; their degraded state
- * stays visible through diagnostics, never re-labeled as configured.
+ * entries Core reports configured or configured-lkg are passed in.
  */
 export function toProviderModelsWithPublication(entries, rootURL) {
     return toProviderModels(entries.map((entry) => entry.spec), rootURL);

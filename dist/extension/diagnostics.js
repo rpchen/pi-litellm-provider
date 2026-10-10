@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { createLastKnownGoodStore } from "../core/index.js";
 import { getRuntimeIdentity, shortArtifactDigest, shortCoreCommit } from "./runtime-identity.js";
 /** Resolve (creating on first use) the endpoint-scoped publication controller. */
@@ -95,7 +96,7 @@ export function formatHostDateTime(value, timezoneOffsetMinutes) {
         `UTC${sign}${pad2(offsetHours)}:${pad2(offsetMinutes)}`,
     ].join(" ");
 }
-/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
+/** Render the Core publication partition: availability, withheld reasons and LKG. */
 export function formatPublicationSummary(summary) {
     if (!summary)
         return [];
@@ -132,12 +133,6 @@ export function formatPublicationSummary(summary) {
     }
     if (summary.withheld.length > 5)
         lines.push(`……另有 ${summary.withheld.length - 5} 个 withheld 模型`);
-    for (const fact of summary.discrepancies.slice(0, 5)) {
-        lines.push(`已裁决差异：${fact.model} · ${fact.field} · ${fact.resolution}`);
-    }
-    for (const fact of summary.conflicts.slice(0, 5)) {
-        lines.push(`未决冲突：${fact.model} · ${fact.field} · ${fact.resolution}`);
-    }
     return lines;
 }
 /**
@@ -182,43 +177,20 @@ const STATUS_TEXT = {
     "config-error": "LiteLLM 地址配置无效",
     error: "发现失败",
 };
-export function formatModelDetails(discovery, limit = 5) {
+/** Public metadata source and selectable levels from the registered Pi model. */
+export function formatModelDetails(discovery, limit = 5, registered = [], lkgIDs = []) {
     const models = discovery?.models ?? [];
     if (models.length === 0)
         return [];
     const lines = ["模型明细："];
     for (const model of models.slice(0, limit)) {
-        const quality = model.quality ?? {};
-        const parts = [`${model.id} · 部署 ${model.deploymentCount}`];
-        const canonical = quality.identity?.canonicalModelID;
-        if (canonical) {
-            parts.push(`canonical ${canonical}${quality.identity?.canonicalEvidence ? `（${quality.identity.canonicalEvidence}）` : ""}`);
-        }
-        else if (quality.identity?.canonicalStatus && quality.identity.canonicalStatus !== "proven") {
-            parts.push(`identity ${quality.identity.canonicalStatus}`);
-        }
-        const serving = quality.serving;
-        if (serving?.status && serving.status !== "unproven") {
-            parts.push(`serving ${serving.status}${serving.providerID ? ` ${serving.providerID}${serving.recordID ? ` → ${serving.recordID}` : ""}` : ""}`);
-        }
-        if (quality.reasoningLevelsState === "unknown") {
-            parts.push("档位 unknown（声明 models_dev_provider 可恢复）");
-        }
-        else if (quality.reasoningLevelsState === "known") {
-            const levels = model.publication?.reasoningLevels;
-            parts.push(`档位 known[${levels && levels.length > 0 ? levels.join(",") : "无可选档"}]`);
-        }
-        lines.push(parts.join(" · "));
-        const operatorKeys = quality.operatorConfigurationKeys ?? [];
-        if (operatorKeys.length > 0)
-            lines.push(`  operator configuration：${operatorKeys.join("、")}（非 enforcement，只诊断）`);
-        const candidates = quality.diagnosticCandidates ?? [];
-        if (candidates.length > 0) {
-            lines.push(`  候选声明：${candidates.map((item) => `${item.providerID}/${item.recordID}`).join("、")}`);
-        }
-        if (quality.catalogKind && quality.catalogKind !== "complete") {
-            lines.push(`  catalog：${quality.catalogKind}（canonical 不可用，仅 LiteLLM 声明 + LKG）`);
-        }
+        const source = model.quality.metadataSource;
+        const actual = registered.find((item) => item.id === model.id);
+        const levels = actual ? getSupportedThinkingLevels({ ...actual, provider: "litellm", api: actual.api ?? "openai-completions", baseUrl: actual.baseUrl ?? "" }) : model.publication.reasoningLevels;
+        const support = actual ? (actual.reasoning ? "supported" : "unsupported") : model.publication.reasoningState;
+        const reasoning = support === "supported" ? (levels.length ? levels.join(",") : "支持，无可选档位") : support === "unsupported" ? "不支持" : "未知";
+        const lkg = lkgIDs.includes(model.id);
+        lines.push(`${model.id} · ${lkg ? "configured-lkg" : model.publication.status} · 来源 ${lkg ? "前次配置" : source ? source.providerID : "未匹配"} · 推理 ${reasoning}`);
     }
     if (models.length > limit)
         lines.push(`……另有 ${models.length - limit} 个模型`);
@@ -258,7 +230,7 @@ export function formatProviderDiagnostics(state, now = Date.now(), timezoneOffse
             lines.push(`重点：${examples.join("；")}`);
     }
     lines.push(...formatPublicationSummary(snapshot.publication));
-    lines.push(...formatModelDetails(snapshot.discovery));
+    lines.push(...formatModelDetails(snapshot.discovery, 5, snapshot.models, snapshot.publication?.lkgIDs));
     if (snapshot.note)
         lines.push(`说明：${snapshot.note}`);
     lines.push(`Core：${build.coreBranch}@${build.coreSHA}`);

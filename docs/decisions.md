@@ -42,8 +42,8 @@
 ## Discovery quality 与宿主发布边界（2026-09-29）
 
 - 插件的核心目标是让 Pi 正确使用模型能力，不承担计费职责。protocol、context/output、modalities、tools、reasoning/thinking 的正确性优先于价格完整性。
-- models.dev provider 选择由共享 Core 统一维护：canonical 原厂 → OpenRouter → OpenCode → 全局唯一记录；Pi 不复制这套算法，也不靠新增硬编码模型家族修复新模型。
-- OpenRouter/OpenCode 若仅作为能力 fallback，其价格不得冒充 LiteLLM deployment price；LiteLLM 显式价格优先。
+- models.dev provider 选择由共享 Core 统一维护：官方 → OpenCode → OpenRouter 整记录；Pi 不复制这套算法，也不靠新增硬编码模型家族修复新模型。
+- 参考价只来自所选记录的有限非负值，否则0；不补其他来源，不截断能力，也不决定发布/LKG。
 - Core 可以保留缺少 limit 的 neutral model 用于 diagnostics，但 Pi 不得把 `contextWindow <= 0` 或 `maxTokens <= 0` 的模型注册给宿主。
 - 任何这类边界修改必须有 Core 测试和 Core → Pi 纵向映射测试。
 
@@ -75,3 +75,7 @@
 ## 异步准备生命周期修复（2026-10-03）
 
 复审指出上一轮仍有三处 P2 异步生命周期缺陷和一处回归时序失效，本轮集中修复：门禁准备结果按仓库与准备轮次隔离，较早轮次的回调不得覆盖较新轮次的门禁结论；宿主连接关闭（EOF）或 SIGINT/SIGTERM 后进入关闭状态，取消在跑准备并立即释放已建立与正在建立的 native 会话；启动根解析、宿主上报根归一化与工作区清单扫描移出协议进程，initialize/tools/list 不因慢扫描阻塞且扫描期间的查询仍等门禁结果。回归侧把排队 barrier 注入实现自身锁前的 `services.repository` 读取（旧实现才会真实失败），历史回放只替换 `api()` 签名与函数体并保留旧状态机其余部分。共享脚本、Git API fixture、历史回放与共享回归在四仓库逐字节同步；workspace 客户端与客户端回归保持 workspace 专属。详细协议与回归入口见 docs/codebase-memory.md。
+
+## 恢复模型元数据优先级（2026-10-10）
+
+用户批准 restore-model-metadata-priority 设计与 Core #34 squash 合并。Core main cf797e953eb1f6de8e7c3e0fd5e98094398c26f9 已通过完整 CI 与准确 SHA 索引发布/同步，Pi 与 OpenCode 构建共同固定此 SHA。旧 serving proof、部署交集、价格权威与价格 cap 规则由本 change 替代；Pi 明确 verdict 与全 null 无 effort 映射，无 SDK tools 字段时不伪造。真实 Pi 0.87.1 E2E 验证冻结 16 项注册/picker 与实际请求，历史 archive 不修改，宿主 PR 合并/Release 另行授权。

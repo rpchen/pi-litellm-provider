@@ -31,13 +31,6 @@ export interface PublicationWithheldModel {
     /** True when a retry could plausibly obtain trustworthy facts. */
     readonly retryable: boolean;
 }
-/** A field-level evidence fact worth showing to the user. */
-export interface PublicationFieldFact {
-    readonly model: string;
-    readonly field: string;
-    readonly status: string;
-    readonly resolution: string;
-}
 /** Adapter-visible slice of the Core publication + catalog partition. */
 export interface PublicationSummary {
     readonly discovered: number;
@@ -52,10 +45,6 @@ export interface PublicationSummary {
     readonly unusable: boolean;
     /** Withheld models the previous applied catalog published. */
     readonly regressions: readonly string[];
-    /** Differences authority already resolved (model stays publishable). */
-    readonly discrepancies: readonly PublicationFieldFact[];
-    /** Genuine conflicts that withhold a model. */
-    readonly conflicts: readonly PublicationFieldFact[];
     readonly failureKind?: string;
     /**
      * Notification/acknowledgement state. This only decides whether to
@@ -110,7 +99,7 @@ export declare function runtimeBuildInfo(): {
  * for deterministic tests; production callers omit it and use the host timezone.
  */
 export declare function formatHostDateTime(value: string | number | Date, timezoneOffsetMinutes?: number): string;
-/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
+/** Render the Core publication partition: availability, withheld reasons and LKG. */
 export declare function formatPublicationSummary(summary: PublicationSummary | undefined): string[];
 /**
  * User-facing notice for a materially new or regressed availability problem.
@@ -122,5 +111,6 @@ export declare function catalogNotice(summary: PublicationSummary | undefined): 
     readonly level: "info" | "warning";
     readonly message: string;
 } | undefined;
-export declare function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit?: number): string[];
+/** Public metadata source and selectable levels from the registered Pi model. */
+export declare function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit?: number, registered?: readonly ProviderModelConfigLike[], lkgIDs?: readonly string[]): string[];
 export declare function formatProviderDiagnostics(state: ProviderDiagnosticsState, now?: number, timezoneOffsetMinutes?: number): string;
