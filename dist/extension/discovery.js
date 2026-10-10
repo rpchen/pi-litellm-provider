@@ -114,24 +114,6 @@ function seedPublicationLKG(store, litellmResponse, catalog, buildOptions, publi
     }
 }
 function summarizePublication(publication, catalogFacts, failure) {
-    const facts = (id, assessment) => [
-        ...assessment.discrepancies.map((item) => ({
-            model: id,
-            field: item.field,
-            status: item.status,
-            resolution: item.resolution,
-        })),
-        ...assessment.conflicts.map((item) => ({
-            model: id,
-            field: item.field,
-            status: item.status,
-            resolution: item.resolution,
-        })),
-    ];
-    const allFacts = [
-        ...publication.publishable.flatMap((entry) => facts(entry.spec.id, entry.assessment)),
-        ...publication.blocked.flatMap((entry) => facts(entry.spec.id, entry.assessment)),
-    ];
     const lkgDetail = publication.publishable
         .map((entry) => entry.assessment.lkgDetail)
         .find((detail) => detail !== undefined);
@@ -155,8 +137,6 @@ function summarizePublication(publication, catalogFacts, failure) {
         partial: catalogFacts.partial,
         unusable: catalogFacts.unusable,
         regressions: catalogFacts.regressions.map((entry) => entry.id),
-        discrepancies: allFacts.filter((fact) => fact.status === "resolved-discrepancy"),
-        conflicts: allFacts.filter((fact) => fact.status === "unresolved-conflict"),
         failureKind: failure?.kind,
         acknowledgement: { notify: false, reason: "unchanged", fingerprint: catalogFacts.fingerprint },
     };

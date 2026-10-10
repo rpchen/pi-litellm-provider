@@ -95,7 +95,7 @@ export function formatHostDateTime(value, timezoneOffsetMinutes) {
         `UTC${sign}${pad2(offsetHours)}:${pad2(offsetMinutes)}`,
     ].join(" ");
 }
-/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
+/** Render the Core publication partition: availability, withheld reasons and LKG. */
 export function formatPublicationSummary(summary) {
     if (!summary)
         return [];
@@ -132,12 +132,6 @@ export function formatPublicationSummary(summary) {
     }
     if (summary.withheld.length > 5)
         lines.push(`……另有 ${summary.withheld.length - 5} 个 withheld 模型`);
-    for (const fact of summary.discrepancies.slice(0, 5)) {
-        lines.push(`已裁决差异：${fact.model} · ${fact.field} · ${fact.resolution}`);
-    }
-    for (const fact of summary.conflicts.slice(0, 5)) {
-        lines.push(`未决冲突：${fact.model} · ${fact.field} · ${fact.resolution}`);
-    }
     return lines;
 }
 /**

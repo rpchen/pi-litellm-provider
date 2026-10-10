@@ -201,7 +201,7 @@ describe("publication diagnostics and regression UX", () => {
     }
   }
 
-  test("diagnostics explain availability, withheld reasons, LKG, discrepancy, and regression", () => {
+  test("diagnostics explain availability, withheld reasons, LKG and regression", () => {
     const summary = {
       discovered: 3,
       publishable: [{ id: "ok", status: "configured" }],
@@ -219,8 +219,6 @@ describe("publication diagnostics and regression UX", () => {
       partial: true,
       unusable: false,
       regressions: ["was-available"],
-      discrepancies: [{ model: "ok", field: "limit.output", status: "resolved-discrepancy", resolution: "authoritative intrinsic metadata decides" }],
-      conflicts: [],
       failureKind: "timeout",
       acknowledgement: { notify: true, reason: "regression", fingerprint: "sha256:abc" },
     }
@@ -231,7 +229,7 @@ describe("publication diagnostics and regression UX", () => {
     expect(text).toContain("使用已信任的前次完整配置（LKG）：ok")
     expect(text).toContain("LKG 说明")
     expect(text).toContain("withheld：was-available · metadata-unavailable · metadata-unavailable · 可重试 · 此前可用")
-    expect(text).toContain("已裁决差异：ok · limit.output")
+    expect(text).not.toContain("已裁决差异")
     // No accept-degraded workflow wording anywhere.
     expect(text).not.toContain("降级")
     expect(text).not.toContain("接受")
@@ -252,8 +250,6 @@ describe("publication diagnostics and regression UX", () => {
       partial: false,
       unusable: true,
       regressions: [],
-      discrepancies: [],
-      conflicts: [],
       acknowledgement: { notify: true, reason: "catalog-unusable", fingerprint: "sha256:abc" },
     }
     const text = formatProviderDiagnostics(stateWith(summary))
@@ -280,8 +276,6 @@ describe("publication diagnostics and regression UX", () => {
       partial: true,
       unusable: false,
       regressions: ["was-published"],
-      discrepancies: [],
-      conflicts: [],
       acknowledgement: { notify: true, reason: "regression", fingerprint: "sha256:r" },
     }
     const notice = catalogNotice(regression)

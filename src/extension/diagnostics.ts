@@ -57,14 +57,6 @@ export interface PublicationWithheldModel {
   readonly retryable: boolean
 }
 
-/** A field-level evidence fact worth showing to the user. */
-export interface PublicationFieldFact {
-  readonly model: string
-  readonly field: string
-  readonly status: string
-  readonly resolution: string
-}
-
 /** Adapter-visible slice of the Core publication + catalog partition. */
 export interface PublicationSummary {
   readonly discovered: number
@@ -79,10 +71,6 @@ export interface PublicationSummary {
   readonly unusable: boolean
   /** Withheld models the previous applied catalog published. */
   readonly regressions: readonly string[]
-  /** Differences authority already resolved (model stays publishable). */
-  readonly discrepancies: readonly PublicationFieldFact[]
-  /** Genuine conflicts that withhold a model. */
-  readonly conflicts: readonly PublicationFieldFact[]
   readonly failureKind?: string
   /**
    * Notification/acknowledgement state. This only decides whether to
@@ -232,7 +220,7 @@ export function formatHostDateTime(
   ].join(" ")
 }
 
-/** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
+/** Render the Core publication partition: availability, withheld reasons and LKG. */
 export function formatPublicationSummary(summary: PublicationSummary | undefined): string[] {  if (!summary) return []
   const lines = [
     `模型配置：发现 ${summary.discovered} · 可用 ${summary.publishable.length} · withheld ${summary.withheld.length} · LKG ${summary.lkgIDs.length}`,
@@ -271,12 +259,6 @@ export function formatPublicationSummary(summary: PublicationSummary | undefined
     )
   }
   if (summary.withheld.length > 5) lines.push(`……另有 ${summary.withheld.length - 5} 个 withheld 模型`)
-  for (const fact of summary.discrepancies.slice(0, 5)) {
-    lines.push(`已裁决差异：${fact.model} · ${fact.field} · ${fact.resolution}`)
-  }
-  for (const fact of summary.conflicts.slice(0, 5)) {
-    lines.push(`未决冲突：${fact.model} · ${fact.field} · ${fact.resolution}`)
-  }
   return lines
 }
 

@@ -113,3 +113,20 @@ describe("Pi schema2 restore-only [T19 T21 T32]", () => {
     expect(await restore(snapshot(), { protocolOverrides: { "deepseek-v4-pro": "responses" } })).toEqual([])
   })
 })
+
+for (const provider of ["opencode", "openrouter"] as const) {
+  test(`[T03 T28] official absent: selected ${provider} record maps unchanged`, () => {
+    const subset = structuredClone(catalog);
+    for (const id of Object.keys(subset.providers)) if (id !== provider) delete (subset.providers as Record<string, unknown>)[id];
+    const input = { data: discovery.data.filter((entry) => entry.model_name === "glm-5.3") };
+    const configured = buildPublicationResult(input, subset, options);
+    expect(configured.blocked).toEqual([]);
+    const entry = configured.publishable[0]!;
+    expect(entry.assessment.metadataSource?.providerID).toBe(provider);
+    const mapped = toProviderModelsWithPublication(configured.publishable, ROOT)[0]!;
+    expect(mapped.id).toBe("glm-5.3");
+    expect(mapped.contextWindow).toBe(entry.spec.limit.context);
+    expect(mapped.maxTokens).toBe(entry.spec.limit.output);
+    expect(mapped.cost.input).toBe(entry.spec.cost.input);
+  });
+}

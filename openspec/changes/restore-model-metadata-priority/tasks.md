@@ -21,12 +21,14 @@
 
 ## 4. 真实宿主验收
 
-- [ ] 4.1 使用真实Pi0.87.1的pi install安装不可变candidate commit/tag；隔离HOME/XDG/PI_CODING_AGENT_DIR、两个本地fake endpoints与独立credentials，留存package/Core SHA。
-- [ ] 4.2 执行T29：16项最终注册/picker逐字段断言、每声明effort实际请求、无档位和不支持推理请求、Chat/Responses/Messages路径与SDK初始化；mock/factory/package smoke不能替代。
-- [ ] 4.3 在真实宿主中注入价格错误、catalog outage、恢复、删除、auth、重启/activation并检查UI与注册一致；保存脱敏证据，逐Scenario回填自动化测试名/CI run。
+- [x] 4.1 使用真实Pi0.87.1的pi install安装不可变candidate commit/tag；隔离HOME/XDG/PI_CODING_AGENT_DIR、两个本地fake endpoints与独立credentials，留存package/Core SHA。
+- [x] 4.2 执行T29：16项最终注册/picker逐字段断言、每声明effort实际请求、无档位和不支持推理请求、Chat/Responses/Messages路径与SDK初始化；mock/factory/package smoke不能替代。
+- [x] 4.3 在真实宿主中注入价格错误、catalog outage、恢复、删除、auth、重启/activation并检查UI与注册一致；保存脱敏证据，逐Scenario回填自动化测试名/CI run。
 
 ## 5. 完成门禁
 
-- [ ] 5.1 运行verify:dist、typecheck、bun test、test:package、test:e2e:pi和validate:spec、test:openspec-closure、test:release-metadata；记录具体命令、退出码及未执行项。
+- [x] 5.1 运行verify:dist、typecheck、bun test、test:package、test:e2e:pi和validate:spec、test:openspec-closure、test:release-metadata；记录具体命令、退出码及未执行项。
 - [ ] 5.2 仅实现和证据齐全后CLI archive新change，再strict/closure；PR依赖Core，不得自动合并。
 - [ ] 5.3 获授权合并后finish_codebase_task核对准确main/index字节；Release另行授权，固定provenance不得跟随新main重建。
+
+归档和授权合并后的 main/index 收尾仍待代码 Review 与合并阶段，不勾选 5.2/5.3。Core 对应宿主关闭任务保持未完成；历史 archive 不修改。
