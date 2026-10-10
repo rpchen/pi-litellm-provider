@@ -11,20 +11,17 @@
 | discovery-snapshot | Pi current-policy snapshot restore | [T21] scope不兼容 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
 | discovery-snapshot | Pi current-policy snapshot restore | [T19] 价格损坏 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
 | model-audit-export | Metadata provenance audit | [T23] 安全可追溯 | audit 安全负向 | planned，未实施 |
-| model-discovery | 消费 Core deployment 一致性 | [T08] 相同身份不同描述 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 消费 Core deployment 一致性 | [T11] 冲突部署 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 消费 Core 有序能力字段 | [T10] 明确不支持 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 消费 Core 有序能力字段 | [T30] 宿主模态边界 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 消费 Core 自动元数据关联 | [T02] 官方API不同名 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 消费 Core 自动元数据关联 | [T03] 官方缺失 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 精确宿主推理选项映射 | [T13] GPT差异 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
+| model-discovery | 消费 Core 整记录配置 | [T01] 完整16项 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
+| model-discovery | 消费 Core 整记录配置 | [T08] 内部信息变化 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
+| model-discovery | 消费 Core 整记录配置 | [T10] 明确能力值 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
+| model-discovery | 消费 Core 整记录配置 | [T03] 官方记录不存在 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
+| model-discovery | 精确宿主推理选项映射 | [T13] GPT各自档位 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
 | model-discovery | 精确宿主推理选项映射 | [T14] 支持无档位 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 精确宿主推理选项映射 | [T29] Pi实际请求 | 真实 Pi 0.87.1 E2E | planned，未实施 |
+| model-discovery | 精确宿主推理选项映射 | [T29] 真实宿主请求 | 真实 Pi 0.87.1 E2E | planned，未实施 |
 | model-discovery | 原始模型名与可选参考价 | [T16] 价格缺失或错误 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| model-discovery | 原始模型名与可选参考价 | [T17] 原272k价格tier | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
+| model-discovery | 原始模型名与可选参考价 | [T17] 原272k价格阶梯 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
 | pi-integration | Pi explicit model capability mapping | [T29] 支持无档位 | 真实 Pi 0.87.1 E2E | planned，未实施 |
 | pi-integration | Pi explicit model capability mapping | [T14] 不支持推理 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
-| protocol-routing | Conflicting deployment protocols | [T11] 协议冲突 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
 | provider-diagnostics | Model metadata summary | [T22] 匹配成功 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |
 | provider-diagnostics | Model metadata summary | [T31] 诊断纵向一致 | Core→state→command/RPC→UI纵向 | planned，未实施 |
 | publication | Current Core configuration cache | [T19] 策略迁移 | Core/adapter 对应矩阵单元与集成测试 | planned，未实施 |

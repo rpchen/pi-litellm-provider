@@ -2,53 +2,44 @@
 
 ## Context
 
-基线 c98e57b877081fc4a9471ce772eeb6c130674dde / Pi插件0.10.0，编入Core a13f16fd983478572502f3896fd5509978027261。动机见proposal。实际provider注册16项，均reasoning=true、snapshot variants空。Core同名change的audit.md包含全部58规格盘点和问题P01–P08；其design.md D1–D8为语义真源，test-matrix.md T01–T34为跨仓库验收矩阵。
+续修现有Draft PR。Core同名change的D1–D8是共享语义：model_name唯一产品身份，官方 → OpenCode → OpenRouter整记录选择，选中记录价格或0。实际16名称与59条公开记录保持冻结；不要求读取真实内部路由。
 
 ## Goals / Non-Goals
 
-**Goals:** 在Pi最终注册、picker和请求中准确表达Core语义；默认诊断可读。
-**Non-Goals:** 在Pi实现匹配、owner映射或价格权威；改凭据与端点状态模型；本阶段实施或更新dist。
+准确把Core结果映射到Pi最终注册、picker、请求与诊断。不得在adapter复制匹配/价格算法，不新增字段补齐、身份或协议冲突阻断。本阶段仅设计，不修改源码、dist、用户配置或历史archive。
 
 ## Decisions
 
-### 宿主字段与推理
+### 模型与推理映射
 
-toProviderModels只接收Core publishable；contextWindow=limit.context、maxTokens=limit.output、input只映射Core明确支持且Pi可表达的text/image，不能为nontext模型伪造text；cost传Core有限非负参考价。reasoning严格读取supported/unsupported，缺verdict不从variant数量推断。
+Pi仅映射已知text/image，contextWindow/maxTokens来自Core context/output；SDK没有独立tools注册位，保留Core审计事实，不伪称已实现该字段。
+原model_name保持ID、显示名与请求名。映射只消费Core一条记录的完整能力；不取其他provider或LL描述补字段。有限正context/output及既有模态边界继续校验；false、空数组与toggle不是缺失。
 
-effort映射：none→off，其余受支持Pi level同名；全部未声明level置null。supported+无可选档位（[]、toggle或options缺失）使用全null表，并保持reasoning=true。真实pi-ai0.87.1的getSupportedThinkingLevels在省略map时补出默认档位；当前map.ts第37行早返回undefined与map.test.ts:433固定了错误。不得以reasoning=false规避宿主默认。全null表如何经过picker/clamp与API落为无effort必须由T29实测；有阻碍时修改适配层受支持的请求设置，不能伪称已配置正确。
+reasoning严格使用Core verdict，不按variant数量推断。none→off，其余仅按实际SDK能力映射，所有未声明level显式null。支持无effort时全null且reasoning=true；已核实省略map会产生默认档位，全null返回[]。T29必须经真实Pi picker和实际请求确认，不以reasoning=false规避。
+既有Messages控制及SDK协议映射保留，不新增budget推导或控制状态。Chat/Responses/Messages选择、默认行为、mixed-fallback和显式override均保持现状。
 
-budget_tokens沿用Core中立variant及Pi受支持high/max映射；注册接口不能注入每模型预算，需比对Pi实际thinkingBudgets和记录上限。若宿主做不到，不展示错误预算的档位并明确宿主限制，不把数值编码成map字符串。
+### 价格、缓存与诊断
 
-| Core protocol | Pi API | base URL |
-|---|---|---|
-| chat | openai-completions | root/v1 |
-| responses | openai-responses | root/v1 |
-| messages | anthropic-messages | root（SDK附加/v1/messages） |
+cost只消费Core选中记录有效参考价或0；不补其他来源，价格不改限制、档位、发布或LKG。contextTierCap接受但忽略，实施时README说明。价格显示更新不等于模型能力退化。
 
-### 发现、缓存与诊断
+保持已有网络刷新、缓存、retry、endpoint/credential/activation边界。消费Core简化LKG，不重复验证内部route/base_model/deployment ID；同model_name内部信息变化不使缓存失效。成功空清单、auth失败和模型删除按原有规则处理。价格坏值归零，关键内容完整性保留。publication9/snapshot2沿既有版本机制阻止旧空档位/价格cap回放，成功发现重建；不新增恢复体系。
 
-refreshModels restore阶段保持无网络；network阶段按现有30秒freshness/force、5分钟默认轮询和catalog6小时缓存策略运行。成功空清单撤下，auth401/403清除，瞬时LiteLLM故障保留合法旧结果；models.dev故障消费Core的LKG/完整LL/withheld判定，不强制丢弃已有档位。不得在adapter再判定来源权威。
+默认诊断只呈现配置状态、选中元数据来源、推理支持/档位及实际错误，保留已有endpoint状态。主动audit沿现有allowlist展示公开record/canonical和最终注册值，不加多来源字段证明，不导出敏感原始信息。
 
-Core publication9 / snapshot2通过host models store存储；schema8/1不得直接恢复旧空档位和价格cap。既有endpoint/匿名URL-options restore scope、credential和activation边界保留。价格损坏由Core归零，不让host stored模型因价格拒绝整个目录；contextTierCap接受但忽略且不进新restore scope。
+## Evidence and retained boundaries
 
-默认diagnostics保留endpoint状态、缓存年龄与runtime identity短值，模型段只显示来源、推理支持/档位、真实未配置原因与统计。移除“声明models_dev_provider恢复”及候选列表。主动audit增加公开canonical/record与字段来源allowlist，不复制route/URL/credentials，不自动写出。
-
-### 与旧基线的差异
-
-| 差异 | 理由 |
+| 机制 | 实际依据 / 简单处理 |
 |---|---|
-| LL优先/家族原厂表→Core官方、OC、OR | 用户指定优先级，不在Pi维护业务副本 |
-| 无variant判false或省略map→保持支持且全null | SDK默认档位会扩大能力 |
-| 272k价格截断→真实能力context | 价格不影响关键能力 |
-| LL价格→Core参考价或0 | 价格nice to have |
-| schema8与旧迁移fixtures→新策略快照/oracle | 已知错误行为不能永久锁定 |
+| model_name与整记录 | 用户规则A–C；16条所选记录完整，删除拼字段与内部身份证明 |
+| 精确推理映射 | 冻结记录逐模型values不同；Pi SDK默认档位探针，以真实宿主测试确认 |
+| 价格或0 | 用户规则E与已观察272k截断；彻底移除价格能力耦合 |
+| 缓存scope/关键完整性/版本 | 既有隔离机制及旧快照已含错误配置；复用入口，不增加proof |
+| 协议与交付 | 用户规则F及现有AGENTS：保持原算法，保留真实宿主、固定Core SHA门禁 |
 
-## Risks / Trade-offs
-
-Pi peer声明仍为现状，强制测试0.87.1与Node>=22.19.0，不扩大兼容承诺。全null、none映射和budget兼容风险以真实请求证据关闭。ProviderModelConfig没有独立tools开关，Core tools结论保留在审计，不能声称注册接口已表达tools=false或承诺禁止所有工具请求；实际16记录均tools=true，不受此限制。本轮不为此新增全局工具切换机制，非工具模型的宿主限制须在验收报告单列。旧schema离线升级暂不恢复，成功网络刷新后重建。真实16名单已获得，但上游deployment结构尚未采集，不能声称合成fixture就是现场数据。
+这些是已确认要求或接口事实，未新增假想冲突和恢复场景。Pi无独立tools注册位，当前16条tools=true；明确接口限制，不新增全局工具控制。
 
 ## Migration Plan
 
-设计审查后才能实施。Core先独立审核并获准合入main；Pi固定同一完整Core SHA更新构建。执行verify:dist、typecheck、bun test、test:package、strict/closure、真实test:e2e:pi；不可用mock取代。同步README、OpenSpec context和ADR，再按Scenario证据归档本新change。已有archive永不修改；本阶段只有proposal/design/deltas/tasks/设计材料。
+Review后才实施；Core获准合入后，Pi再OpenCode使用同一稳定Core SHA更新dist/provenance。按Core T01–T34（T05/T06撤回）执行适用矩阵与真实Pi门禁，保留安装、隔离、SDK初始化、picker/请求、缓存和UI纵向证据。合成fixture不等于真实宿主E2E，也不需要真实服务商证明。
 
-真实验收沿Core矩阵T29/T31/T32：Pi自己安装固定candidate、隔离HOME/XDG/PI_CODING_AGENT_DIR、两本地endpoint独立credentials，检查16项模型及逐effort请求、无档位与不支持推理、价格故障/LKG/重启/auth/activation。回滚上一个固定插件tag，保留用户配置与凭据；合并发布另需授权。
+同步README/context/ADR与相关canonical规则须在实施阶段完成。完整Scenario证据后才按CLI归档本change；本轮不合并、归档或发布。
