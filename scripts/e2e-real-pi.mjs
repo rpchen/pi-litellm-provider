@@ -1297,15 +1297,28 @@ export default function bootstrapProbe(pi) {
   await forceRefresh()
   await diagnosticsNotice("catalog 当前不可用", "the acknowledged unusable state")
   const ackPersisted = JSON.parse(readFileSync(join(agentDir, "models-store.json"), "utf8"))
-  const ackEntry = Object.values(ackPersisted).find((entry) =>
-    entry && typeof entry === "object" && entry.publicationMemory !== undefined)
-  assert(ackEntry, `the acknowledgement was not persisted to the host store: ${JSON.stringify(ackPersisted).slice(0, 400)}`)
+  const expectedAckModelIds = [
+    "e2e-default-responses",
+    "e2e-incomplete-capabilities",
+    "e2e-zero-limit",
+  ]
+  const ackEntry = Object.values(ackPersisted).find((entry) => {
+    const models = entry && typeof entry === "object"
+      ? entry.publicationMemory?.acknowledgement?.models
+      : undefined
+    return models && expectedAckModelIds.every((id) => Object.hasOwn(models, id))
+  })
+  assert(ackEntry, `the default endpoint acknowledgement was not persisted to the host store: ${JSON.stringify(ackPersisted).slice(0, 1000)}`)
+  const ackMemory = ackEntry.publicationMemory
   assert(
-    ackEntry.publicationMemory.acknowledgement !== null &&
-      Object.keys(ackEntry.publicationMemory.acknowledgement.models).length === 3,
-    `unexpected persisted acknowledgement: ${JSON.stringify(ackEntry.publicationMemory)}`,
+    Object.keys(ackMemory.acknowledgement.models).sort().join("\0") === expectedAckModelIds.sort().join("\0"),
+    `unexpected acknowledged default-endpoint models: ${JSON.stringify(ackMemory)}`,
   )
-  console.log(`[ack persisted] ${JSON.stringify(ackEntry.publicationMemory)}`)
+  assert(
+    ackMemory.published.length === 0,
+    `the unusable default endpoint must persist an empty published baseline: ${JSON.stringify(ackMemory)}`,
+  )
+  console.log(`[ack persisted] ${JSON.stringify(ackMemory)}`)
 
   // Restart the real host on the same isolated state.
   await rpc.close()
