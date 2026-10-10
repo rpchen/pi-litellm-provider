@@ -15,4 +15,4 @@
 
 - [x] 3.1 Run Real Pi 0.87.1 E2E against immutable candidate `b8b03567a9389057ed29b678ea8d87eb7d90f35a`; local E2E and exact-head GitHub job passed, including post-outage recovery diagnostics.
 - [x] 3.2 Run typecheck, full tests, package isolation, OpenSpec scenario/closure/strict validation, release metadata, merge gate, and `git diff --check`; exact-head CI run [38025035469](https://github.com/rpchen/pi-litellm-provider/actions/runs/38025035469) passed all required jobs at `b8b03567a9389057ed29b678ea8d87eb7d90f35a`.
-- [ ] 3.3 Archive this change with the OpenSpec CLI after all required gates pass; verify canonical specs and `openspec validate --all --strict --no-interactive`.
+- [x] 3.3 Archived with `openspec archive stabilize-provider-refresh-registration --yes --json`; canonical endpoint-management spec updated and verified. Post-archive gates passed: strict validation (23/23), scenario coverage (44/44), closure (32 changes, 0 mismatches), release metadata, and merge gate.
