@@ -1,3 +1,4 @@
+import { officialCatalog } from "./fixtures/catalog.ts"
 import { describe, expect, test } from "bun:test"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { DEFAULT_POLL_INTERVAL_SECONDS, type ExtensionConfig } from "../src/extension/config.ts"
@@ -218,17 +219,14 @@ describe("Core refresh coordinator 接入", () => {
   }
 
   /** Catalog shape ({ models, providers }): frozen Core v8 era. */
-  const catalog = {
-    models: {
+  const catalog = officialCatalog({
       "openai/coordinated-model": {
         limit: { context: 1000, output: 100 },
         tool_call: true,
         reasoning: false,
         modalities: { input: ["text"], output: ["text"] },
       },
-    },
-    providers: {},
-  }
+    })
 
   function context(force = false): RefreshModelsContextLike {
     return {

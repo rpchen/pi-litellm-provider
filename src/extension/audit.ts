@@ -8,12 +8,16 @@
  */
 import { getRuntimeIdentity } from "./runtime-identity.ts"
 import type { ProviderModelConfigLike } from "./types.ts"
+import type { DiscoveryDiagnostics, ModelDiagnostic } from "../core/index.ts"
 
 export interface AuditEndpointInput {
   readonly id: string
   readonly providerId: string
   readonly status: string
   readonly models: readonly ProviderModelConfigLike[]
+  readonly discovery?: DiscoveryDiagnostics
+  readonly cacheSource?: string
+  readonly lkgIDs?: readonly string[]
 }
 
 export interface AuditModelRecord {
@@ -28,7 +32,7 @@ export interface AuditModelRecord {
   readonly maxTokens: number
 }
 
-function auditModelRecord(model: ProviderModelConfigLike): AuditModelRecord {
+function auditModelRecord(model: ProviderModelConfigLike, diagnostic: ModelDiagnostic | undefined, source: string): AuditModelRecord & { metadata?: object } {
   const record: AuditModelRecord = {
     id: model.id,
     name: model.name,
@@ -43,9 +47,19 @@ function auditModelRecord(model: ProviderModelConfigLike): AuditModelRecord {
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
   }
-  return model.api !== undefined || model.thinkingLevelMap !== undefined
-    ? { ...record, ...(model.api !== undefined ? { api: model.api } : {}), ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}) }
-    : record
+  return {
+    ...record,
+    ...(model.api !== undefined ? { api: model.api } : {}),
+    ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
+    ...(diagnostic ? { metadata: {
+      canonicalID: diagnostic.quality.identity.canonicalModelID,
+      provider: diagnostic.quality.metadataSource?.providerID,
+      recordKey: diagnostic.quality.metadataSource?.recordID,
+      reasoningSupported: model.reasoning ? "supported" : "unsupported",
+      reasoningLevels: Object.values(model.thinkingLevelMap ?? {}).filter((value): value is string => typeof value === "string"),
+      source,
+    } } : {}),
+  }
 }
 
 export function createAuditReport(
@@ -73,7 +87,8 @@ export function createAuditReport(
       providerId: endpoint.providerId,
       status: endpoint.status,
       modelCount: endpoint.models.length,
-      models: endpoint.models.map(auditModelRecord),
+      source: endpoint.cacheSource,
+      models: endpoint.models.map((model) => auditModelRecord(model, endpoint.discovery?.models.find((item) => item.id === model.id), endpoint.lkgIDs?.includes(model.id) ? "last-known-good" : "models.dev")),
     })),
   }
 }

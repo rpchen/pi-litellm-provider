@@ -26,8 +26,7 @@ export declare function thinkingLevelMapFor(spec: ModelSpec): Partial<Record<Thi
  *
  * Follows the Core verdict when present: `supported` (even with zero
  * selectable levels) maps to true; `unsupported` and `unknown` map to
- * false. Specs predating the Core verdict field keep the legacy
- * variant-count inference.
+ * false. Missing verdicts never infer support from variant count.
  */
 export declare function reasoningForHost(spec: ModelSpec): boolean;
 /**
@@ -43,9 +42,6 @@ export declare function toProviderModels(specs: readonly ModelSpec[], rootURL: s
  * Map Core publication entries to pi provider model configs.
  *
  * Consumes the Core partition without reimplementing policy: only
- * entries Core reports publishable (configured, configured-lkg,
- * user-accepted degraded) are passed in. Degraded entries map to the
- * same provider shape with conservative flags; their degraded state
- * stays visible through diagnostics, never re-labeled as configured.
+ * entries Core reports configured or configured-lkg are passed in.
  */
 export declare function toProviderModelsWithPublication(entries: readonly PublishableEntry[], rootURL: string): ProviderModelConfigLike[];

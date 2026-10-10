@@ -122,5 +122,6 @@ export declare function catalogNotice(summary: PublicationSummary | undefined): 
     readonly level: "info" | "warning";
     readonly message: string;
 } | undefined;
+/** Public metadata source and selectable reasoning levels from Core. */
 export declare function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit?: number): string[];
 export declare function formatProviderDiagnostics(state: ProviderDiagnosticsState, now?: number, timezoneOffsetMinutes?: number): string;

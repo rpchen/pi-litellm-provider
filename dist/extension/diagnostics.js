@@ -182,43 +182,18 @@ const STATUS_TEXT = {
     "config-error": "LiteLLM 地址配置无效",
     error: "发现失败",
 };
+/** Public metadata source and selectable reasoning levels from Core. */
 export function formatModelDetails(discovery, limit = 5) {
     const models = discovery?.models ?? [];
     if (models.length === 0)
         return [];
     const lines = ["模型明细："];
     for (const model of models.slice(0, limit)) {
-        const quality = model.quality ?? {};
-        const parts = [`${model.id} · 部署 ${model.deploymentCount}`];
-        const canonical = quality.identity?.canonicalModelID;
-        if (canonical) {
-            parts.push(`canonical ${canonical}${quality.identity?.canonicalEvidence ? `（${quality.identity.canonicalEvidence}）` : ""}`);
-        }
-        else if (quality.identity?.canonicalStatus && quality.identity.canonicalStatus !== "proven") {
-            parts.push(`identity ${quality.identity.canonicalStatus}`);
-        }
-        const serving = quality.serving;
-        if (serving?.status && serving.status !== "unproven") {
-            parts.push(`serving ${serving.status}${serving.providerID ? ` ${serving.providerID}${serving.recordID ? ` → ${serving.recordID}` : ""}` : ""}`);
-        }
-        if (quality.reasoningLevelsState === "unknown") {
-            parts.push("档位 unknown（声明 models_dev_provider 可恢复）");
-        }
-        else if (quality.reasoningLevelsState === "known") {
-            const levels = model.publication?.reasoningLevels;
-            parts.push(`档位 known[${levels && levels.length > 0 ? levels.join(",") : "无可选档"}]`);
-        }
-        lines.push(parts.join(" · "));
-        const operatorKeys = quality.operatorConfigurationKeys ?? [];
-        if (operatorKeys.length > 0)
-            lines.push(`  operator configuration：${operatorKeys.join("、")}（非 enforcement，只诊断）`);
-        const candidates = quality.diagnosticCandidates ?? [];
-        if (candidates.length > 0) {
-            lines.push(`  候选声明：${candidates.map((item) => `${item.providerID}/${item.recordID}`).join("、")}`);
-        }
-        if (quality.catalogKind && quality.catalogKind !== "complete") {
-            lines.push(`  catalog：${quality.catalogKind}（canonical 不可用，仅 LiteLLM 声明 + LKG）`);
-        }
+        const source = model.quality.metadataSource;
+        const reasoning = model.publication.reasoningState === "supported"
+            ? (model.publication.reasoningLevels.length ? model.publication.reasoningLevels.join(",") : "支持，无可选档位")
+            : model.publication.reasoningState === "unsupported" ? "不支持" : "未知";
+        lines.push(`${model.id} · ${model.publication.status} · 来源 ${source ? source.providerID : "未匹配"} · 推理 ${reasoning}`);
     }
     if (models.length > limit)
         lines.push(`……另有 ${models.length - limit} 个模型`);

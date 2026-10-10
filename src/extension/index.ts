@@ -389,6 +389,9 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
           providerId: providerIdForEndpoint(id),
           status: stateFor(id).current.status,
           models: stateFor(id).current.models ?? [],
+          discovery: stateFor(id).current.discovery,
+          cacheSource: stateFor(id).current.cache?.source,
+          lkgIDs: stateFor(id).current.publication?.lkgIDs,
         })),
       )
       try {

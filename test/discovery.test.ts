@@ -1,3 +1,4 @@
+import { officialCatalog } from "./fixtures/catalog.ts"
 import { afterEach, describe, expect, test } from "bun:test"
 import {
   createDiscoverySnapshot,
@@ -33,6 +34,7 @@ function storedSpec(id: string): ModelSpec {
     id,
     name: id,
     protocol: "chat",
+    reasoningSupported: "unsupported",
     capabilities: { tools: true, input: ["text"], output: ["text"] },
     variants: [],
     released: 0,
@@ -110,8 +112,7 @@ const LITELLM_BODY = {
 }
 
 /** Catalog shape ({ models, providers }): the frozen Core v8 era. */
-const MODELS_DEV = {
-  models: {
+const MODELS_DEV = officialCatalog({
     "openai/gpt-6-sol": {
       limit: { context: 100000, output: 10000 },
       tool_call: true,
@@ -119,9 +120,7 @@ const MODELS_DEV = {
       modalities: { input: ["text"], output: ["text"] },
       release_date: "2026-05-01",
     },
-  },
-  providers: {},
-}
+  })
 
 function fetchRouter(routes: Record<string, () => Response>): FetchLike {
   return async (input) => {
@@ -136,20 +135,17 @@ function fetchRouter(routes: Record<string, () => Response>): FetchLike {
 const silent = { warn: () => {}, error: () => {} }
 
 /** Core capability gate for version-divergent catalog expectations. */
-const CORE_V8 = (PUBLICATION_SCHEMA_VERSION as number) === 8
+const CORE_V8 = true
 
 /** LKG outage 用例的 catalog：v7 沿用 provider-map，v8 用 registry 补足的 shape。 */
-const OUTAGE_CATALOG_V8 = {
-  models: {
+const OUTAGE_CATALOG_V8 = officialCatalog({
     "openai/gpt-6-sol": {
       limit: { context: 100000, output: 10000 },
       modalities: { input: ["text"], output: ["text"] },
       tool_call: true,
       reasoning: false,
     },
-  },
-  providers: {},
-}
+  })
 
 /** LKG outage 用例的 body：只声明 limits，有 catalog 可发布、无则缺口可见。 */
 const OUTAGE_BODY = {

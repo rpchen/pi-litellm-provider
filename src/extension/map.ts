@@ -34,8 +34,6 @@ const ALL_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium",
  * not from this map -- the registration API has no per-model budget channel.
  */
 export function thinkingLevelMapFor(spec: ModelSpec): Partial<Record<ThinkingLevel, string | null>> | undefined {
-  if (spec.variants.length === 0) return undefined
-
   const variantIDs = new Set(spec.variants.map((variant) => variant.id))
   const isBudget = spec.variants.some((variant) => variant.id === "high" && "thinking" in variant.settings)
 
@@ -75,8 +73,6 @@ function toPiInput(modalities: readonly string[]): ("text" | "image")[] {
   for (const modality of modalities) {
     if (modality === "text" || modality === "image") result.push(modality)
   }
-  // pi requires text support on every conversational model.
-  if (!result.includes("text")) result.unshift("text")
   return result
 }
 
@@ -85,12 +81,10 @@ function toPiInput(modalities: readonly string[]): ("text" | "image")[] {
  *
  * Follows the Core verdict when present: `supported` (even with zero
  * selectable levels) maps to true; `unsupported` and `unknown` map to
- * false. Specs predating the Core verdict field keep the legacy
- * variant-count inference.
+ * false. Missing verdicts never infer support from variant count.
  */
 export function reasoningForHost(spec: ModelSpec): boolean {
-  if (spec.reasoningSupported !== undefined) return spec.reasoningSupported === "supported"
-  return spec.variants.length > 0
+  return spec.reasoningSupported === "supported"
 }
 
 /**
@@ -124,10 +118,7 @@ export function toProviderModels(specs: readonly ModelSpec[], rootURL: string): 
  * Map Core publication entries to pi provider model configs.
  *
  * Consumes the Core partition without reimplementing policy: only
- * entries Core reports publishable (configured, configured-lkg,
- * user-accepted degraded) are passed in. Degraded entries map to the
- * same provider shape with conservative flags; their degraded state
- * stays visible through diagnostics, never re-labeled as configured.
+ * entries Core reports configured or configured-lkg are passed in.
  */
 export function toProviderModelsWithPublication(
   entries: readonly PublishableEntry[],

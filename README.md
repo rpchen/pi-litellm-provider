@@ -2,7 +2,7 @@
 
 Pi 扩展：连接 LiteLLM 后，自动发现当前 API Key 可用的对话模型，并同步到 Pi 的模型选择器。
 
-它会自动处理模型发现、Chat / Responses / Messages 协议选择、context / input / output 上限、价格/模态映射、models.dev 元数据补充、thinking levels，以及定时刷新和临时故障降级。
+它会自动处理模型发现、Chat / Responses / Messages 协议选择、context / input / output 上限、价格/模态映射、models.dev 能力元数据、thinking levels，以及定时刷新和临时故障降级。
 
 ## 快速开始
 
@@ -116,61 +116,24 @@ endpoint 里发现了模型，不等于这个模型已经可以被安全使用�
 
 - **元数据来源暂时不可用**（models.dev 超时、5xx、网络不可达）且没有可信的历史完整配置；
 - **元数据不完整**：缺少上下文/输出上限，或工具调用、reasoning、模态没有可信证据；
-- **身份无法可靠确定**：同一模型名对应多个 models.dev 记录，或 deployment 之间无法证明是同一个模型；
-- **权威冲突无法裁决**：例如同一模型的两条部署声明互相矛盾；
+- **身份无法可靠确定**：公开模型名称对应多个不同 canonical 型号；
 - **元数据非法**：显式声明了非法的上限值。
 
 如果你之前用过的模型**现在**被 withheld，这是一次 regression，插件会明确告诉你哪个模型失去了可用状态、为什么、以及可以刷新（打开 `/model` 重新发现）后重试；它**不会**自动把你的请求切到另一个模型，也不会静默继续使用失去可信配置的模型。已经发出的请求不会被打断。
 
-**metadata 暂时不可用时，插件会保护已经验证过的配置。** 如果该模型此前完整通过过可信发布标准，且它的身份（provider / canonical 身份）没有变化、也没有出现新的高权威矛盾事实，插件会继续使用这份**此前验证过的完整配置**（LKG）：
+**models.dev 暂时不可用时**，同 endpoint、凭据、协议配置与 model_name 下，Core 接受的前次完整配置（LKG）仍可用，保留能力和档位。内部 route、base_model、deployment ID 变化以及价格缺失或错误不会使它失效。年龄只作说明，不作 TTL；成功清单删除的模型和认证失败仍撤下。
 
-```text
-当前元数据刷新不可用
-使用此前验证过的配置
-identity 未变化
-publication 仍然可信
-```
+`/litellm-diagnostics` 显示配置/暂不可用数量、实际元数据来源、推理支持与可选档位、实际失败原因、LKG 来源时间，以及 endpoint 状态和 Runtime Identity。`/litellm-audit-export` 主动导出公开 canonical/provider/record 引用、实际档位及最终注册值，不导出原始路由、地址和密钥。
 
-LKG 不是猜测，也不是「降级模型」：它就是一份曾经整体成立的可信配置。它没有固定过期时间——是否继续使用由身份、provider、schema 与 live 事实是否一致决定，而不是由年龄决定。LiteLLM 已经不再提供的模型不会因为存在 LKG 而重新出现。
+### 模型元数据优先级与升级
 
-**如果整个 endpoint 当前没有任何模型可以安全发布**，diagnostics 会明确说明「endpoint 连接成功、发现了 N 个模型、当前 0 个可以安全发布」，并提示刷新（Retry）与诊断入口，而不是看起来像插件没有反应。
+LiteLLM 提供模型清单、原始请求名和协议；models.dev 提供能力元数据。Core 按名称及公开 canonical 关系，以 **官方服务商 → OpenCode → OpenRouter** 选择一条整记录，能力、context/output、reasoning_options 和参考价均来自这条记录，不跨来源拼字段，也不要求配置 `models_dev_provider` 或证明实际 serving provider。
 
-**Retry 的作用**是重新尝试获得可信事实，不是绕过检查。刷新成功且模型重新达到可信标准后，它会自动回到 `/models`，无需你再次批准。被 withheld 的模型会继续参与正常的 discovery / 刷新 / 轮询，一旦恢复就自动恢复可用。
-
-`/litellm-diagnostics` 会显示：
-
-- 本轮发现、可用、withheld 的数量；
-- 每个 withheld 模型的原因与是否可重试；
-- 哪些模型正在使用此前验证过的配置（LKG），以及该配置的来源时间与年龄；
-- **已裁决的字段差异**：例如 LiteLLM 的描述性上限与 models.dev 该模型的内禀上限不同时，插件会采用更权威的来源并记录这次差异，而不是因此把模型判为不可用；
-- **未决冲突**与对应的 withheld 原因；
-- 此前可用、现在被撤下的模型（regression）。
-- 每个模型的 canonical 与 serving 事实（新 Core）：canonical 身份与证据、
-  serving 状态与 provider/record、推理档位状态（unknown 附恢复提示）、
-  operator-configuration 键（明确不是 enforcement）、可声明的诊断候选、
-  catalog 形状。
-
-### Canonical catalog 行为变化
-
-Pi 现从 `https://models.dev/catalog.json` 获取 canonical registry 与 serving
-记录（同一 snapshot），identity 与 authority 判定全在 Core：
-
-- 恢复 serving 值需要同时声明 `models_dev_provider` **且** wire id 精确命中该
-  provider 的某条记录；仅声明 provider 而无精确 SKU（如 DeepSeek 的
-  relation-only SKU）仍用 canonical 值。DeepSeek 输出因此为 384000（此前 serving
-  SKU 值 393216 仅 serving 证明后可用）；kimi-k3 输出为 131072（此前
-  first-party serving 值 1048576 不再当内禀发布）。
-- serving 未证明时推理档位一律 unknown、无可选档位；`litellm_params` 非价格键
-  （含 `reasoning_effort`、`max_tokens` 系）是 operator configuration，不收窄、
-  不产生档位；价格按声明 → 已证明 serving 逐组件解析。
-- serving 缺字段（如 `base_model_omit` 删除的 `limit.input`）不再用 canonical
-  回填，有同维度 LiteLLM 声明则补缺，否则 unknown。
-- **LiteLLM-only（无 canonical 身份、无 serving 证明）更严格**：`max_input_tokens`
-  只是 input 容量，绝不当作总 context。此类私有模型若没有 context 语义的声明
-  （models.dev registry 未命中）保持 missing 并被 withheld，需在 models.dev 中
-  存在对应记录或依赖有效 LKG。
-- LKG 为 schema 8（group-wide proof）：升级后首轮 outage 期间旧条目不恢复，
-  下一轮 live 自动重捕获。
+- 推理支持与可选档位分别处理：明确不支持为 `reasoning=false`；支持无可选 effort 为 `true` 且无额外默认档位；有 effort 时只提供记录列出的档位，`none` 映射为 Pi `off`。Messages 原有预算控制保持兼容。
+- DeepSeek V4.1 Flash、GLM-5.3 与 GLM-5.3 Flash 提供 low/high/max；GPT 模型分别取自身记录。DeepSeek Flash output 为 393216；GPT context 为 1050000 时不再被价格阶梯截为 272000。
+- 价格仅作 USD/百万 token 参考：有限非负值保留，否则逐项为 0；0 不表示确认免费。价格不影响能力、发布或缓存恢复。旧 `contextTierCap` 配置仍接受，但不生效。
+- publication schema 9、snapshot schema 2 不回放旧 8/1 错误配置。升级后首次需成功刷新重建；仅持有旧快照时，目录故障不会恢复旧的空档位或价格截断结果。
+- 不伪造缺失关键能力：必须有有限正 context/output、明确 tools/reasoning 和已知非空模态，才进入注册。Pi 只表达 text/image 和明确推理支持；SDK 没有独立 tools 注册字段，完整事实保留在 Core。
 
 ### Runtime Identity
 
@@ -217,7 +180,7 @@ pi --list-models litellm
 | 配置项 | 默认值 | 说明 |
 |---|---:|---|
 | `pollInterval` | `300` | 模型发现轮询间隔，单位秒；最小 30 |
-| `contextTierCap` | `true` | 按第一个非零输入价格阶梯截断上下文窗口 |
+| `contextTierCap` | `true` | 兼容旧配置，已忽略；价格不再截断上下文 |
 | `protocolOverrides` | `{}` | legacy 单 endpoint 时按 LiteLLM `model_name` 覆盖协议；显式模式改为每个 endpoint 内配置 |
 
 ```jsonc
@@ -297,13 +260,11 @@ activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全�
 | 打开 `/model` | 实时发现 |
 | 轮询到点 | 后台刷新模型清单 |
 | LiteLLM 暂时不可达 / 超时 / 429 / 5xx | 保留 last-known-good，后续重试；诊断显示 `stale` |
-| models.dev 不可达 | 按 catalog 形状不可用处理：LiteLLM 声明完整者仍发布，其余 withheld（有效 LKG 可恢复）；推理档位暂缺 |
+| models.dev 不可达 | 有效 LKG 保持完整能力/档位；其余暂不可用并说明原因 |
 | Key 无效（401 / 403） | 撤下当前模型 |
 | 地址未配置或不可用 | 不发起无效请求，不注册模型，并给出日志提示 |
 
-`/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。内禀事实只来自 canonical registry（`catalog.models`）；serving 覆盖只在运维者声明 `models_dev_provider` 且 wire id 精确命中该 provider 记录时生效。未证明的 provider 记录（OpenCode、OpenRouter、同名、变体）不提供任何发布事实，只作诊断候选。
-
-模型上限按共享发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。Core diagnostics 会保留 models.dev 未命中的私有模型用于解释，但若最终仍无法得到正数 context/output，Pi 不会把该模型注册成 `contextWindow: 0` / `maxTokens: 0` 的不可用配置。
+`/v1/model/info` 是模型清单来源，models.dev 不会添加 LiteLLM 未返回的模型。模型名称与所选公开记录决定配置；描述性部署差异不覆盖该记录。未知或非法关键能力不会以默认值注册成可用模型。
 
 > `pi update --models` 只处理 `models.json`，不会加载扩展，因此不会刷新本插件的模型清单。
 
