@@ -22,6 +22,8 @@ Windows 使用仓库安装的 pinned 0.87.1 CLI，`pi install` 安装 `git:githu
 
 本地日志在被忽略的 .tmp；Windows清理隔离临时目录遇到EPERM，测试断言与进程退出成功，未将此当作产品功能失败。Linux真实宿主job同样覆盖完整脚本。最终审查交付包含该脚本，最新不可变候选由CI重新安装验证。
 
+候选 `131a0eb950e3c4ac9623c58605973ed2bc10ef72` 的 [CI 38068469751](https://github.com/rpchen/pi-litellm-provider/actions/runs/38068469751) 已通过：Linux完整339/339，真实Pi0.87.1以自身installer重新安装该Git候选，63个实际SDK请求覆盖全部16模型，包括kimi-k2.7-code、mimo-v2.6-flash、mimo-v2.6-pro的空picker与无默认推理参数；每个有档位型号仍逐effort核对。此前60请求结果是历史候选，补测后的验收以63为准。最终文档HEAD仍须通过同一CI/native门禁。
+
 ## Review 边界
 
 PR #55 交代码Review，不合并、不打tag、不发布；任务5.2/5.3等待归档/授权合并与finish。未修改历史archive。

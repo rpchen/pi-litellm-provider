@@ -1,6 +1,6 @@
 # Scenario 自动化证据
 
-矩阵沿用 Core 同名 change，冻结 fixtures 未改。真实宿主使用 Pi 0.87.1 自身 installer，实际配置和请求均由宿主取得。实现候选 `06a4c217f97a70efd58875d83b174eaef9424c2d` 的 [CI 与真实 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38065205625) 均通过；后续诊断删减及两项后备来源测试由本 PR 最新 HEAD 的相同门禁复验。命令、结果和安装身份见 implementation.md。
+矩阵沿用 Core 同名 change，冻结 fixtures 未改。真实宿主使用 Pi 0.87.1 自身 installer，实际配置和请求均由宿主取得。实现候选 `131a0eb950e3c4ac9623c58605973ed2bc10ef72` 的 [CI 与真实 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38068469751) 均通过：339/339测试，63个真实SDK请求，包含3个无可选档位的冻结模型。后续文档提交由本PR最新HEAD相同门禁复验。命令、结果和安装身份见 implementation.md。
 
 | Capability | Requirement | Scenario / Matrix | 自动化证据 | 结果 |
 |---|---|---|---|---|
