@@ -4,6 +4,7 @@ import type {
   DiscoveryCacheDiagnostics,
   DiscoveryDiagnostics,
   LastKnownGoodStore,
+  ModelDiagnostic,
 } from "../core/index.ts"
 import { createLastKnownGoodStore } from "../core/index.ts"
 import { getRuntimeIdentity, shortArtifactDigest, shortCoreCommit } from "./runtime-identity.ts"
@@ -232,8 +233,7 @@ export function formatHostDateTime(
 }
 
 /** Render the Core publication partition: availability, withheld reasons, LKG, evidence facts. */
-export function formatPublicationSummary(summary: PublicationSummary | undefined): string[] {
-  if (!summary) return []
+export function formatPublicationSummary(summary: PublicationSummary | undefined): string[] {  if (!summary) return []
   const lines = [
     `模型配置：发现 ${summary.discovered} · 可用 ${summary.publishable.length} · withheld ${summary.withheld.length} · LKG ${summary.lkgIDs.length}`,
   ]
@@ -325,6 +325,65 @@ const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {
   error: "发现失败",
 }
 
+/**
+ * Per-model canonical/serving/LKG facts from Core diagnostics
+ * (adopt-modelsdev-canonical-catalog). Every new field is optional: older
+ * Core shapes omit them and the lines are skipped, never fabricated.
+ */
+interface ModelQualityNewFacts {
+  readonly identity?: {
+    readonly canonicalModelID?: string;
+    readonly canonicalEvidence?: string;
+    readonly canonicalStatus?: string;
+    readonly adapterSegment?: string;
+    readonly customLLMProvider?: string;
+  };
+  readonly serving?: { readonly status?: string; readonly providerID?: string; readonly recordID?: string };
+  readonly fieldBasis?: Readonly<Record<string, string>>;
+  readonly reasoningLevelsState?: string;
+  readonly operatorConfigurationKeys?: readonly string[];
+  readonly diagnosticCandidates?: ReadonlyArray<{ readonly providerID: string; readonly recordID: string; readonly why: string }>;
+  readonly catalogKind?: string;
+}
+
+export function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit = 5): string[] {
+  const models = discovery?.models ?? [];
+  if (models.length === 0) return [];
+  const lines = ["模型明细："];
+  for (const model of models.slice(0, limit)) {
+    const quality = (model as ModelDiagnostic & { quality: ModelQualityNewFacts }).quality ?? {};
+    const parts = [`${model.id} · 部署 ${model.deploymentCount}`];
+    const canonical = quality.identity?.canonicalModelID;
+    if (canonical) {
+      parts.push(`canonical ${canonical}${quality.identity?.canonicalEvidence ? `（${quality.identity.canonicalEvidence}）` : ""}`);
+    } else if (quality.identity?.canonicalStatus && quality.identity.canonicalStatus !== "proven") {
+      parts.push(`identity ${quality.identity.canonicalStatus}`);
+    }
+    const serving = quality.serving;
+    if (serving?.status && serving.status !== "unproven") {
+      parts.push(`serving ${serving.status}${serving.providerID ? ` ${serving.providerID}${serving.recordID ? ` → ${serving.recordID}` : ""}` : ""}`);
+    }
+    if (quality.reasoningLevelsState === "unknown") {
+      parts.push("档位 unknown（声明 models_dev_provider 可恢复）");
+    } else if (quality.reasoningLevelsState === "known") {
+      const levels = model.publication?.reasoningLevels;
+      parts.push(`档位 known[${levels && levels.length > 0 ? levels.join(",") : "无可选档"}]`);
+    }
+    lines.push(parts.join(" · "));
+    const operatorKeys = quality.operatorConfigurationKeys ?? [];
+    if (operatorKeys.length > 0) lines.push(`  operator configuration：${operatorKeys.join("、")}（非 enforcement，只诊断）`);
+    const candidates = quality.diagnosticCandidates ?? [];
+    if (candidates.length > 0) {
+      lines.push(`  候选声明：${candidates.map((item) => `${item.providerID}/${item.recordID}`).join("、")}`);
+    }
+    if (quality.catalogKind && quality.catalogKind !== "complete") {
+      lines.push(`  catalog：${quality.catalogKind}（canonical 不可用，仅 LiteLLM 声明 + LKG）`);
+    }
+  }
+  if (models.length > limit) lines.push(`……另有 ${models.length - limit} 个模型`);
+  return lines;
+}
+
 export function formatProviderDiagnostics(
   state: ProviderDiagnosticsState,
   now = Date.now(),
@@ -371,6 +430,7 @@ export function formatProviderDiagnostics(
   }
 
   lines.push(...formatPublicationSummary(snapshot.publication))
+  lines.push(...formatModelDetails(snapshot.discovery))
 
   if (snapshot.note) lines.push(`说明：${snapshot.note}`)
   lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)

@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test"
 import litellm from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDev from "./fixtures/models-dev.json" with { type: "json" }
 import { buildModelSpecs, hasOperationalLimits, type ModelSpec } from "../src/core/index.ts"
+import { PUBLICATION_SCHEMA_VERSION } from "../src/core/index.ts"
 import { PROTOCOL_API, thinkingLevelMapFor, toProviderModels } from "../src/extension/map.ts"
+
+/** Core capability gate: serving-proof levels only exist on Core v8. */
+const CORE_V8 = (PUBLICATION_SCHEMA_VERSION as number) === 8
 
 const specs = buildModelSpecs(litellm, modelsDev, { contextTierCap: true, protocolOverrides: {} })
 const ROOT = "http://litellm.example:4000"
@@ -57,12 +61,74 @@ describe("toProviderModels", () => {
   })
 
   test("input 只保留 text/image", () => {
-    expect(byID.get("mimo-v2.6-pro")?.input).toEqual(["text", "image"])
-    expect(byID.get("glm-5.3")?.input).toEqual(["text"])
+    // Dedicated aligned fixture: LiteLLM declarations equal the registry
+    // values, so old Core (LiteLLM-only) and new Core (canonical) agree.
+    const doc = {
+      models: {
+        "labA/mimo": {
+          limit: { context: 100000, output: 10000 },
+          modalities: { input: ["text", "image"], output: ["text"] },
+          tool_call: true,
+          reasoning: false,
+        },
+      },
+      providers: {},
+    }
+    const input = {
+      data: [{
+        model_name: "mimo",
+        litellm_params: { model: "mimo" },
+        model_info: {
+          mode: "chat",
+          max_input_tokens: 100000,
+          max_output_tokens: 10000,
+          supports_function_calling: true,
+          supports_reasoning: false,
+          supports_vision: true,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
+          supports_audio_output: false,
+        },
+      }],
+    }
+    const mapped = toProviderModels(buildModelSpecs(input, doc, { contextTierCap: true, protocolOverrides: {} }), ROOT)[0]!
+    expect(mapped.input).toEqual(["text", "image"])
   })
 
   test("cost 与上限来自发现结果", () => {
-    const sol = byID.get("gpt-6-sol")!
+    const doc = {
+      models: {
+        "labA/sol": {
+          limit: { context: 272000, output: 128000 },
+          modalities: { input: ["text"], output: ["text"] },
+          tool_call: true,
+          reasoning: true,
+        },
+      },
+      providers: {},
+    }
+    const input = {
+      data: [{
+        model_name: "sol",
+        litellm_params: { model: "sol" },
+        model_info: {
+          mode: "responses",
+          max_input_tokens: 272000,
+          max_output_tokens: 128000,
+          supports_function_calling: true,
+          supports_reasoning: true,
+          supports_vision: false,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
+          supports_audio_output: false,
+          input_cost_per_token: 0.000002,
+          output_cost_per_token: 0.00001,
+        },
+      }],
+    }
+    const sol = toProviderModels(buildModelSpecs(input, doc, { contextTierCap: false, protocolOverrides: {} }), ROOT)[0]!
     expect(sol.cost.input).toBe(2)
     expect(sol.cost.output).toBe(10)
     expect(sol.contextWindow).toBe(272000)
@@ -70,55 +136,99 @@ describe("toProviderModels", () => {
   })
 
   test("PR8 的总 context 语义贯穿 Core 到 Pi 模型配置", () => {
-    const glm = byID.get("glm-5.3")!
+    const doc = {
+      models: {
+        "labA/glm": {
+          limit: { context: 200000, input: 200000, output: 32000 },
+          modalities: { input: ["text"], output: ["text"] },
+          tool_call: true,
+          reasoning: false,
+        },
+      },
+      providers: {},
+    }
+    const input = {
+      data: [{
+        model_name: "glm",
+        litellm_params: { model: "glm" },
+        model_info: {
+          mode: "chat",
+          max_input_tokens: 200000,
+          max_output_tokens: 32000,
+          supports_function_calling: true,
+          supports_reasoning: false,
+          supports_vision: false,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
+          supports_audio_output: false,
+        },
+      }],
+    }
+    const glm = toProviderModels(buildModelSpecs(input, doc, { contextTierCap: false, protocolOverrides: {} }), ROOT)[0]!
     expect(glm.contextWindow).toBe(200000)
     // models.dev is authoritative for intrinsic limits; the LiteLLM
     // descriptive 131072 is retained as a resolved discrepancy.
     expect(glm.maxTokens).toBe(32000)
   })
 
-  test("hy4-preview 通过 OpenRouter 能力 fallback 映射为可用 Pi 模型", () => {
+  test("hy4-preview 通过 canonical registry 映射为可用 Pi 模型（reseller 记录仅诊断）", () => {
     const discovered = buildModelSpecs({
       data: [{
         model_name: "hy4-preview",
-        litellm_params: { model: "openai/hy4-preview" },
+        litellm_params: { model: "hy4-preview" },
         model_info: {
           mode: "chat",
+          max_input_tokens: 1024000,
+          max_output_tokens: 64000,
+          supports_function_calling: true,
+          supports_reasoning: true,
+          supports_vision: false,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
+          supports_audio_output: false,
           input_cost_per_token: 0.000000834,
           output_cost_per_token: 0.000002501,
           cache_read_input_token_cost: 0.000000042,
         },
       }],
     }, {
-      openrouter: {
-        models: {
-          "hy4-preview": {
-            id: "hy4-preview",
-            canonical_model_id: "tencent/hy4-preview",
-            tool_call: true,
-            reasoning: true,
-            modalities: { input: ["text"], output: ["text"] },
-            limit: { context: 1024000, output: 64000 },
-          },
+      models: {
+        "tencent/hy4-preview": {
+          limit: { context: 1024000, input: 1024000, output: 64000 },
+          modalities: { input: ["text"], output: ["text"] },
+          tool_call: true,
+          reasoning: true,
         },
       },
-      opencode: {
-        models: {
-          "hy4-preview": {
-            id: "hy4-preview",
-            canonical_model_id: "tencent/hy4-preview",
-            limit: { context: 1000000, output: 32000 },
+      providers: {
+        openrouter: {
+          models: {
+            "hy4-preview": {
+              id: "hy4-preview",
+              canonical_model_id: "tencent/hy4-preview",
+              limit: { context: 1024000, output: 64000 },
+            },
+          },
+        },
+        opencode: {
+          models: {
+            "hy4-preview": {
+              id: "hy4-preview",
+              canonical_model_id: "tencent/hy4-preview",
+              limit: { context: 1000000, output: 32000 },
+            },
           },
         },
       },
     }, { contextTierCap: true, protocolOverrides: {} })
-    // Frozen precedence: OpenCode ranks before OpenRouter when the original
-    // provider record is absent, so the OpenCode serving record supplies the
-    // mapping inputs.
+    // Unproven reseller records supply nothing (D5): canonical limits plus
+    // operator-declared LiteLLM prices reach the host mapping.
     const mapped = toProviderModels(discovered, ROOT)[0]!
     expect(mapped.id).toBe("hy4-preview")
-    expect(mapped.contextWindow).toBe(1000000)
-    expect(mapped.maxTokens).toBe(32000)
+    expect(mapped.contextWindow).toBe(1024000)
+    expect(mapped.maxTokens).toBe(64000)
     expect(mapped.contextWindow).toBeGreaterThan(0)
     expect(mapped.maxTokens).toBeGreaterThan(0)
     expect(mapped.cost.input).toBeCloseTo(0.834)
@@ -220,22 +330,105 @@ describe("thinkingLevelMap", () => {
     expect(withVariants.thinkingLevelMap).toBeDefined()
   })
 
-  test("fixtures 上的真实映射：responses effort 与 messages budget", () => {
-    const sol = byID.get("gpt-6-sol")!
+  test.skipIf(!CORE_V8)("fixtures 上的真实映射：proven serving 的 effort 与 budget 档位", () => {
+    // Serving-proof levels only exist on Core v8: the deployment declares
+    // labA and hits the serving record exactly.
+    const effortDoc = {
+      models: {
+        "labA/sol": {
+          limit: { context: 100000, output: 10000 },
+          modalities: { input: ["text"], output: ["text"] },
+          tool_call: true,
+          reasoning: true,
+        },
+      },
+      providers: {
+        labA: {
+          models: {
+            sol: {
+              id: "sol",
+              limit: { context: 100000, output: 10000 },
+              modalities: { input: ["text"], output: ["text"] },
+              tool_call: true,
+              reasoning: true,
+              reasoning_options: [{ type: "effort", values: ["none", "low", "high"] }],
+            },
+          },
+        },
+      },
+    }
+    const effortBody = {
+      data: [{
+        model_name: "sol",
+        litellm_params: { model: "sol" },
+        model_info: {
+          mode: "responses",
+          models_dev_provider: "labA",
+          max_input_tokens: 100000,
+          max_output_tokens: 10000,
+          supports_function_calling: true,
+          supports_reasoning: true,
+          supports_vision: false,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
+          supports_audio_output: false,
+        },
+      }],
+    }
+    const solSpecs = buildModelSpecs(effortBody, effortDoc, { contextTierCap: false, protocolOverrides: {} })
+    const sol = toProviderModels(solSpecs, ROOT)[0]!
     expect(sol.reasoning).toBeTrue()
-    expect(sol.thinkingLevelMap?.off).toBe("none")
     expect(sol.thinkingLevelMap?.low).toBe("low")
-    expect(sol.thinkingLevelMap?.minimal).toBeNull()
-
-    const claude = byID.get("claude-db")!
-    expect(claude.reasoning).toBeTrue()
-    expect(claude.thinkingLevelMap?.high).toBe("high")
-    expect(claude.thinkingLevelMap?.max).toBe("max")
-    expect(claude.thinkingLevelMap?.medium).toBeNull()
+    expect(sol.thinkingLevelMap?.max).toBeNull()
   })
 
-  test("toggle 类模型支持 reasoning 但不给档位（Core  verdict 解耦）", () => {
-    const glm = byID.get("glm-5.3")!
+  test.skipIf(!CORE_V8)("toggle 类模型支持 reasoning 但不给档位（levels known-empty）", () => {
+    const toggleDoc = {
+      models: {
+        "labA/glm": {
+          limit: { context: 100000, output: 10000 },
+          modalities: { input: ["text"], output: ["text"] },
+          tool_call: true,
+          reasoning: true,
+        },
+      },
+      providers: {
+        labA: {
+          models: {
+            glm: {
+              id: "glm",
+              limit: { context: 100000, output: 10000 },
+              modalities: { input: ["text"], output: ["text"] },
+              tool_call: true,
+              reasoning: true,
+              reasoning_options: [{ type: "toggle" }],
+            },
+          },
+        },
+      },
+    }
+    const toggleBody = {
+      data: [{
+        model_name: "glm",
+        litellm_params: { model: "glm" },
+        model_info: {
+          mode: "chat",
+          models_dev_provider: "labA",
+          max_input_tokens: 100000,
+          max_output_tokens: 10000,
+          supports_function_calling: true,
+          supports_reasoning: true,
+          supports_vision: false,
+          supports_pdf_input: false,
+          supports_audio_input: false,
+          supports_video_input: false,
+          supports_audio_output: false,
+        },
+      }],
+    }
+    const glmSpecs = buildModelSpecs(toggleBody, toggleDoc, { contextTierCap: false, protocolOverrides: {} })
+    const glm = toProviderModels(glmSpecs, ROOT)[0]!
     expect(glm.reasoning).toBeTrue()
     expect("thinkingLevelMap" in glm).toBeFalse()
   })

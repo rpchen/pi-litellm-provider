@@ -55,7 +55,7 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
         now,
     });
     if (deps.publication?.store) {
-        seedPublicationLKG(deps.publication.store, litellmResponse, publication, now);
+        seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now);
     }
     const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions);
     const specs = publication.publishable.map((entry) => entry.spec);
@@ -97,7 +97,7 @@ function restorePublicationMemory(raw, controller) {
     }
 }
 /** Record complete configured models as Last Known Good for future outages. */
-function seedPublicationLKG(store, litellmResponse, publication, now) {
+function seedPublicationLKG(store, litellmResponse, catalog, buildOptions, publication, now) {
     const groups = new Map(groupLiteLLMDeployments(litellmResponse).map((item) => [item.modelName, item]));
     for (const entry of publication.publishable) {
         if (entry.assessment.status !== "configured")
@@ -106,7 +106,7 @@ function seedPublicationLKG(store, litellmResponse, publication, now) {
         if (!group)
             continue;
         try {
-            store.set(lastKnownGoodKey(entry.spec.id), createLastKnownGoodEntry(group, entry.assessment.identity.selected, entry.spec, now, capturedPublicationVerdict(entry.assessment)));
+            store.set(lastKnownGoodKey(entry.spec.id), createLastKnownGoodEntry(group, entry.assessment.identity.selected, entry.spec, now, capturedPublicationVerdict(entry.assessment, entry.spec), catalog, buildOptions));
         }
         catch {
             // Seeding is best-effort; it must never fail a discovery.

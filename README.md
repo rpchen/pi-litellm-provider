@@ -145,6 +145,32 @@ LKG 不是猜测，也不是「降级模型」：它就是一份曾经整体成�
 - **已裁决的字段差异**：例如 LiteLLM 的描述性上限与 models.dev 该模型的内禀上限不同时，插件会采用更权威的来源并记录这次差异，而不是因此把模型判为不可用；
 - **未决冲突**与对应的 withheld 原因；
 - 此前可用、现在被撤下的模型（regression）。
+- 每个模型的 canonical 与 serving 事实（新 Core）：canonical 身份与证据、
+  serving 状态与 provider/record、推理档位状态（unknown 附恢复提示）、
+  operator-configuration 键（明确不是 enforcement）、可声明的诊断候选、
+  catalog 形状。
+
+### Canonical catalog 行为变化
+
+Pi 现从 `https://models.dev/catalog.json` 获取 canonical registry 与 serving
+记录（同一 snapshot），identity 与 authority 判定全在 Core：
+
+- 恢复 serving 值需要同时声明 `models_dev_provider` **且** wire id 精确命中该
+  provider 的某条记录；仅声明 provider 而无精确 SKU（如 DeepSeek 的
+  relation-only SKU）仍用 canonical 值。DeepSeek 输出因此为 384000（此前 serving
+  SKU 值 393216 仅 serving 证明后可用）；kimi-k3 输出为 131072（此前
+  first-party serving 值 1048576 不再当内禀发布）。
+- serving 未证明时推理档位一律 unknown、无可选档位；`litellm_params` 非价格键
+  （含 `reasoning_effort`、`max_tokens` 系）是 operator configuration，不收窄、
+  不产生档位；价格按声明 → 已证明 serving 逐组件解析。
+- serving 缺字段（如 `base_model_omit` 删除的 `limit.input`）不再用 canonical
+  回填，有同维度 LiteLLM 声明则补缺，否则 unknown。
+- **LiteLLM-only（无 canonical 身份、无 serving 证明）更严格**：`max_input_tokens`
+  只是 input 容量，绝不当作总 context。此类私有模型若没有 context 语义的声明
+  （models.dev registry 未命中）保持 missing 并被 withheld，需在 models.dev 中
+  存在对应记录或依赖有效 LKG。
+- LKG 为 schema 8（group-wide proof）：升级后首轮 outage 期间旧条目不恢复，
+  下一轮 live 自动重捕获。
 
 ### Runtime Identity
 
@@ -270,11 +296,11 @@ activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全�
 | 打开 `/model` | 实时发现 |
 | 轮询到点 | 后台刷新模型清单 |
 | LiteLLM 暂时不可达 / 超时 / 429 / 5xx | 保留 last-known-good，后续重试；诊断显示 `stale` |
-| models.dev 不可达 | 继续使用 LiteLLM 数据；部分补充元数据/thinking levels 暂缺 |
+| models.dev 不可达 | 按 catalog 形状不可用处理：LiteLLM 声明完整者仍发布，其余 withheld（有效 LKG 可恢复）；推理档位暂缺 |
 | Key 无效（401 / 403） | 撤下当前模型 |
 | 地址未配置或不可用 | 不发起无效请求，不注册模型，并给出日志提示 |
 
-`/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。能力补缺优先使用原厂记录；原厂 provider 记录不可用时依次使用 OpenRouter、OpenCode，再考虑全局唯一记录。这样同一模型被多个网关收录时，不会仅因为 provider 多而丢失 context、输出上限或 reasoning 等关键能力。
+`/v1/model/info` 是模型发现的事实来源；models.dev 只补充元数据，不会添加 LiteLLM 没返回的模型。内禀事实只来自 canonical registry（`catalog.models`）；serving 覆盖只在运维者声明 `models_dev_provider` 且 wire id 精确命中该 provider 记录时生效。未证明的 provider 记录（OpenCode、OpenRouter、同名、变体）不提供任何发布事实，只作诊断候选。
 
 模型上限按共享发现规则合并：总 context 与最大 input 分开处理；若两者冲突，Pi 展示的 `contextWindow` 不会超过 Core 判定的总 context。Core diagnostics 会保留 models.dev 未命中的私有模型用于解释，但若最终仍无法得到正数 context/output，Pi 不会把该模型注册成 `contextWindow: 0` / `maxTokens: 0` 的不可用配置。
 

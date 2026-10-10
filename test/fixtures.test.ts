@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import litellmFixture from "./fixtures/litellm-model-info.json" with { type: "json" }
 import modelsDevFixture from "./fixtures/models-dev.json" with { type: "json" }
+import catalogShapeFixture from "./fixtures/models-dev-catalog-shape.json" with { type: "json" }
 
 const FORBIDDEN_KEYS = new Set([
   "api_base",
@@ -66,14 +67,27 @@ describe("fixtures", () => {
     expect(data.some((item) => item.model_name === "dall-e-3")).toBeTrue()
   })
 
+  test("catalog 形状样本含 registry 与 serving 四态且无敏感信息", () => {
+    const text = JSON.stringify(catalogShapeFixture)
+    expect(text).not.toMatch(/sk-[A-Za-z0-9_-]{8,}/)
+    const doc = catalogShapeFixture as { models: Record<string, unknown>; providers: Record<string, { models: Record<string, any> }> }
+    // canonical + declared-serving + relation-only + LiteLLM-only 覆盖
+    expect(Object.keys(doc.models)).toEqual(["labA/alpha", "labB/beta"])
+    expect(doc.providers.labA!.models.alpha.reasoning_options[0]?.type).toBe("effort")
+    expect(doc.providers.gatewayX!.models["beta-free"].canonical_model_id).toBe("labB/beta")
+  })
+
   test("models.dev 样本可加载且覆盖记录选择与档位来源", () => {
-    const fixture = modelsDevFixture as Record<string, { models: Record<string, any> }>
-    expect(fixture.openai!.models["gpt-5.5"]!.reasoning_options[0]?.type).toBe("effort")
-    expect(fixture.anthropic!.models["claude-sonnet-4-5"]!.reasoning_options[0]?.max).toBe(64000)
-    expect(fixture.anthropic!.models["claude-opus-4-1"]!.reasoning_options[0]).toEqual({ type: "budget_tokens" })
-    expect(fixture.zai!.models["glm-5.3"]!.reasoning_options[0]?.type).toBe("toggle")
-    expect(fixture.minimax!.models["MiniMax-M3"]!.id).toBe("MiniMax-M3")
-    expect(fixture["reseller-a"]!.models["shared-model"]).toBeDefined()
-    expect(fixture["reseller-b"]!.models["shared-model"]).toBeDefined()
+    const fixture = modelsDevFixture as {
+      models: Record<string, any>
+      providers: Record<string, { models: Record<string, any> }>
+    }
+    expect(fixture.providers.openai!.models["gpt-5.5"]!.reasoning_options[0]?.type).toBe("effort")
+    expect(fixture.providers.anthropic!.models["claude-sonnet-4-5"]!.reasoning_options[0]?.max).toBe(64000)
+    expect(fixture.providers.anthropic!.models["claude-opus-4-1"]!.reasoning_options[0]).toEqual({ type: "budget_tokens" })
+    expect(fixture.providers.zai!.models["glm-5.3"]!.reasoning_options[0]?.type).toBe("toggle")
+    expect(fixture.providers.minimax!.models["MiniMax-M3"]!.id).toBe("MiniMax-M3")
+    expect(fixture.providers["reseller-a"]!.models["shared-model"]).toBeDefined()
+    expect(fixture.providers["reseller-b"]!.models["shared-model"]).toBeDefined()
   })
 })

@@ -122,4 +122,5 @@ export declare function catalogNotice(summary: PublicationSummary | undefined): 
     readonly level: "info" | "warning";
     readonly message: string;
 } | undefined;
+export declare function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit?: number): string[];
 export declare function formatProviderDiagnostics(state: ProviderDiagnosticsState, now?: number, timezoneOffsetMinutes?: number): string;
