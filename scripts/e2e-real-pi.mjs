@@ -899,8 +899,9 @@ export default function bootstrapProbe(pi) {
 
   // `--no-session` Pi stops endpoint polling once a prompt ends, so Phase 1b
   // drives discovery through non-interactive activation plus catalog reads:
-  // "/litellm-endpoints all" re-registers the active providers, and every
-  // get_available_models call runs a fresh refreshModels pass.
+  // "/litellm-endpoints all" reconciles active endpoint configuration, and
+  // every get_available_models call runs a fresh refreshModels pass without
+  // restarting an unchanged provider lifecycle.
   const forceRefresh = async () => {
     await rpc.extensionCommand("/litellm-endpoints all")
     await publicationModels()
@@ -1225,10 +1226,10 @@ export default function bootstrapProbe(pi) {
     "a conflict-withheld model must not register",
   )
 
-  // A real metadata outage is reported, never hidden. `/litellm-endpoints`
-  // re-registers the provider, so the first failure of that fresh lifecycle is
-  // the discovery-error branch: the host keeps the last catalog, and the
-  // diagnostics show the failure, its counter and the retry time.
+  // A real metadata outage is reported, never hidden. Stable provider
+  // registrations keep their refresh coordinator, so a degradable server
+  // failure after success is reported through the last-known-good warning
+  // path, with stale state, a failure counter and retry time.
   defaultServer.state.models = [
     modelInfo("e2e-default-responses", "responses"),
     modelInfo("e2e-zero-limit", "chat", 0, 0),
@@ -1240,10 +1241,17 @@ export default function bootstrapProbe(pi) {
   await forceRefresh()
   defaultServer.state.failStatus = 500
   await managerRefresh()
-  const failureNotice = await diagnosticsNotice("状态：发现失败", "the metadata failure")
+  const failureNotice = await diagnosticsNotice(
+    "状态：网络刷新失败，正在使用 last-known-good",
+    "the metadata failure with last-known-good",
+  )
   assert(
-    failureNotice.message.includes("说明：发现失败；详细错误已通过宿主日志记录。"),
-    `failure note missing: ${failureNotice.message}`,
+    failureNotice.message.includes("说明：刷新失败，保留上次成功结果。"),
+    `last-known-good warning missing: ${failureNotice.message}`,
+  )
+  assert(
+    /缓存：stale · stale=是/u.test(failureNotice.message),
+    `stale last-known-good cache state must be visible: ${failureNotice.message}`,
   )
   assert(
     /failures=[1-9]\d*/u.test(failureNotice.message),
