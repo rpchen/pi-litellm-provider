@@ -7,6 +7,7 @@
  * excluded from the allowlist.
  */
 import { getRuntimeIdentity } from "./runtime-identity.js";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 function auditModelRecord(model, diagnostic, source) {
     const record = {
         id: model.id,
@@ -31,7 +32,7 @@ function auditModelRecord(model, diagnostic, source) {
                 provider: diagnostic.quality.metadataSource?.providerID,
                 recordKey: diagnostic.quality.metadataSource?.recordID,
                 reasoningSupported: model.reasoning ? "supported" : "unsupported",
-                reasoningLevels: Object.values(model.thinkingLevelMap ?? {}).filter((value) => typeof value === "string"),
+                reasoningLevels: getSupportedThinkingLevels({ ...model, provider: "litellm", api: model.api ?? "openai-completions", baseUrl: model.baseUrl ?? "" }),
                 source,
             } } : {}),
     };

@@ -122,7 +122,7 @@ for (const packageName of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-a
   writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name: packageName, version: "0.0.0", type: "module" }), "utf8")
   writeFileSync(
     path.join(packageDir, "index.js"),
-    packageName.endsWith("pi-coding-agent") ? "export function getAgentDir() { return process.cwd() }\n" : "export {}\n",
+    packageName.endsWith("pi-coding-agent") ? "export function getAgentDir() { return process.cwd() }\n" : "export function getSupportedThinkingLevels() { throw new Error('Import smoke must not execute Pi SDK behavior') }\n",
     "utf8",
   )
 }

@@ -125,6 +125,8 @@ endpoint 里发现了模型，不等于这个模型已经可以被安全使用�
 
 `/litellm-diagnostics` 显示配置/暂不可用数量、实际元数据来源、推理支持与可选档位、实际失败原因、LKG 来源时间，以及 endpoint 状态和 Runtime Identity。`/litellm-audit-export` 主动导出公开 canonical/provider/record 引用、实际档位及最终注册值，不导出原始路由、地址和密钥。
 
+诊断与 audit 的 `metadata.reasoningLevels` 使用 Pi picker 的档位名称（例如 `off`）；audit 同时保留原始 `thinkingLevelMap` 请求映射（例如 `off: "none"`）。Messages 预算模型的可选档位包含 SDK 的 `off`。
+
 ### 模型元数据优先级与升级
 
 LiteLLM 提供模型清单、原始请求名和协议；models.dev 提供能力元数据。Core 按名称及公开 canonical 关系，以 **官方服务商 → OpenCode → OpenRouter** 选择一条整记录，能力、context/output、reasoning_options 和参考价均来自这条记录，不跨来源拼字段，也不要求配置 `models_dev_provider` 或证明实际 serving provider。

@@ -891,6 +891,27 @@ export default function bootstrapProbe(pi) {
     nodeAssert.deepEqual((await rpc.request({ type: "get_available_thinking_levels" })).response.data.levels,picker)
     for (const level of protocol === "messages" ? ["high","max"] : ["off"]) await callModel(id,level,undefined,protocol)
   }
+  // [T31] Display the real picker names, retaining the separate wire-effort map.
+  const matrixDiagnostics = await rpc.extensionCommand("/litellm-diagnostics default")
+  const matrixNotice = await rpc.waitFor(record => record?.type === "extension_ui_request" && record.method === "notify"
+    && record.message?.includes("Endpoint：default"), { after: matrixDiagnostics.after })
+  const gptPicker = oracle.models.find(model => model.id === "gpt-5.6-luna").piLevels
+  assert(matrixNotice.message.includes("gpt-5.6-luna · configured · 来源 openai · 推理 " + gptPicker.join(",")), "GPT diagnostics differ from real Pi picker")
+  const matrixAudit = await rpc.extensionCommand("/litellm-audit-export default")
+  const matrixAuditNotice = await rpc.waitFor(record => record?.type === "extension_ui_request" && record.method === "notify"
+    && record.message?.includes("LiteLLM 审查报告已导出"), { after: matrixAudit.after })
+  const matrixAuditPath = (matrixAuditNotice.message.match(/([A-Za-z]:[\\/][^\s"']+?litellm-audit-[^\s"']+\.json|\/[^\s"']+?litellm-audit-[^\s"']+\.json)/u) ?? [])[1]
+  assert(matrixAuditPath, "Metadata matrix audit export path missing")
+  const matrixAuditModels = JSON.parse(readFileSync(matrixAuditPath, "utf8")).endpoints[0].models
+  for (const expected of oracle.models) {
+    const actual = matrixAuditModels.find(model => model.id === expected.id)
+    nodeAssert.deepEqual(actual.metadata.reasoningLevels, expected.piLevels, expected.id + ": audit differs from picker")
+    nodeAssert.deepEqual(actual.thinkingLevelMap, registered.find(model => model.id === expected.id).thinkingLevelMap)
+  }
+  const messagesAudit = matrixAuditModels.find(model => model.id === "e2e-messages")
+  nodeAssert.deepEqual(messagesAudit.metadata.reasoningLevels, ["off", "high", "max"])
+  assert(!Object.hasOwn(messagesAudit.thinkingLevelMap, "off"), "Audit must preserve absent Messages map.off")
+  nodeAssert.equal(matrixAuditModels.find(model => model.id === "gpt-5.6-luna").thinkingLevelMap.off, "none")
   // Only price data changes: publication, limits, picker and capability notifications stay stable.
   for (const provider of Object.values(catalogPayload.providers)) for (const record of Object.values(provider.models)) record.cost = { input:-1,output:"bad" }
   writeCatalog()
@@ -898,6 +919,15 @@ export default function bootstrapProbe(pi) {
   const zeroPrices = pluginModels((await rpc.request({ type:"get_available_models" })).response).filter(model=>model.provider==="litellm")
   assert(zeroPrices.length===19,"price errors withdrew models")
   for(const model of zeroPrices) assert(Object.values(model.cost).every(value=>value===0),"bad prices must become zero")
+  defaultServer.state.models = defaultServer.state.models.filter(model => model.model_name === "e2e-messages")
+  await rpc.extensionCommand("/litellm-endpoints all")
+  const messagesOnly = pluginModels((await rpc.request({ type: "get_available_models" })).response).filter(model => model.provider === "litellm")
+  nodeAssert.deepEqual(messagesOnly.map(model => model.id), ["e2e-messages"])
+  const messagesDiagnostics = await rpc.extensionCommand("/litellm-diagnostics default")
+  const messagesNotice = await rpc.waitFor(record => record?.type === "extension_ui_request" && record.method === "notify"
+    && record.message?.includes("Endpoint：default"), { after: messagesDiagnostics.after })
+  assert(messagesNotice.message.includes("e2e-messages · configured · 来源 anthropic · 推理 off,high,max"), "Messages diagnostics omit real picker off")
+  console.log("real Pi diagnostics/audit picker parity: 16 frozen models and Messages off passed")
   console.log("real Pi metadata priority: 16/16 final registrations and picker lists; " + requestCount + " actual Chat/Responses/Messages requests passed")
   defaultServer.state.models = initialModels
   await rpc.extensionCommand("/litellm-endpoints all")

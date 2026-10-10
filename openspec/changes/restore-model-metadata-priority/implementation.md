@@ -24,6 +24,12 @@ Windows 使用仓库安装的 pinned 0.87.1 CLI，`pi install` 安装 `git:githu
 
 候选 `131a0eb950e3c4ac9623c58605973ed2bc10ef72` 的 [CI 38068469751](https://github.com/rpchen/pi-litellm-provider/actions/runs/38068469751) 已通过：Linux完整339/339，真实Pi0.87.1以自身installer重新安装该Git候选，63个实际SDK请求覆盖全部16模型，包括kimi-k2.7-code、mimo-v2.6-flash、mimo-v2.6-pro的空picker与无默认推理参数；每个有档位型号仍逐effort核对。此前60请求结果是历史候选，补测后的验收以63为准。最终文档HEAD仍须通过同一CI/native门禁。
 
+## Pi picker 展示 Review 修复
+
+Review 证实默认诊断与 audit 的 metadata.reasoningLevels 错用 thinkingLevelMap 的 value：冻结 gpt-5.6-luna 显示 none 而不是 picker 的 off，Messages 则漏掉 SDK 默认 off。两处现在直接调用 Pi SDK getSupportedThinkingLevels；原始 thinkingLevelMap、Core 输入、注册与请求映射不变。README 明确 picker 名称与请求 effort 的区别。
+
+test/metadata-priority.test.ts 新增冻结 GPT 与现有 e2e-messages 回归，两条在旧实现均失败，修复后与 diagnostics/audit 相关36项全部通过。真实 Pi 脚本新增16项 audit/picker 一致性、GPT 诊断 off、Messages 诊断/audit off，并验证原始映射不变；原63请求验收保留。完整门禁与不可变新候选的真实安装结果以 PR #55 最新 HEAD 的 CI checks 和审查描述为准，不将旧候选结果当作新 HEAD 证据。
+
 ## Review 边界
 
 PR #55 交代码Review，不合并、不打tag、不发布；任务5.2/5.3等待归档/授权合并与finish。未修改历史archive。

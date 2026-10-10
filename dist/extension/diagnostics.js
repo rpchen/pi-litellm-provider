@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { createLastKnownGoodStore } from "../core/index.js";
 import { getRuntimeIdentity, shortArtifactDigest, shortCoreCommit } from "./runtime-identity.js";
 /** Resolve (creating on first use) the endpoint-scoped publication controller. */
@@ -176,7 +177,7 @@ const STATUS_TEXT = {
     "config-error": "LiteLLM 地址配置无效",
     error: "发现失败",
 };
-/** Public metadata source and selectable reasoning levels from Core. */
+/** Public metadata source and selectable levels from the registered Pi model. */
 export function formatModelDetails(discovery, limit = 5, registered = [], lkgIDs = []) {
     const models = discovery?.models ?? [];
     if (models.length === 0)
@@ -185,7 +186,7 @@ export function formatModelDetails(discovery, limit = 5, registered = [], lkgIDs
     for (const model of models.slice(0, limit)) {
         const source = model.quality.metadataSource;
         const actual = registered.find((item) => item.id === model.id);
-        const levels = actual ? Object.values(actual.thinkingLevelMap ?? {}).filter((value) => typeof value === "string") : model.publication.reasoningLevels;
+        const levels = actual ? getSupportedThinkingLevels({ ...actual, provider: "litellm", api: actual.api ?? "openai-completions", baseUrl: actual.baseUrl ?? "" }) : model.publication.reasoningLevels;
         const support = actual ? (actual.reasoning ? "supported" : "unsupported") : model.publication.reasoningState;
         const reasoning = support === "supported" ? (levels.length ? levels.join(",") : "支持，无可选档位") : support === "unsupported" ? "不支持" : "未知";
         const lkg = lkgIDs.includes(model.id);

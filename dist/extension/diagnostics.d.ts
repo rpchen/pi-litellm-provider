@@ -111,6 +111,6 @@ export declare function catalogNotice(summary: PublicationSummary | undefined): 
     readonly level: "info" | "warning";
     readonly message: string;
 } | undefined;
-/** Public metadata source and selectable reasoning levels from Core. */
+/** Public metadata source and selectable levels from the registered Pi model. */
 export declare function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit?: number, registered?: readonly ProviderModelConfigLike[], lkgIDs?: readonly string[]): string[];
 export declare function formatProviderDiagnostics(state: ProviderDiagnosticsState, now?: number, timezoneOffsetMinutes?: number): string;

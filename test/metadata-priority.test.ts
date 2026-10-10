@@ -8,6 +8,7 @@ import { toProviderModelsWithPublication, toProviderModels, reasoningForHost } f
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
 import { createProviderDiagnosticsState, formatProviderDiagnostics } from "../src/extension/diagnostics.ts"
 import { createAuditReport } from "../src/extension/audit.ts"
+import { officialCatalog } from "./fixtures/catalog.ts"
 
 const ROOT = "http://litellm.example:4000"
 const options = { contextTierCap: true, protocolOverrides: {} }
@@ -52,6 +53,40 @@ describe("restore-model-metadata-priority Pi [T01 T13 T28 T30]", () => {
 
 describe("Pi selected metadata and recovery [T16 T17 T18 T20 T22 T23 T31]", () => {
   const fetchImpl = async () => new Response(JSON.stringify(discovery), { status: 200 })
+  test("[T31] frozen GPT diagnostics and audit use picker off while preserving request effort none", async () => {
+    const expected = oracle.models.find((model) => model.id === "gpt-5.6-luna")!
+    const outcome = await discoverModels(config, "sk-test", undefined, { fetchImpl, loadModelsDevCatalog: async () => catalog })
+    const model = outcome.models.find((item) => item.id === expected.id)!
+    const state = createProviderDiagnosticsState()
+    state.current = { status: "ready", modelCount: 16, models: outcome.models, discovery: { ...outcome.diagnostics, models: outcome.diagnostics.models.filter((item) => item.id === model.id) } }
+    expect(formatProviderDiagnostics(state)).toContain(`${model.id} · configured · 来源 openai · 推理 ${expected.piLevels.join(",")}`)
+    const report = JSON.parse(JSON.stringify(createAuditReport([{ id: "default", providerId: "litellm", status: "ready", models: [model], discovery: outcome.diagnostics }])))
+    expect(report.endpoints[0].models[0].metadata.reasoningLevels).toEqual(expected.piLevels)
+    expect(report.endpoints[0].models[0].thinkingLevelMap).toEqual(model.thinkingLevelMap)
+    expect(report.endpoints[0].models[0].thinkingLevelMap.off).toBe("none")
+  })
+  test("[T31] Messages diagnostics and audit include the SDK picker off without adding map.off", async () => {
+    const messageCatalog = officialCatalog({ "anthropic/e2e-messages": {
+      name: "e2e-messages", tool_call: true, reasoning: true,
+      modalities: { input: ["text"], output: ["text"] }, limit: { context: 200000, output: 64000 },
+      reasoning_options: [{ type: "budget_tokens", max: 64000 }],
+    } })
+    const outcome = await discoverModels(config, "sk-test", undefined, {
+      fetchImpl: async () => new Response(JSON.stringify({ data: [{ model_name: "e2e-messages", litellm_params: { model: "anthropic/e2e-messages" } }] })),
+      loadModelsDevCatalog: async () => messageCatalog,
+    })
+    expect(outcome.models).toHaveLength(1)
+    const model = outcome.models[0]!
+    const picker = getSupportedThinkingLevels({ ...model, provider: "litellm", api: "anthropic-messages", baseUrl: ROOT })
+    expect(picker).toEqual(["off", "high", "max"])
+    const state = createProviderDiagnosticsState()
+    state.current = { status: "ready", modelCount: 1, models: outcome.models, discovery: outcome.diagnostics }
+    expect(formatProviderDiagnostics(state)).toContain("e2e-messages · configured · 来源 anthropic · 推理 off,high,max")
+    const report = JSON.parse(JSON.stringify(createAuditReport([{ id: "default", providerId: "litellm", status: "ready", models: outcome.models, discovery: outcome.diagnostics }])))
+    expect(report.endpoints[0].models[0].metadata.reasoningLevels).toEqual(picker)
+    expect(report.endpoints[0].models[0].thinkingLevelMap).toEqual(model.thinkingLevelMap)
+    expect(report.endpoints[0].models[0].thinkingLevelMap).not.toHaveProperty("off")
+  })
   test("bad/zero/missing prices and the old tier option never alter availability, limits or levels", async () => {
     const badPrices = structuredClone(catalog)
     for (const provider of Object.values(badPrices.providers)) for (const record of Object.values(provider.models)) Object.assign(record, { cost: { input: -1, output: "bad" } })
