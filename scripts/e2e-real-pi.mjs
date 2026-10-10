@@ -858,6 +858,10 @@ export default function bootstrapProbe(pi) {
     assert(request.url === path, id + ": wrong API path")
     const effort = request.body.reasoning_effort ?? request.body.reasoning?.effort
     nodeAssert.equal(effort, expectedEffort, id + ": request effort differs from selected option")
+    if (expectedEffort === undefined && protocol !== "messages") {
+      nodeAssert.equal(request.body.reasoning, undefined, id + ": undeclared reasoning parameters")
+      nodeAssert.equal(request.body.thinking, undefined, id + ": undeclared thinking parameters")
+    }
     if (protocol === "messages") assert(request.body.thinking?.type === "enabled", "Messages budget control missing")
     requestCount++
   }
@@ -875,6 +879,7 @@ export default function bootstrapProbe(pi) {
     await rpc.request({ type: "set_model", provider: "litellm", modelId: expected.id })
     const picker = (await rpc.request({ type: "get_available_thinking_levels" })).response.data.levels
     nodeAssert.deepEqual(picker, expected.piLevels, expected.id + ": extra/default picker levels")
+    if (picker.length === 0) await callModel(expected.id, "off", undefined, expected.protocol)
     for (const level of picker) await callModel(expected.id, level, level === "off" ? "none" : level, expected.protocol)
   }
   for (const [id, reasoning, picker, protocol] of [
