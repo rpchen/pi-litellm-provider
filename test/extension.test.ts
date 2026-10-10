@@ -120,8 +120,8 @@ describe("轮询生命周期", () => {
     }
 
     await handlers.get("session_start")![0]!({ type: "session_start", reason: "startup" }, ctx)
-    // session_start re-registers with the freshly resolved config.
-    expect(registrations.length).toBeGreaterThanOrEqual(2)
+    // session_start keeps an unchanged provider registration in place.
+    expect(registrations).toHaveLength(1)
 
     // Poll interval is 30s; nothing fires synchronously.
     expect(refreshCalls).toBe(0)
