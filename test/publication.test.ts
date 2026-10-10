@@ -1,7 +1,6 @@
 import { officialCatalog } from "./fixtures/catalog.ts"
 import { describe, expect, test, afterEach } from "bun:test"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
-import { createLastKnownGoodStore, lastKnownGoodKey, PUBLICATION_SCHEMA_VERSION } from "../src/core/index.ts"
 import { resetModelsDevCacheForTest } from "../src/net/fetch.ts"
 import { discoverModels } from "../src/extension/discovery.ts"
 import {
@@ -19,6 +18,18 @@ import type { ProviderConfigLike, RefreshModelsContextLike } from "../src/extens
 const BASE = "http://litellm.example:4000"
 const KEY = "sk-publication-secret"
 
+const COMPLETE_INFO = {
+  max_input_tokens: 100_000,
+  max_output_tokens: 10_000,
+  supports_function_calling: true,
+  supports_reasoning: false,
+  supports_vision: false,
+  supports_pdf_input: false,
+  supports_audio_input: false,
+  supports_video_input: false,
+  supports_audio_output: false,
+}
+
 function config(overrides: Partial<ExtensionConfig> = {}): ExtensionConfig {
   return {
     baseUrl: BASE,
@@ -33,47 +44,6 @@ function config(overrides: Partial<ExtensionConfig> = {}): ExtensionConfig {
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
-}
-
-const COMPLETE_INFO = {
-  max_input_tokens: 100_000,
-  max_output_tokens: 10_000,
-  supports_function_calling: true,
-  supports_reasoning: false,
-  supports_vision: false,
-  supports_pdf_input: false,
-  supports_audio_input: false,
-  supports_video_input: false,
-  supports_audio_output: false,
-}
-
-/** Core capability gate: v7 tests pin legacy selection semantics, v8 tests pin the canonical catalog. */
-const CORE_V8 = (PUBLICATION_SCHEMA_VERSION as number) === 8
-const itV7 = CORE_V8 ? test.skip : test
-const itV8 = CORE_V8 ? test : test.skip
-
-const COMPLETE_BODY = {
-  data: [
-    {
-      model_name: "pub-complete",
-      litellm_params: { model: "openai/pub-complete" },
-      model_info: { mode: "chat", ...COMPLETE_INFO },
-    },
-  ],
-}
-
-const COMPLETE_CATALOG = {
-  openai: {
-    models: {
-      "pub-complete": {
-        id: "pub-complete",
-        limit: { context: 100_000, output: 10_000 },
-        tool_call: true,
-        reasoning: false,
-        modalities: { input: ["text"], output: ["text"] },
-      },
-    },
-  },
 }
 
 const INCOMPLETE_BODY = {
@@ -102,11 +72,11 @@ describe("publication mapping", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       limit: { context: 1000, input: 1000, output: 100 },
     }
-    // Supported without levels: reasoning-capable, no level map.
+    // Supported without levels remains reasoning-capable.
     expect(reasoningForHost({ ...base, variants: [], reasoningSupported: "supported" })).toBeTrue()
     expect(reasoningForHost({ ...base, variants: [], reasoningSupported: "unsupported" })).toBeFalse()
     expect(reasoningForHost({ ...base, variants: [], reasoningSupported: "unknown" })).toBeFalse()
-    // Legacy specs without the verdict keep variant-count inference.
+    // Missing verdicts stay unknown even if variants exist.
     expect(reasoningForHost({ ...base, variants: [] })).toBeFalse()
     expect(reasoningForHost({ ...base, variants: [{ id: "high", settings: {} }] })).toBeFalse()
   })
@@ -162,13 +132,6 @@ describe("publication discovery: partial catalog", () => {
     modalities: { input: ["text"], output: ["text"] },
   })
 
-  /**
-   * Era-aware blocking catalog. The frozen Core v8 needs canonical registry
-   * entries for the private `custom/*` wire ids (G30: a LiteLLM-only group can
-   * no longer publish); the bare `shared` id additionally matches two registry
-   * entries, keeping it blocked. The legacy provider map keeps the same three
-   * blockers through its own selection rules.
-   */
   function ambiguousCatalog(withheldRecovered = false): unknown {
     const models: Record<string, Record<string, unknown>> = {}
     for (let index = 0; index < 17; index += 1) models[`custom/ok-${index}`] = registryEntry()
@@ -212,7 +175,7 @@ describe("publication discovery: partial catalog", () => {
       fetchImpl: async () => jsonResponse(200, catalogBody()),
       // The catalog is injected per round through the adapter's documented test
       // seam: the production TTL cache intentionally reuses one snapshot, and the
-      // v8 recovery is precisely a NEW catalog gaining a complete registry entry.
+      // Recovery supplies a complete API record in the next catalog.
       loadModelsDevCatalog: async () => ambiguousCatalog(),
       logger: silent,
       publication: { store: controller.store, previouslyPublished: controller.previouslyPublished },

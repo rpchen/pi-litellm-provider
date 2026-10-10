@@ -1,11 +1,8 @@
 # publication Specification
 
 ## Purpose
-Pi consumes the Core trustworthy-publication verdicts without
-reimplementing policy: only configured, LKG-configured, or explicitly
-degraded models register; everything else stays diagnosable; reasoning
-follows the Core verdict; failures never produce pseudo-complete
-models.
+
+Pi 消费 Core 的 configured/configured-lkg 结果，准确注册能力、限制与明确推理档位；其他模型保留具体诊断。价格不决定发布、能力或缓存恢复。
 
 ## Requirements
 

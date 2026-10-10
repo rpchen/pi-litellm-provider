@@ -48,7 +48,8 @@ async function startFakeLiteLLM(name, initialKey, models) {
   const server = createServer(async (req, res) => {
     const apiKey = state.apiKey
     const authorization = req.headers.authorization ?? ""
-    const captured = { method: req.method, url: req.url, authorization }
+    const requestPath = new URL(req.url, "http://127.0.0.1").pathname
+    const captured = { method: req.method, url: requestPath, authorization }
     requests.push(captured)
 
     // [REAL-HOST-E2E] An injected outage must surface as a metadata failure
@@ -59,18 +60,18 @@ async function startFakeLiteLLM(name, initialKey, models) {
       return
     }
 
-    if (req.method === "POST" && ["/v1/chat/completions", "/v1/responses", "/v1/messages"].includes(req.url)) {
+    if (req.method === "POST" && ["/v1/chat/completions", "/v1/responses", "/v1/messages"].includes(requestPath)) {
       assert(authorization === `Bearer ${apiKey}` || req.headers["x-api-key"] === apiKey, "request credential mismatch")
       let raw = ""
       for await (const chunk of req) raw += chunk
       captured.body = JSON.parse(raw)
       res.writeHead(200, { "content-type": "text/event-stream" })
       const event = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`)
-      if (req.url === "/v1/responses") {
+      if (requestPath === "/v1/responses") {
         const response = { id: "resp_e2e", object: "response", status: "completed", model: captured.body.model, output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }
         event({ type: "response.created", response: { ...response, status: "in_progress" } })
         event({ type: "response.completed", response })
-      } else if (req.url === "/v1/messages") {
+      } else if (requestPath === "/v1/messages") {
         for (const data of [
           { type: "message_start", message: { id: "msg_e2e", type: "message", role: "assistant", model: captured.body.model, content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
           { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
@@ -851,6 +852,7 @@ export default function bootstrapProbe(pi) {
     const requests = defaultServer.requests.slice(start).filter(request => request.method === "POST")
     assert(requests.length === 1, id + ": real host must send exactly one request")
     const request = requests[0]
+    assert(request.body, id + ": SDK request reached an unexpected path " + request.url)
     assert(request.body.model === id, "request must retain original model_name")
     const path = protocol === "responses" ? "/v1/responses" : protocol === "messages" ? "/v1/messages" : "/v1/chat/completions"
     assert(request.url === path, id + ": wrong API path")

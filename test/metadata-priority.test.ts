@@ -3,9 +3,9 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai"
 import discovery from "./fixtures/metadata-priority/synthetic-discovery.json" with { type: "json" }
 import catalog from "./fixtures/metadata-priority/modelsdev-subset.json" with { type: "json" }
 import oracle from "./fixtures/metadata-priority/expected-16.json" with { type: "json" }
-import { buildPublicationResult, createLastKnownGoodStore, type ModelSpec } from "../src/core/index.ts"
+import { buildPublicationResult, createLastKnownGoodStore, createDiscoverySnapshot, endpointFingerprint, type ModelSpec } from "../src/core/index.ts"
 import { toProviderModelsWithPublication, toProviderModels, reasoningForHost } from "../src/extension/map.ts"
-import { discoverModels } from "../src/extension/discovery.ts"
+import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
 import { createProviderDiagnosticsState, formatProviderDiagnostics } from "../src/extension/diagnostics.ts"
 import { createAuditReport } from "../src/extension/audit.ts"
 
@@ -69,6 +69,9 @@ describe("Pi selected metadata and recovery [T16 T17 T18 T20 T22 T23 T31]", () =
     const second = await discoverModels(config, "sk-test", undefined, { fetchImpl: async () => new Response(JSON.stringify(changed)), loadModelsDevCatalog: async () => { throw new Error("catalog outage") }, publication: { store } })
     expect(second.models).toEqual(first.models)
     expect(second.publication.lkgIDs).toHaveLength(16)
+    const state = createProviderDiagnosticsState()
+    state.current = { status: "ready", modelCount: 16, models: second.models, discovery: second.diagnostics, publication: second.publication }
+    expect(formatProviderDiagnostics(state)).toContain("deepseek-v4.1-flash · configured-lkg · 来源 前次配置 · 推理 low,high,max")
     const removed = await discoverModels(config, "sk-test", undefined, { fetchImpl: async () => new Response('{"data":[]}'), loadModelsDevCatalog: async () => catalog, publication: { store } })
     expect(removed.models).toEqual([])
   })
@@ -86,5 +89,27 @@ describe("Pi selected metadata and recovery [T16 T17 T18 T20 T22 T23 T31]", () =
     expect(report).toContain('"recordKey":"deepseek-flash"')
     expect(report).toContain('"canonicalID":"deepseek/deepseek-v4.1-flash"')
     for (const output of [text, report]) for (const secret of ["sk-injected-audit-secret", "http://private.invalid", "private/secret-route"]) expect(output).not.toContain(secret)
+  })
+})
+
+describe("Pi schema2 restore-only [T19 T21 T32]", () => {
+  const snapshot = () => createDiscoverySnapshot(endpointFingerprint({ baseUrl: ROOT, credentialKey: "sk-test", buildOptions: options }), result.publishable.map((entry) => entry.spec))
+  const restore = async (value: unknown, overrides = {}) => refreshProviderModels({ ...config, ...overrides }, {
+    allowNetwork: false, credential: { key: "sk-test" }, stored: { models, snapshot: value },
+  }, { fetchImpl: async () => { throw new Error("restore-only must not fetch") }, logger: { warn() {}, error() {} } })
+  test("bad prices become zero; tier option changes preserve endpoint scope", async () => {
+    const saved = snapshot()
+    for (const model of saved.models) Object.assign(model.cost, { input: -1, output: "bad", cacheRead: NaN, cacheWrite: Infinity })
+    const restored = await restore(saved, { contextTierCap: false })
+    expect(restored).toHaveLength(16)
+    expect(restored.map(({ cost, ...model }) => model)).toEqual(models.map(({ cost, ...model }) => model))
+    expect(restored.every((model) => Object.values(model.cost).every((value) => value === 0))).toBeTrue()
+  })
+  test("old policy, corrupt critical configuration and a different protocol scope are rejected", async () => {
+    expect(await restore({ ...snapshot(), schemaVersion: 1 })).toEqual([])
+    const corrupt = snapshot()
+    corrupt.models[0]!.limit.context += 1
+    expect(await restore(corrupt)).toEqual([])
+    expect(await restore(snapshot(), { protocolOverrides: { "deepseek-v4-pro": "responses" } })).toEqual([])
   })
 })

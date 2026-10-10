@@ -326,16 +326,18 @@ const STATUS_TEXT: Readonly<Record<ProviderDiagnosticStatus, string>> = {
 }
 
 /** Public metadata source and selectable reasoning levels from Core. */
-export function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit = 5): string[] {
+export function formatModelDetails(discovery: DiscoveryDiagnostics | undefined, limit = 5, registered: readonly ProviderModelConfigLike[] = [], lkgIDs: readonly string[] = []): string[] {
   const models = discovery?.models ?? []
   if (models.length === 0) return []
   const lines = ["模型明细："]
   for (const model of models.slice(0, limit)) {
     const source = model.quality.metadataSource
-    const reasoning = model.publication.reasoningState === "supported"
-      ? (model.publication.reasoningLevels.length ? model.publication.reasoningLevels.join(",") : "支持，无可选档位")
-      : model.publication.reasoningState === "unsupported" ? "不支持" : "未知"
-    lines.push(`${model.id} · ${model.publication.status} · 来源 ${source ? source.providerID : "未匹配"} · 推理 ${reasoning}`)
+    const actual = registered.find((item) => item.id === model.id)
+    const levels = actual ? Object.values(actual.thinkingLevelMap ?? {}).filter((value): value is string => typeof value === "string") : model.publication.reasoningLevels
+    const support = actual ? (actual.reasoning ? "supported" : "unsupported") : model.publication.reasoningState
+    const reasoning = support === "supported" ? (levels.length ? levels.join(",") : "支持，无可选档位") : support === "unsupported" ? "不支持" : "未知"
+    const lkg = lkgIDs.includes(model.id)
+    lines.push(`${model.id} · ${lkg ? "configured-lkg" : model.publication.status} · 来源 ${lkg ? "前次配置" : source ? source.providerID : "未匹配"} · 推理 ${reasoning}`)
   }
   if (models.length > limit) lines.push(`……另有 ${models.length - limit} 个模型`)
   return lines
@@ -387,7 +389,7 @@ export function formatProviderDiagnostics(
   }
 
   lines.push(...formatPublicationSummary(snapshot.publication))
-  lines.push(...formatModelDetails(snapshot.discovery))
+  lines.push(...formatModelDetails(snapshot.discovery, 5, snapshot.models, snapshot.publication?.lkgIDs))
 
   if (snapshot.note) lines.push(`说明：${snapshot.note}`)
   lines.push(`Core：${build.coreBranch}@${build.coreSHA}`)
