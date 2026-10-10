@@ -28,15 +28,18 @@ function setup(config?: unknown, extra: {
   if (extra.activation !== undefined) writeFileSync(file("litellm.activation.json"), JSON.stringify(extra.activation))
 
   const registered = new Map<string, ProviderConfigLike>()
+  const registrationCalls: Array<{ name: string; config: ProviderConfigLike }> = []
   const commands = new Map<string, (args: string, ctx: any) => Promise<void>>()
   const refreshes: string[][] = []
   const api = {
     registerProvider: (name: string, value: ProviderConfigLike) => {
-      // Test seam: the sentinel makes the host reject provider registration (post-commit sync failure).
-      if (existsSync(file("fail-register"))) throw new Error("host rejected provider registration")
+      registrationCalls.push({ name, config: value })
       registered.set(name, value)
     },
-    unregisterProvider: (name: string) => { registered.delete(name) },
+    unregisterProvider: (name: string) => {
+      if (existsSync(file("fail-unregister"))) throw new Error("host rejected provider unregistration")
+      registered.delete(name)
+    },
     registerCommand: (name: string, value: { handler: (args: string, ctx: any) => Promise<void> }) => { commands.set(name, value.handler) },
     on: () => () => {},
   } as unknown as ExtensionAPI
@@ -74,7 +77,7 @@ function setup(config?: unknown, extra: {
   }
   const json = (name: string) => JSON.parse(readFileSync(file(name), "utf8"))
   const jsonOr = (name: string, fallback: unknown) => (existsSync(file(name)) ? json(name) : fallback)
-  return { agentDir, file, json, jsonOr, run, registered, log, notes, refreshes }
+  return { agentDir, file, json, jsonOr, run, registered, registrationCalls, log, notes, refreshes }
 }
 
 const TWO = {
@@ -326,20 +329,26 @@ describe("endpoint management: add rollback", () => {
   test("[ADD-ROLLBACK] config committed but the runtime reload fails: activation stays materialised (never back to 'all') and the message says saved-but-reload-failed", async () => {
     const t = setup(TWO, {
       activation: { mode: "all" },
-      write: { beforeCommit: () => writeFileSync(t.file("fail-register"), "1") },
+      write: {
+        beforeCommit: () => {
+          // Simulate a concurrent deactivation after Add pinned the old active set.
+          writeFileSync(t.file("litellm.activation.json"), JSON.stringify({ mode: "selected", endpointIds: [] }))
+          writeFileSync(t.file("fail-unregister"), "1")
+        },
+      },
     })
     await t.run("", [{ select: "＋ 新增 endpoint" }, { input: "lab" }, { input: "https://lab.example" }, { select: undefined }])
     expect(t.json("litellm.json").endpoints.lab).toEqual({ baseUrl: "https://lab.example" }) // the config write IS committed
     // not rolled back to "all" — that would auto-activate lab on the next rebuild
-    expect(t.json("litellm.activation.json")).toEqual({ mode: "selected", endpointIds: ["default", "company"] })
+    expect(t.json("litellm.activation.json")).toEqual({ mode: "selected", endpointIds: [] })
     expect(t.registered.has("litellm-lab")).toBe(false) // lab stays inactive
     const last = t.notes.at(-1)!
     expect(last.type).toBe("error")
     expect(last.message).toContain("配置已保存")
     expect(last.message).toContain("运行时重新加载失败")
-    expect(last.message).toContain("host rejected provider registration")
+    expect(last.message).toContain("host rejected provider unregistration")
     // next reload/rebuild succeeds: the committed endpoint is listed, still inactive
-    rmSync(t.file("fail-register"))
+    rmSync(t.file("fail-unregister"))
     await t.run("", [{ select: undefined }])
     expect(t.log.at(-1)!.options).toContain("○ lab · 未启用 · 未保存 API Key")
   })
@@ -433,6 +442,26 @@ describe("endpoint management: credentials", () => {
 })
 
 describe("endpoint management: activation", () => {
+  test("[ACT-STABLE-REGISTRATION] all refreshes stable providers without replacing them; an external Base URL edit replaces only its provider", async () => {
+    const t = setup(TWO, { auth: AUTH_BOTH, activation: { mode: "all" } })
+    const initialRegistrations = t.registrationCalls.length
+    expect(t.registrationCalls.map(({ name }) => name)).toEqual(["litellm", "litellm-company"])
+
+    await t.run("all", [])
+    expect(t.registrationCalls).toHaveLength(initialRegistrations)
+    expect(t.refreshes.at(-1)).toEqual(["litellm", "litellm-company"])
+
+    const edited = t.json("litellm.json")
+    edited.endpoints.default.baseUrl = "https://changed.example"
+    writeFileSync(t.file("litellm.json"), JSON.stringify(edited))
+    const beforeEditSync = t.registrationCalls.length
+    await t.run("all", [])
+
+    expect(t.registrationCalls.slice(beforeEditSync).map(({ name }) => name)).toEqual(["litellm"])
+    expect(t.registered.get("litellm")?.baseUrl).toBe("https://changed.example")
+    expect(t.refreshes.at(-1)).toEqual(["litellm", "litellm-company"])
+  })
+
   test("[ACT-TOGGLE][ACT-IMMEDIATE][ACT-CRED-INDEPENDENT] deactivate unregisters at once and persists; credential and snapshot stay; activate registers again", async () => {
     const t = setup(TWO, { auth: AUTH_BOTH, store: { "litellm-company": { models: [1] } } })
     await t.run("", [{ select: /company/ }, { select: "停用" }, { select: "启用" }, { select: "返回" }, { select: undefined }])

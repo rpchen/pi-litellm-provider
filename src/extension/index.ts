@@ -157,6 +157,7 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
   let activation = internals.activation ?? loadActivation(activationFile)
   const diagnostics = new Map<string, ProviderDiagnosticsState>()
   const registered = new Set<string>()
+  const registeredBaseUrls = new Map<string, string>()
   const pollStops = new Map<string, () => void>()
   // Canonical endpoint state — the source of truth every user-visible surface derives from.
   const endpointStates = new Map<string, EndpointState>()
@@ -215,6 +216,7 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
       if (next.has(endpointId)) continue
       pi.unregisterProvider(providerIdForEndpoint(endpointId))
       registered.delete(endpointId)
+      registeredBaseUrls.delete(endpointId)
       pollStops.get(endpointId)?.()
       pollStops.delete(endpointId)
       setProviderDiagnostics(stateFor(endpointId), { status: "inactive", modelCount: 0, models: [] })
@@ -240,18 +242,23 @@ export default function piLitellmProvider(pi: ExtensionAPI, internals: FactoryIn
       // — refreshModels will return [] and the canonical state stays truthful.
       const currentCredential = resolveCredential(endpointId)
       const hasCredential = currentCredential === "stored" || currentCredential === "environment"
-      // Sync always re-registers so provider config picks up any definition change.
-      // The Pi host treats registerProvider on an existing id as a replace.
-      register(pi, endpointId, buildProviderConfig(
-        () => registry.endpoints[endpointId]!,
-        {
-          ...internals.deps,
-          appliedWriter: (next) => setApplied(endpointId, next),
-        },
-        stateFor(endpointId),
-        endpointId,
-      ))
-      registered.add(endpointId)
+      const baseUrl = normalizedProviderBaseUrl(endpoint.baseUrl)
+      if (!registered.has(endpointId) || registeredBaseUrls.get(endpointId) !== baseUrl) {
+        // Pi starts an asynchronous restore-only model refresh on registration.
+        // Re-registering an unchanged provider during an explicit refresh can
+        // supersede its network refresh while it is loading the same config.
+        register(pi, endpointId, buildProviderConfig(
+          () => registry.endpoints[endpointId]!,
+          {
+            ...internals.deps,
+            appliedWriter: (next) => setApplied(endpointId, next),
+          },
+          stateFor(endpointId),
+          endpointId,
+        ))
+        registered.add(endpointId)
+        registeredBaseUrls.set(endpointId, baseUrl)
+      }
       // After registerProvider returns, the endpoint is applied to the host runtime
       // (registry is visible). Discovery outcome is reported separately via refresh.
       const existingApplied = endpointStates.get(endpointId)?.applied

@@ -15,7 +15,7 @@ pi install git:github.com/rpchen/pi-litellm-provider
 锁定当前发行版：
 
 ```bash
-pi install git:github.com/rpchen/pi-litellm-provider#v0.9.0
+pi install git:github.com/rpchen/pi-litellm-provider#v0.10.0
 ```
 
 要求：Pi `>=0.87.1`；LiteLLM 地址使用 `http://` 或 `https://`；API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型。
@@ -189,7 +189,7 @@ Runtime Identity 是当前正在运行的扩展 artifact 自身的不可变身�
 ```text
 Runtime Identity
 
-Plugin Version   0.9.0
+Plugin Version   0.10.0
 Artifact         937e9377
 Core Commit      649bc84f
 ```
@@ -279,6 +279,7 @@ pi --list-models litellm
 
 - 连接 Key、启用/停用互相独立：连接不会自动启用，断开不会自动停用；未启用的 endpoint 也可以连接、替换、断开 Key。停用不会删除 Key 和缓存。
 - 这里保存的 Key 与 `/login` 是**同一份**宿主凭据（`auth.json`），两边看到的状态一致。Pi 扩展的输入框不会遮罩，输入 Key 时屏幕上可见；不想在屏幕上输入时请用 `/login`。
+- `/litellm-endpoints all` 会启用全部 endpoint 并立即强制刷新；恢复后的诊断会显示本轮在线探测结果。
 - 管理中心改的是 `~/.pi/agent/litellm.json`，它仍是唯一的 endpoint 配置，你也可以继续手工编辑；下次打开管理中心会看到文件里的真实状态。文件必须是合法 JSON，无法解析时管理中心会拒绝写入并提示，不会覆盖你的文件。
 - 只有一个 endpoint 且使用旧的顶层 `baseUrl` 配置时，新增第二个 endpoint 会先请你确认，然后把现有地址迁移到 `endpoints.default`（provider、Key、缓存不变）。地址来自环境变量 `LITELLM_BASE_URL` 时，修改/删除前也需要这次迁移；删除的迁移包含在最终删除确认里（确认后先迁移再立即删除），**取消删除不留任何改动**。
 - 通过管理中心新增 endpoint 后，启用状态会固定为“明确选择的集合”；之后手工写进文件的新 endpoint 需要在管理中心里启用。
@@ -336,6 +337,7 @@ pi remove git:github.com/rpchen/pi-litellm-provider
 
 开发、构建、测试、OpenSpec 和共享 Core 说明请看：
 
+- [v0.10.0 release notes](docs/releases/v0.10.0.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [litellm-discovery-core](https://github.com/rpchen/litellm-discovery-core)
 - [验收记录](docs/research/acceptance-notes.md)

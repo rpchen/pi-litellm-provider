@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-10
+goal: Refresh model diagnostics to the live endpoint after failure recovery
+  while preserving required registration updates.
