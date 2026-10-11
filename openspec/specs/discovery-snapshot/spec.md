@@ -5,21 +5,6 @@ Defines how Pi persists, restores, validates, and republishes endpoint-bound dis
 
 ## Requirements
 
-### Requirement: endpoint-compatible restore
-Pi SHALL restore persisted discovery data only when Core accepts the stored snapshot for the current endpoint fingerprint.
-
-#### Scenario: compatible restore
-- **WHEN** restore runs without network access and the stored snapshot matches the current endpoint, credential, and discovery options
-- **THEN** Pi rebuilds the provider model list from the neutral stored snapshot
-
-#### Scenario: credential-bound incompatible restore
-- **WHEN** the host supplies a credential and the full endpoint fingerprint no longer matches
-- **THEN** Pi returns no restored models rather than replaying the old catalog
-
-#### Scenario: restore phase without credential
-- **WHEN** the host omits the credential during restore-only startup
-- **THEN** Pi restores only when the persisted anonymous URL/options scope matches and Core validates the snapshot's schema and model fingerprint
-
 ### Requirement: snapshot persistence
 A successful network discovery SHALL persist the Core discovery snapshot alongside Pi's host-facing model list.
 
@@ -44,3 +29,18 @@ Pi SHALL NOT create a separate filesystem cache for PR6 snapshots.
 #### Scenario: persistence transport
 - **WHEN** Pi stores or restores the snapshot
 - **THEN** it uses the existing provider `stored` / `publish` lifecycle surface
+
+### Requirement: Pi current-policy snapshot restore
+Pi SHALL 仅在Core接受schema2及关键完整性、endpoint/credential/结果相关scope一致时恢复中立模型；contextTierCap与price不决定scope或可用性。保持restore-only无网络，以及宿主省略credential时现有匿名URL/options scope和activation检查；有credential时必须匹配完整scope。 旧schema不恢复；价格错误由Core归零，关键损坏仍拒绝。
+
+#### Scenario: [T19] 旧策略不回放
+- **WHEN** 只有schema1快照
+- **THEN** 等待成功刷新重建，不暴露旧空档位/cap
+
+#### Scenario: [T21] scope不兼容
+- **WHEN** credential、endpoint或协议选项改变
+- **THEN** 不恢复旧模型
+
+#### Scenario: [T19] 价格损坏
+- **WHEN** 关键配置与指纹合法但cost损坏
+- **THEN** 恢复能力并显示参考价0

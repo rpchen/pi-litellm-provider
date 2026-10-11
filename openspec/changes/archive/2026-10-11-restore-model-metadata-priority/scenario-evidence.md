@@ -34,3 +34,16 @@
 | publication | Host handling of metadata outages | [T16] 价格故障 | test/metadata-priority.test.ts — bad/zero/missing prices; scripts/e2e-real-pi.mjs price-error refresh | PASS |
 | publication | Host handling of metadata outages | [T20] 模型已删除 | test/metadata-priority.test.ts — deletion removes it; scripts/e2e-real-pi.mjs successful empty/delete | PASS |
 | shared-core-build | Pi single Core implementation | [T34] 新行为与固定SHA | bun run verify:dist + test:package; dist/core-provenance.json cf797e953eb1f6de8e7c3e0fd5e98094398c26f9 | PASS |
+
+## 合并后 main SHA 与真实宿主收尾证据（2026-10-11）
+
+Pi #55 审核通过的 HEAD `11d07bdc5e1bdf126b6d56133a06bf6696af667b` 以 squash 合并为 `6007c4b5d5588ad2dfa14d1577c00df7ce74d844`。该 main SHA 的 [完整 CI run 38101305088](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088) 和 [main index publication run 38101401299](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101401299) 均 SUCCESS；随后 `finish_codebase_task` 核对本地 main、索引 commit 与不可变远端 snapshot SHA-256 一致，状态 READY。
+
+| Scenario | 已合并 main SHA 证据 | 结果 |
+|---|---|---|
+| T28：同一 Core SHA 和模型 fixture | [Real Pi 0.87.1 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088/job/114357613117)；dist provenance `cf797e953eb1f6de8e7c3e0fd5e98094398c26f9` | PASS |
+| T29：真实注册、picker与推理请求 | [Real Pi 0.87.1 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088/job/114357613117) | 16/16模型配置通过，63个实际 SDK 请求通过；未声明档位不出现，也无默认思考档位泄漏 |
+| T30：宿主能力及operational limits | [Real Pi 0.87.1 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088/job/114357613117) | PASS |
+| T31：Core→state→diagnostics/notify→实际请求 | [Real Pi 0.87.1 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088/job/114357613117) | PASS |
+| T32：scope、重启、恢复与凭据隔离 | [Real Pi 0.87.1 E2E](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088/job/114357613117) | PASS |
+| T34：固定 provenance、分发与独立消费 | [Pi CI](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088/job/114357613022) | `verify:dist`、package与完整 CI PASS；Core provenance 保持固定SHA |

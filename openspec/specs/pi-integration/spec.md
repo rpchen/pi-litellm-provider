@@ -16,17 +16,6 @@
 - **WHEN** 没有任何连接信息时启动 pi
 - **THEN** 扩展从已提交产物正常加载，不出现加载错误，LiteLLM 下没有可用模型
 
-### Requirement: 模型配置满足 pi 的字段要求
-注册的每个模型 SHALL 提供 pi `ProviderModelConfig` 要求的字段：`id`、`name`、按协议的 `api` id、`reasoning`、`input`（text/image）、`cost`（input/output/cacheRead/cacheWrite）、`contextWindow`、`maxTokens`，以及有推理档位时的 `thinkingLevelMap`。字段值 SHALL 与 model-discovery 能力的判定结果一致。
-
-#### Scenario: 完整字段
-- **WHEN** 发现得到一个带推理档位的 Responses 模型
-- **THEN** 注册配置包含 api `openai-responses`、非空 thinkingLevelMap、与发现结果一致的 cost 与 contextWindow
-
-#### Scenario: 无推理档位的模型
-- **WHEN** 发现得到一个没有 reasoning_options 的模型
-- **THEN** 注册配置的 reasoning 为 false 且不带 thinkingLevelMap
-
 ### Requirement: 本地与远程安装都能加载
 扩展 SHALL 在本地开发加载（`pi -e ./extensions/index.ts`）与远程安装（`pi install git:github.com/rpchen/pi-litellm-provider`）两种方式下完成注册；发布清单 MUST 包含 `extensions` 入口和 `dist` 编译产物，即使安装时禁用 lifecycle scripts 也能加载。运行时代码 MUST 只依赖 peer 依赖 `@earendil-works/pi-ai` 与 `@earendil-works/pi-coding-agent`（由宿主环境提供），MUST NOT 依赖安装机器上不存在的文件路径（如平级仓库或构建缓存）。
 
@@ -64,3 +53,13 @@
 - **WHEN** 通过真实 Pi command 依次执行全部启用、全部停用和只启用 default
 - **THEN** `get_available_models` 的 LiteLLM provider/model 集合立即对应变化，并持久化选择后的 activation 状态
 
+### Requirement: Pi explicit model capability mapping
+Pi SHALL 提供宿主要求的id/name/api/input/cost/contextWindow/maxTokens并以Core明确reasoning verdict设置reasoning。支持无档位不得设false或省略map导致默认档位；unsupported为false；关键未知不得注册。
+
+#### Scenario: [T29] 支持无档位
+- **WHEN** 真实Pi接收supported与空variants
+- **THEN** true且显式隐藏所有额外effort档位
+
+#### Scenario: [T14] 不支持推理
+- **WHEN** Core明确unsupported
+- **THEN** false且不带推理请求设置

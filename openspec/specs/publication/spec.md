@@ -6,93 +6,50 @@ Pi 消费 Core 的 configured/configured-lkg 结果，准确注册能力、限�
 
 ## Requirements
 
-### Requirement: Publication partition governs registration
-The extension SHALL register only models Core reports as `configured` or `configured-lkg`, and SHALL keep every other discovered model out of Pi registration with its status and complete reason list visible in diagnostics. No user confirmation, acceptance, or override exists or may be added: a withheld model cannot be moved into the published set by any Pi action.
+### Requirement: Current Core configuration cache
+Pi SHALL 从同一Core resolution best-effort捕获schema9内存LKG，不复制兼容算法；持久化中立snapshot为schema2。旧schema经成功发现重建，seeding/存储失败不得使成功发现失败。
 
-#### Scenario: Complete models register normally
-- **WHEN** discovery returns Core-configured models
-- **THEN** they register with correct limits, input, cost, and protocol mapping
+#### Scenario: [T19] 策略迁移
+- **WHEN** 存在8/1旧条目且目录中断
+- **THEN** 不回放旧策略；成功刷新后捕获9/2
 
-#### Scenario: Incomplete models never disguise as normal
-- **WHEN** a discovered model is missing limits or has unknown key capabilities
-- **THEN** it does not register and diagnostics names its status plus missing/unknown/illegal fields
+### Requirement: Core publication controls host registration
+Pi SHALL 仅注册Core configured/configured-lkg，完整保留原ID、limits、capabilities、variants与参考cost。其他模型保留具体诊断；禁止确认/acceptance把withheld转成published。有限正context/output守卫继续存在。低优先LL描述差异不否定Core固定来源选择。
 
-#### Scenario: Operational guard stays as second layer
-- **WHEN** any spec with non-positive context or output reaches the host mapper
-- **THEN** it is excluded from registration regardless of publication state
+#### Scenario: [T01] 完整16模型
+- **WHEN** Core处理固定16项返回配置
+- **THEN** 逐字段等于Core oracle，DeepSeekFlash输出393216
 
-#### Scenario: Repeated refreshes never force a withheld model in
-- **WHEN** a withheld model is refreshed repeatedly and no user action is taken
-- **THEN** every refresh returns the same withheld result; there is no command, flag, or stored state that changes it
+#### Scenario: [T03] 合法后备记录
+- **WHEN** Core采用OpenCode/OpenRouter且LL描述不同
+- **THEN** 照常消费，不要求证明实际provider
 
-#### Scenario: DeepSeek official provider limits reach the Pi host config
-- **WHEN** the endpoint serves `deepseek-v4.1-flash` (descriptive `model_info` output cap 384000/393216-class values) and the Core publication resolves the canonical identity `deepseek/deepseek-v4.1-flash` to the official `deepseek` provider record (`selectionSource: canonical-original`, `limit.output = 393216`)
-- **THEN** the registered Pi model maps `spec.limit.context` to `contextWindow` and `spec.limit.output` to `maxTokens` with `maxTokens = 393216`, never the OpenRouter reseller serving limit `943718`
+#### Scenario: [T30] 非法关键上限
+- **WHEN** 不正或非有限context/output误入mapper
+- **THEN** 不注册
 
-#### Scenario: Reseller fallback conflicts stay withheld
-- **WHEN** no official provider record is provable and the fallback-selected OpenRouter record's serving limit conflicts with the endpoint's own declarations
-- **THEN** the model is withheld, `maxTokens = 943718` never reaches Pi registration, and diagnostics report the unresolved conflict with the fallback serving evidence origin
+### Requirement: Pi reasoning support without implicit levels
+Pi SHALL 严格依Core verdict设置reasoning；supported且无档位使用全null thinkingLevelMap，unsupported为false，unknown或缺verdict不能用variants数量推断。
 
-#### Scenario: Fallback never rewrites the canonical identity
-- **WHEN** discovery selects an OpenCode or OpenRouter fallback record for a model whose deployment identity is `deepseek-v4.1-flash`
-- **THEN** the registered model id and candidate names remain the deployment's own identity (never `opencode/...` or `openrouter/...`)
+#### Scenario: [T29] 无档位不补默认
+- **WHEN** 真实Pi读取supported且空variants模型
+- **THEN** reasoning=true，picker无额外effort，请求不注入默认effort
 
-### Requirement: Reasoning follows the Core verdict
-The extension SHALL set the Pi `reasoning` flag from the Core
-`reasoningSupported` verdict, and SHALL report support-without-levels as
-reasoning-capable with no level map.
+#### Scenario: [T14] 不支持推理
+- **WHEN** Core明确unsupported
+- **THEN** reasoning=false，无推理参数
 
-#### Scenario: Toggle-style reasoning without levels
-- **WHEN** a model is reasoning-supported with no selectable levels
-- **THEN** it registers with `reasoning: true` and no `thinkingLevelMap`
+### Requirement: Host handling of metadata outages
+Pi SHALL 消费Core既有目录故障/合法LKG/withheld结果，保留source和age、retry与具体缺口；低优先描述及价格变化不是失效条件。只持久化publishable中立结果，保留既有auth、成功空清单、模型删除和scope隔离；内部route/base_model/deployment ID变化不得使同model_name缓存失效。
 
-#### Scenario: Confirmed non-reasoning model
-- **WHEN** Core reports reasoning unsupported
-- **THEN** the model registers with `reasoning: false` and no level map
+#### Scenario: [T18] catalog失败
+- **WHEN** Core允许同scope/model_name的有效关键配置LKG
+- **THEN** 继续注册并显示上次成功来源
 
-#### Scenario: Unknown reasoning blocks normal registration
-- **WHEN** Core reports reasoning unknown and no valid LKG snapshot exists
-- **THEN** the model does not register normally
+#### Scenario: [T16] 价格故障
+- **WHEN** 仅价格缺失或错误
+- **THEN** 不撤下，不触发能力regression
 
-### Requirement: Failures and LKG are visible and safe
-The extension SHALL classify metadata failures with the Core taxonomy,
-SHALL substitute only valid LKG snapshots (identity/schema/conflict
-checked by Core, never TTL-expired), and SHALL show live-vs-LKG
-selection, the LKG provenance and age, failure kind, and retry state in
-diagnostics. A descriptive LiteLLM metadata difference reported by Core
-as a resolved discrepancy SHALL NOT be presented as a failure and SHALL
-NOT discard a trusted snapshot.
-
-#### Scenario: Live failure with valid LKG
-- **WHEN** the metadata source fails but a provably belonging complete snapshot exists
-- **THEN** the model still registers with LKG provenance and diagnostics marks the LKG selection with age and reason
-
-#### Scenario: Live failure without valid LKG
-- **WHEN** no valid snapshot exists
-- **THEN** the model stays withheld with the failure kind and reason visible, and no default-filled model registers
-
-#### Scenario: Retry recovery
-- **WHEN** a retry fetch returns complete trustworthy metadata
-- **THEN** the model returns to normally configured state
-
-#### Scenario: Descriptive discrepancy keeps the trusted snapshot
-- **WHEN** Core reports a resolved discrepancy for a model that is otherwise served from LKG
-- **THEN** the model stays registered from the trusted snapshot and diagnostics shows both the discrepancy and the LKG provenance
-
-### Requirement: LKG 以 schema 8 同 resolution 派生
-
-扩展 SHALL 在 seeding 时把 live catalog 与 build options 透传给 Core，使 LKG
-条目由通过 gate 的同一 resolution 派生（`PUBLICATION_SCHEMA_VERSION = 8` 的
-group-wide proof composition）；seeding 保持 best-effort（try/catch，永不失败
-discovery）。内存中已存在的 v7 及更早条目 SHALL 被 Core 判不兼容（fail
-closed），下一轮 live 自动重捕获为 v8。Pi 不复制 proof 判定、不持久化 LKG 条目。
-
-#### Scenario: seeding 产出 v8 条目
-
-- **WHEN** 某模型本轮 `configured` 且 Core 为 schema 8
-- **THEN** store 中的条目 `schemaVersion` 为 8 且 `validateLastKnownGood` 对未变更的 live 输入通过
-
-#### Scenario: 旧条目 fail closed 后重捕获
-
-- **WHEN** store 中存在 v7 条目且 catalog 中断
-- **THEN** 本轮不恢复该条目；catalog 恢复后的首轮 live 自动捕获 v8 条目
+#### Scenario: [T20] 模型已删除
+- **WHEN** 成功live目录无该模型
+- **THEN** 不从快照恢复

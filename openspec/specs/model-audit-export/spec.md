@@ -50,3 +50,10 @@ Real Pi 0.87.1 E2E SHALL 真实安装 candidate 后验证：扩展加载成功�
 #### Scenario: [OUT-OF-SCOPE] 无时间戳与 Git 依赖
 - **WHEN** 检查构建产物与运行时行为
 - **THEN** 产物中无 `builtAt`，运行时无 Git 子进程与 `.git` 读取
+
+### Requirement: Metadata provenance audit
+Pi SHALL 在现有主动导出中以allowlist增加Core canonical ID、实际选中公开record key/provider、所选整记录来源、实际推理选项与快照来源。MUST NOT 复制raw LiteLLM/models.dev、route、URL、credential或任意扩展字段；报告保留实际注册值和原模型名，不自动导出。
+
+#### Scenario: [T23] 安全可追溯
+- **WHEN** 用户主动导出且原始输入藏有测试secret/URL/route
+- **THEN** 报告有公开元数据来源与真实注册档位，未从非允许字段复制敏感值

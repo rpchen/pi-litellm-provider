@@ -30,6 +30,6 @@ Review 证实默认诊断与 audit 的 metadata.reasoningLevels 错用 thinkingL
 
 test/metadata-priority.test.ts 新增冻结 GPT 与现有 e2e-messages 回归，两条在旧实现均失败，修复后与 diagnostics/audit 相关36项全部通过。真实 Pi 脚本新增16项 audit/picker 一致性、GPT 诊断 off、Messages 诊断/audit off，并验证原始映射不变；原63请求验收保留。完整门禁与不可变新候选的真实安装结果以 PR #55 最新 HEAD 的 CI checks 和审查描述为准，不将旧候选结果当作新 HEAD 证据。
 
-## Review 边界
+## 合并与收尾
 
-PR #55 交代码Review，不合并、不打tag、不发布；任务5.2/5.3等待归档/授权合并与finish。未修改历史archive。
+Pi #55 经代码 Review 的 HEAD `11d07bdc5e1bdf126b6d56133a06bf6696af667b` 已 squash 合并，main SHA 为 `6007c4b5d5588ad2dfa14d1577c00df7ce74d844`。该 exact main SHA 的完整 CI/真实 Pi 0.87.1 E2E [run 38101305088](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101305088) 与 main 索引发布 [run 38101401299](https://github.com/rpchen/pi-litellm-provider/actions/runs/38101401299) 均成功；`finish_codebase_task` 已确认源码 SHA 与不可变快照字节一致、状态 READY。最终宿主证据见 scenario-evidence.md。本次仅归档当前 change，未修改任何既有历史 archive；v0.10.1 版本 PR 与 tag/Release 为独立交付阶段。
