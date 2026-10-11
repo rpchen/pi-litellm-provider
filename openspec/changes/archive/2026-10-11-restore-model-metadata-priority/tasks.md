@@ -1,6 +1,6 @@
 # Tasks
 
-设计已获批准，Core #34 已授权 squash 合并并完成准确 merge SHA 的索引同步；宿主实施进入代码 Review 前验收。共享测试矩阵和16模型oracle位于Core同名change，具体Scenario映射在本仓库scenario-evidence.md。
+设计已获批准；Core #34 与宿主实施已完成 Review、合并和真实宿主验收。共享测试矩阵和16模型oracle位于Core同名change，具体Scenario映射与最终 main 证据见本仓库scenario-evidence.md。
 
 ## 1. 设计与依赖
 
@@ -28,7 +28,7 @@
 ## 5. 完成门禁
 
 - [x] 5.1 运行verify:dist、typecheck、bun test、test:package、test:e2e:pi和validate:spec、test:openspec-closure、test:release-metadata；记录具体命令、退出码及未执行项。
-- [ ] 5.2 仅实现和证据齐全后CLI archive新change，再strict/closure；PR依赖Core，不得自动合并。
-- [ ] 5.3 获授权合并后finish_codebase_task核对准确main/index字节；Release另行授权，固定provenance不得跟随新main重建。
+- [x] 5.2 实现和证据齐全后使用CLI archive新change，完成strict/closure；PR依赖Core并按本次授权与仓库门禁合入。
+- [x] 5.3 合并后finish_codebase_task核对准确main/index字节；Release作为独立阶段执行，固定provenance不跟随后续main重建。
 
-归档和授权合并后的 main/index 收尾仍待代码 Review 与合并阶段，不勾选 5.2/5.3。Core 对应宿主关闭任务保持未完成；历史 archive 不修改。
+收尾证据（2026-10-11）：Core #34 main SHA 为 cf797e953eb1f6de8e7c3e0fd5e98094398c26f9；Pi #55 经 Review 的 HEAD 11d07bdc5e1bdf126b6d56133a06bf6696af667b squash 合并为 main SHA 6007c4b5d5588ad2dfa14d1577c00df7ce74d844。该 SHA 的完整 CI/真实 Pi 0.87.1 E2E run 38101305088 与 main 索引发布 run 38101401299 均成功，finish_codebase_task READY；T28–T32最终证据见scenario-evidence.md。v0.10.1单独发版阶段保持dist固定Core provenance，不改冻结oracle或历史archive。

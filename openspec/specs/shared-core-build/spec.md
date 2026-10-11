@@ -39,9 +39,9 @@
 - **WHEN** 安装目录不存在 `../opencode-litellm-provider` 或任何 core 缓存
 - **THEN** Pi 扩展仍能加载并注册 provider
 
-### Requirement: core 逻辑单副本
-Pi 仓库 SHALL 删除独立维护的 `src/core/` 实现，适配层只能引用构建时获取的独立 core 公共 API；Pi 的 provider 注册、凭据解析、协议映射、模型能力映射和网络降级行为 MUST 与迁移前固定 fixtures 的结果一致。
+### Requirement: Pi single Core implementation
+Pi SHALL 仅通过固定SHA构建的Core公共入口消费宿主无关语义，不保留本地业务实现。固定fixtures SHALL 以经评审的新Core契约为预期，不能要求永久保留旧proof/cap错误；构建/安装隔离契约不变。
 
-#### Scenario: 固定 fixtures 行为一致
-- **WHEN** 使用相同的 LiteLLM `/v1/model/info` 与 models.dev 脱敏 fixtures 构建模型清单
-- **THEN** 迁移后模型 id、协议、输入能力、上下文/输出上限和推理档位与迁移前快照一致
+#### Scenario: [T34] 新行为与固定SHA
+- **WHEN** 构建获准合入的Core SHA
+- **THEN** 所有测试/编译来自同一SHA，实际16映射遵守新预期
