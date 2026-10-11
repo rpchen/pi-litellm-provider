@@ -93,4 +93,4 @@ Messages 的端点契约以 mock server + pi-ai 真实适配器验证（`test/me
 
 - [ ] design Open Question：LiteLLM 对 Anthropic Messages 的 `x-api-key` 头是否接受——待有真实 Messages 部署时补验（当前以 `test/messages-endpoint.test.ts` 的 mock + pi-ai 真实适配器固化契约；见 tasks 4.2 的显式豁免注记）
 
-> 任务 4.4（README 更新）已于 2026-09-26 完成，不再是待办。2026-09-26 独立评审的修复进度见 `openspec/changes/add-litellm-auto-discovery/tasks.md` 第 6 组。
+> 任务 4.4（README 更新）已于 2026-09-26 完成，不再是待办。2026-09-26 独立评审的修复进度见 `openspec/changes/archive/2026-09-26-add-litellm-auto-discovery/tasks.md` 第 6 组。

@@ -78,4 +78,4 @@
 
 ## 恢复模型元数据优先级（2026-10-10）
 
-用户批准 restore-model-metadata-priority 设计与 Core #34 squash 合并。Core main cf797e953eb1f6de8e7c3e0fd5e98094398c26f9 已通过完整 CI 与准确 SHA 索引发布/同步，Pi 与 OpenCode 构建共同固定此 SHA。旧 serving proof、部署交集、价格权威与价格 cap 规则由本 change 替代；Pi 明确 verdict 与全 null 无 effort 映射，无 SDK tools 字段时不伪造。真实 Pi 0.87.1 E2E 验证冻结 16 项注册/picker 与实际请求，历史 archive 不修改，宿主 PR 合并/Release 另行授权。
+用户批准 restore-model-metadata-priority 设计。Core PR #34 于 2026-10-10 squash 合并，merge SHA `cf797e953eb1f6de8e7c3e0fd5e98094398c26f9`；该 SHA 的完整 CI 和准确 SHA 索引发布已通过，Pi 与 OpenCode 的 v0.10.1 构建固定此 Core SHA。旧 serving proof、部署交集、价格权威与价格 cap 规则由本 change 替代；Pi 明确 verdict 与全 null 无 effort 映射，无 SDK tools 字段时不伪造。Real Pi 0.87.1 E2E 验证冻结的 16 项注册/picker 与实际请求；Pi PR #55 于 2026-10-11 合并（merge SHA `6007c4b5d5588ad2dfa14d1577c00df7ce74d844`），CI 和真实宿主 E2E 均通过。`v0.10.1` 已于 2026-10-11 发布，tag SHA `0a6172954bcfa1337cf54f4511ae755444a7db83` 与 Pi 当前 main 一致，main CI、索引发布和 Release workflow 均成功。历史 archive 未修改。

@@ -40,7 +40,6 @@ legacy 单 endpoint 模式下，地址优先级为：`LITELLM_BASE_URL` → 全�
 ```jsonc
 {
   "pollInterval": 300,
-  "contextTierCap": true,
   "endpoints": {
     "default": {
       "baseUrl": "https://personal.example",
@@ -182,13 +181,11 @@ pi --list-models litellm
 | 配置项 | 默认值 | 说明 |
 |---|---:|---|
 | `pollInterval` | `300` | 模型发现轮询间隔，单位秒；最小 30 |
-| `contextTierCap` | `true` | 兼容旧配置，已忽略；价格不再截断上下文 |
 | `protocolOverrides` | `{}` | legacy 单 endpoint 时按 LiteLLM `model_name` 覆盖协议；显式模式改为每个 endpoint 内配置 |
 
 ```jsonc
 {
   "pollInterval": 300,
-  "contextTierCap": true,
   "protocolOverrides": {
     "glm-5.3": "chat"
   }
@@ -248,7 +245,7 @@ pi --list-models litellm
 - 管理中心改的是 `~/.pi/agent/litellm.json`，它仍是唯一的 endpoint 配置，你也可以继续手工编辑；下次打开管理中心会看到文件里的真实状态。文件必须是合法 JSON，无法解析时管理中心会拒绝写入并提示，不会覆盖你的文件。
 - 只有一个 endpoint 且使用旧的顶层 `baseUrl` 配置时，新增第二个 endpoint 会先请你确认，然后把现有地址迁移到 `endpoints.default`（provider、Key、缓存不变）。地址来自环境变量 `LITELLM_BASE_URL` 时，修改/删除前也需要这次迁移；删除的迁移包含在最终删除确认里（确认后先迁移再立即删除），**取消删除不留任何改动**。
 - 通过管理中心新增 endpoint 后，启用状态会固定为“明确选择的集合”；之后手工写进文件的新 endpoint 需要在管理中心里启用。
-- 仍需手工编辑配置文件：`protocolOverrides`、`pollInterval`、`contextTierCap`。endpoint ID 创建后不能直接改名；要换名请新增新 endpoint 并删除旧的。
+- 仍需手工编辑配置文件：`protocolOverrides`、`pollInterval`。endpoint ID 创建后不能直接改名；要换名请新增新 endpoint 并删除旧的。
 
 activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全部启用；停用 endpoint 会立即撤下对应 provider 并停止其发现/轮询。
 
