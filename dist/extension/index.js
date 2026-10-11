@@ -304,6 +304,9 @@ export default function piLitellmProvider(pi, internals = {}) {
                 providerId: providerIdForEndpoint(id),
                 status: stateFor(id).current.status,
                 models: stateFor(id).current.models ?? [],
+                discovery: stateFor(id).current.discovery,
+                cacheSource: stateFor(id).current.cache?.source,
+                lkgIDs: stateFor(id).current.publication?.lkgIDs,
             })));
             try {
                 const file = writeAuditFile(report, auditDirectory(agentDir));

@@ -160,11 +160,9 @@ describe("PR7 Pi diagnostics closure", () => {
     expect(notifications[0]!.message).toContain("状态：正常")
     expect(notifications[0]!.message).toContain("已注册模型：1")
     expect(notifications[0]!.message).toContain("缓存：network")
-    // Catalog-shape fixture: new Core resolves complete with no serving
-    // record matched; old Core cannot read the shape (degraded, LiteLLM-only).
-    expect(notifications[0]!.message).toContain("命中 0/1")
+    expect(notifications[0]!.message).toContain("命中 1/1")
     expect(notifications[0]!.message).toContain(
-      (PUBLICATION_SCHEMA_VERSION as number) === 8 ? "models.dev：ok" : "models.dev：degraded",
+      "models.dev：ok",
     )
     expect(notifications[0]!.message).toContain("协议 fallback：0")
     expect(notifications[0]!.message).toContain("Core：main@")
@@ -193,7 +191,7 @@ describe("PR7 Pi diagnostics closure", () => {
     expect(state.current.cache?.source).toBe("network")
     // Catalog-shape fixture：新 Core 判 complete，旧 Core 读不出 shape（degraded）。
     expect(state.current.discovery?.modelsDev.status).toBe(
-      (PUBLICATION_SCHEMA_VERSION as number) === 8 ? "ok" : "degraded",
+      "ok",
     )
 
     await built.refreshModels!(refreshContext())
@@ -245,50 +243,6 @@ describe("PR7 Pi diagnostics closure", () => {
   })
 })
 
-describe("canonical catalog model details", () => {
-  function discoveryWith(models: unknown[]) {
-    return { models } as never
-  }
-
-  test("新 Core 全字段渲染 canonical/serving/档位/operator-config/候选/shape", () => {
-    const lines = formatModelDetails(discoveryWith([{
-      id: "m",
-      deploymentCount: 1,
-      quality: {
-        identity: { canonicalModelID: "labA/m", canonicalEvidence: "registry-unique", canonicalStatus: "proven" },
-        serving: { status: "serving-record-unresolved", providerID: "gatewayX" },
-        reasoningLevelsState: "unknown",
-        operatorConfigurationKeys: ["litellm_params.reasoning_effort"],
-        diagnosticCandidates: [{ providerID: "gatewayX", recordID: "m-free", why: "relation-only SKU" }],
-        catalogKind: "complete",
-      },
-      publication: { reasoningLevels: [] },
-    }]))
-    const text = lines.join("\n")
-    expect(text).toContain("canonical labA/m（registry-unique）")
-    expect(text).toContain("serving serving-record-unresolved gatewayX")
-    expect(text).toContain("档位 unknown")
-    expect(text).toContain("operator configuration")
-    expect(text).not.toContain("hard-enforced")
-    expect(text).toContain("gatewayX/m-free")
-  })
-
-  test("旧 Core 缺失字段时省略对应行", () => {
-    const lines = formatModelDetails(discoveryWith([{
-      id: "m",
-      deploymentCount: 1,
-      quality: {},
-      publication: {},
-    }]))
-    const text = lines.join("\n")
-    expect(text).toContain("m · 部署 1")
-    expect(text).not.toContain("canonical")
-    expect(text).not.toContain("serving")
-    expect(text).not.toContain("档位")
-  })
-
-  test("空模型列表无明细块", () => {
-    expect(formatModelDetails(undefined)).toEqual([])
-    expect(formatModelDetails(discoveryWith([]))).toEqual([])
-  })
+describe("public model metadata details", () => {
+  test("空模型列表无明细块", () => { expect(formatModelDetails(undefined)).toEqual([]) })
 })

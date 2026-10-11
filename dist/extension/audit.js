@@ -7,7 +7,8 @@
  * excluded from the allowlist.
  */
 import { getRuntimeIdentity } from "./runtime-identity.js";
-function auditModelRecord(model) {
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+function auditModelRecord(model, diagnostic, source) {
     const record = {
         id: model.id,
         name: model.name,
@@ -22,9 +23,19 @@ function auditModelRecord(model) {
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
     };
-    return model.api !== undefined || model.thinkingLevelMap !== undefined
-        ? { ...record, ...(model.api !== undefined ? { api: model.api } : {}), ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}) }
-        : record;
+    return {
+        ...record,
+        ...(model.api !== undefined ? { api: model.api } : {}),
+        ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
+        ...(diagnostic ? { metadata: {
+                canonicalID: diagnostic.quality.identity.canonicalModelID,
+                provider: diagnostic.quality.metadataSource?.providerID,
+                recordKey: diagnostic.quality.metadataSource?.recordID,
+                reasoningSupported: model.reasoning ? "supported" : "unsupported",
+                reasoningLevels: getSupportedThinkingLevels({ ...model, provider: "litellm", api: model.api ?? "openai-completions", baseUrl: model.baseUrl ?? "" }),
+                source,
+            } } : {}),
+    };
 }
 export function createAuditReport(endpoints, now = new Date()) {
     const identity = getRuntimeIdentity();
@@ -48,7 +59,8 @@ export function createAuditReport(endpoints, now = new Date()) {
             providerId: endpoint.providerId,
             status: endpoint.status,
             modelCount: endpoint.models.length,
-            models: endpoint.models.map(auditModelRecord),
+            source: endpoint.cacheSource,
+            models: endpoint.models.map((model) => auditModelRecord(model, endpoint.discovery?.models.find((item) => item.id === model.id), endpoint.lkgIDs?.includes(model.id) ? "last-known-good" : "models.dev")),
         })),
     };
 }

@@ -1,9 +1,9 @@
+import { officialCatalog } from "./fixtures/catalog.ts"
 import { afterEach, describe, expect, test } from "bun:test"
 import {
   createDiscoverySnapshot,
   createLastKnownGoodStore,
   endpointFingerprint,
-  PUBLICATION_SCHEMA_VERSION,
   type ModelSpec,
 } from "../src/core/index.ts"
 import { discoverModels, refreshProviderModels } from "../src/extension/discovery.ts"
@@ -33,6 +33,7 @@ function storedSpec(id: string): ModelSpec {
     id,
     name: id,
     protocol: "chat",
+    reasoningSupported: "unsupported",
     capabilities: { tools: true, input: ["text"], output: ["text"] },
     variants: [],
     released: 0,
@@ -91,7 +92,7 @@ const LITELLM_BODY = {
     {
       model_name: "gpt-6-sol",
       litellm_params: { model: "openai/gpt-6-sol" },
-      // Fully declared: the frozen Core v8 resolves identity against the
+      // Fully declared: Core resolves identity against the
       // canonical registry (below) and publishes from registry facts.
       model_info: {
         mode: "responses",
@@ -109,9 +110,8 @@ const LITELLM_BODY = {
   ],
 }
 
-/** Catalog shape ({ models, providers }): the frozen Core v8 era. */
-const MODELS_DEV = {
-  models: {
+/** Catalog shape ({ models, providers }): Core era. */
+const MODELS_DEV = officialCatalog({
     "openai/gpt-6-sol": {
       limit: { context: 100000, output: 10000 },
       tool_call: true,
@@ -119,9 +119,7 @@ const MODELS_DEV = {
       modalities: { input: ["text"], output: ["text"] },
       release_date: "2026-05-01",
     },
-  },
-  providers: {},
-}
+  })
 
 function fetchRouter(routes: Record<string, () => Response>): FetchLike {
   return async (input) => {
@@ -135,21 +133,17 @@ function fetchRouter(routes: Record<string, () => Response>): FetchLike {
 
 const silent = { warn: () => {}, error: () => {} }
 
-/** Core capability gate for version-divergent catalog expectations. */
-const CORE_V8 = (PUBLICATION_SCHEMA_VERSION as number) === 8
 
-/** LKG outage 用例的 catalog：v7 沿用 provider-map，v8 用 registry 补足的 shape。 */
-const OUTAGE_CATALOG_V8 = {
-  models: {
+
+/** Complete selected API record for catalog outage and LKG. */
+const OUTAGE_CATALOG = officialCatalog({
     "openai/gpt-6-sol": {
       limit: { context: 100000, output: 10000 },
       modalities: { input: ["text"], output: ["text"] },
       tool_call: true,
       reasoning: false,
     },
-  },
-  providers: {},
-}
+  })
 
 /** LKG outage 用例的 body：只声明 limits，有 catalog 可发布、无则缺口可见。 */
 const OUTAGE_BODY = {
@@ -230,8 +224,8 @@ describe("discoverModels", () => {
 
   test("元数据加载抛错时分类失败并可用有效 LKG 继续提供", async () => {
     const store = createLastKnownGoodStore()
-    const catalog = CORE_V8 ? OUTAGE_CATALOG_V8 : MODELS_DEV
-    const body = CORE_V8 ? OUTAGE_BODY : LITELLM_BODY
+    const catalog = OUTAGE_CATALOG
+    const body = OUTAGE_BODY
     const first = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, body),
@@ -241,15 +235,7 @@ describe("discoverModels", () => {
       publication: { store },
     })
     expect(first.models.map((model) => model.id)).toEqual(["gpt-6-sol"])
-    // v7 outage 保留旧用例（仅能力 flag，无 limits）；v8 outage 用与 capture
-    // 相同的 limits-only 声明（modalities 缺口触发 LKG，declarations 不变）。
-    const outageBody = CORE_V8 ? body : {
-      data: [{
-        model_name: "gpt-6-sol",
-        litellm_params: { model: "openai/gpt-6-sol" },
-        model_info: { mode: "responses", supports_function_calling: true, supports_reasoning: false },
-      }],
-    }
+    const outageBody = body
     const second = await discoverModels(config(), KEY, undefined, {
       fetchImpl: fetchRouter({
         [`${BASE}/v1/model/info`]: () => jsonResponse(200, outageBody),

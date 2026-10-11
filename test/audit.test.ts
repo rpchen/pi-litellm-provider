@@ -1,3 +1,4 @@
+import { officialCatalog } from "./fixtures/catalog.ts"
 import { describe, expect, test } from "bun:test"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
@@ -46,8 +47,7 @@ const body = {
   }],
 }
 
-const catalog = {
-  models: {
+const catalog = officialCatalog({
     "openai/gpt-audit": {
       limit: { context: 100000, output: 10000 },
       modalities: { input: ["text"], output: ["text"] },
@@ -55,9 +55,7 @@ const catalog = {
       reasoning: false,
       release_date: "2026-05-01",
     },
-  },
-  providers: {},
-}
+  })
 
 function fakePi() {
   const registrations: Array<{ name: string; config: ProviderConfigLike }> = []

@@ -1,9 +1,13 @@
 import type { ProviderModelConfigLike } from "./types.ts";
+import type { DiscoveryDiagnostics } from "../core/index.ts";
 export interface AuditEndpointInput {
     readonly id: string;
     readonly providerId: string;
     readonly status: string;
     readonly models: readonly ProviderModelConfigLike[];
+    readonly discovery?: DiscoveryDiagnostics;
+    readonly cacheSource?: string;
+    readonly lkgIDs?: readonly string[];
 }
 export interface AuditModelRecord {
     readonly id: string;

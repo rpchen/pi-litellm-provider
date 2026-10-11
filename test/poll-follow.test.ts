@@ -1,3 +1,4 @@
+import { officialCatalog } from "./fixtures/catalog.ts"
 /**
  * Poll-follow integration test: a catalog change on the (mock) LiteLLM side is reflected
  * by the host after one poll tick, and removals disappear.
@@ -44,8 +45,7 @@ function deployment(name: string) {
 }
 
 /** Catalog shape ({ models, providers }): frozen Core v8 era. */
-const POLL_CATALOG = {
-  models: {
+const POLL_CATALOG = officialCatalog({
     "openai/model-a": {
       limit: { context: 10000, output: 1000 },
       tool_call: false,
@@ -64,9 +64,7 @@ const POLL_CATALOG = {
       reasoning: false,
       modalities: { input: ["text"], output: ["text"] },
     },
-  },
-  providers: {},
-}
+  })
 
 describe("轮询跟随 LiteLLM 端变更", () => {
   test("新增模型出现、删除模型消失", async () => {
