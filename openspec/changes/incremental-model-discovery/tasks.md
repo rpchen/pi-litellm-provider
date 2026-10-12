@@ -10,5 +10,5 @@
 
 - [x] 2.1 增加模型列表不变、新增本地命中、新增本地未命中、仅删除、同名 route 变化测试。
 - [x] 2.2 更新 models.dev cache 测试、README 和 canonical spec delta，记录用户可见刷新行为变化。
-- [ ] 2.3 运行 Pi 完整交付门禁及 Real Pi 0.87.1 E2E；在 PR 中回填命令与 CI 证据。
+- [x] 2.3 运行 Pi 完整交付门禁及 Real Pi 0.87.1 E2E；`npm run test:e2e:pi` 以固定 commit `6f97a92` 通过，339 个 Bun 测试通过。
 - [ ] 2.4 通过 OpenSpec strict validation 后使用 CLI archive，并再次验证 closure。
