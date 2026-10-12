@@ -1175,6 +1175,9 @@ export default function bootstrapProbe(pi) {
   // Actual invalid selected critical metadata withdraws a model; route changes do not.
   catalogPayload.providers.openai.models["e2e-default-responses"].limit.output = 0
   writeCatalog()
+  const unusableSeedModels = [...initialModels]
+  defaultServer.state.models = unusableSeedModels.filter(model => model.model_name !== "e2e-default-responses")
+  await forceRefresh()
   defaultServer.state.models = initialModels
   await forceRefresh()
   await diagnosticsNotice("catalog 当前不可用", "the acknowledged unusable state")
