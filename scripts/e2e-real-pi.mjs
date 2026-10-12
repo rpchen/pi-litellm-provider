@@ -1083,8 +1083,14 @@ export default function bootstrapProbe(pi) {
     "the LKG-backed model disappeared from real Pi",
   )
   // End the outage: the source returns, so the next live round re-proves the
-  // same configuration freshly (no LKG label, no stale substitution).
+  // same configuration freshly (no LKG label, no stale substitution). A
+  // delete/re-add transition deliberately drives that re-proof; a stable set
+  // would correctly keep reusing the LKG result.
   rmSync(outageFile, { force: true })
+  const recoveryModels = [...defaultServer.state.models]
+  defaultServer.state.models = recoveryModels.filter(model => model.model_name !== "e2e-default-responses")
+  await forceRefresh()
+  defaultServer.state.models = recoveryModels
   await forceRefresh()
   const recoveredAfterOutage = await diagnosticsNotice(
     "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
