@@ -44,7 +44,6 @@ export interface CacheLogger {
 }
 
 const MODELS_DEV_URL = "https://models.dev/catalog.json"
-const MODELS_DEV_TTL_MS = 6 * 60 * 60 * 1000
 const MODELS_DEV_RETRY_MS = 60 * 1000
 
 function escapeRegExp(value: string): string {
@@ -142,12 +141,11 @@ export async function fetchLiteLLMModelInfo(
 
 interface CatalogCache {
   value?: unknown
-  expiresAt: number
   retryAt: number
   pending?: Promise<unknown>
 }
 
-const catalogCache: CatalogCache = { expiresAt: 0, retryAt: 0 }
+const catalogCache: CatalogCache = { retryAt: 0 }
 
 export interface ModelsDevOptions {
   fetchImpl?: FetchLike
@@ -155,11 +153,16 @@ export interface ModelsDevOptions {
   logger?: CacheLogger
   url?: string
   signal?: AbortSignal
+  /** Read the successful in-memory snapshot without starting a request. */
+  cachedOnly?: boolean
+  /** Bypass the successful in-memory snapshot and ask for the latest catalog. */
+  forceRefresh?: boolean
 }
 
-export async function getModelsDevCatalog(options: ModelsDevOptions = {}): Promise<unknown> {
+export async function getModelsDevCatalog(options: ModelsDevOptions = {}): Promise<unknown | undefined> {
   const now = options.now?.() ?? Date.now()
-  if (catalogCache.value !== undefined && now < catalogCache.expiresAt) return catalogCache.value
+  if (!options.forceRefresh && catalogCache.value !== undefined) return catalogCache.value
+  if (options.cachedOnly) return undefined
   if (now < catalogCache.retryAt) return {}
   if (catalogCache.pending) return catalogCache.pending
 
@@ -170,9 +173,7 @@ export async function getModelsDevCatalog(options: ModelsDevOptions = {}): Promi
     signal: options.signal,
   })
     .then((value) => {
-      const completedAt = options.now?.() ?? Date.now()
       catalogCache.value = value
-      catalogCache.expiresAt = completedAt + MODELS_DEV_TTL_MS
       catalogCache.retryAt = 0
       return value
     })
@@ -185,7 +186,6 @@ export async function getModelsDevCatalog(options: ModelsDevOptions = {}): Promi
       }
       const failedAt = options.now?.() ?? Date.now()
       catalogCache.value = undefined
-      catalogCache.expiresAt = 0
       catalogCache.retryAt = failedAt + MODELS_DEV_RETRY_MS
       const message = error instanceof Error ? error.message : String(error)
       options.logger?.warn(`models.dev 获取失败，暂不补充模型元数据：${redact(message)}`)
@@ -201,7 +201,6 @@ export async function getModelsDevCatalog(options: ModelsDevOptions = {}): Promi
 
 export function resetModelsDevCacheForTest(): void {
   catalogCache.value = undefined
-  catalogCache.expiresAt = 0
   catalogCache.retryAt = 0
   catalogCache.pending = undefined
 }

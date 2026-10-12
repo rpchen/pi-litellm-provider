@@ -130,6 +130,8 @@ endpoint 里发现了模型，不等于这个模型已经可以被安全使用�
 
 LiteLLM 提供模型清单、原始请求名和协议；models.dev 提供能力元数据。Core 按名称及公开 canonical 关系，以 **官方服务商 → OpenCode → OpenRouter** 选择一条整记录，能力、context/output、reasoning_options 和参考价均来自这条记录，不跨来源拼字段，也不要求配置 `models_dev_provider` 或证明实际 serving provider。
 
+每次实际发现都会先获取 LiteLLM 的 `model_name` 集合。集合不变时直接复用已注册配置，不重新匹配元数据，也不会因为时间经过而访问 models.dev；集合发生变化时只处理新增/删除项。新增模型先查本地 catalog，只有本地没有匹配记录时才请求最新 catalog。
+
 - 推理支持与可选档位分别处理：明确不支持为 `reasoning=false`；支持无可选 effort 为 `true` 且无额外默认档位；有 effort 时只提供记录列出的档位，`none` 映射为 Pi `off`。Messages 原有预算控制保持兼容。
 - DeepSeek V4.1 Flash、GLM-5.3 与 GLM-5.3 Flash 提供 low/high/max；GPT 模型分别取自身记录。DeepSeek Flash output 为 393216；GPT context 为 1050000 时不再被价格阶梯截为 272000。
 - 价格仅作 USD/百万 token 参考：有限非负值保留，否则逐项为 0；0 不表示确认免费。价格不影响能力、发布或缓存恢复。旧 `contextTierCap` 配置仍接受，但不生效。

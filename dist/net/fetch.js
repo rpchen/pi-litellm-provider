@@ -9,7 +9,6 @@ export class DiscoveryError extends Error {
     }
 }
 const MODELS_DEV_URL = "https://models.dev/catalog.json";
-const MODELS_DEV_TTL_MS = 6 * 60 * 60 * 1000;
 const MODELS_DEV_RETRY_MS = 60 * 1000;
 function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -101,11 +100,13 @@ export async function fetchLiteLLMModelInfo(addresses, key, fetchImpl, signal) {
         return fetchJSON({ url: addresses.legacyModelInfoURL, key, timeoutMs: 15_000, fetchImpl, signal });
     }
 }
-const catalogCache = { expiresAt: 0, retryAt: 0 };
+const catalogCache = { retryAt: 0 };
 export async function getModelsDevCatalog(options = {}) {
     const now = options.now?.() ?? Date.now();
-    if (catalogCache.value !== undefined && now < catalogCache.expiresAt)
+    if (!options.forceRefresh && catalogCache.value !== undefined)
         return catalogCache.value;
+    if (options.cachedOnly)
+        return undefined;
     if (now < catalogCache.retryAt)
         return {};
     if (catalogCache.pending)
@@ -117,9 +118,7 @@ export async function getModelsDevCatalog(options = {}) {
         signal: options.signal,
     })
         .then((value) => {
-        const completedAt = options.now?.() ?? Date.now();
         catalogCache.value = value;
-        catalogCache.expiresAt = completedAt + MODELS_DEV_TTL_MS;
         catalogCache.retryAt = 0;
         return value;
     })
@@ -132,7 +131,6 @@ export async function getModelsDevCatalog(options = {}) {
         }
         const failedAt = options.now?.() ?? Date.now();
         catalogCache.value = undefined;
-        catalogCache.expiresAt = 0;
         catalogCache.retryAt = failedAt + MODELS_DEV_RETRY_MS;
         const message = error instanceof Error ? error.message : String(error);
         options.logger?.warn(`models.dev 获取失败，暂不补充模型元数据：${redact(message)}`);
@@ -146,7 +144,6 @@ export async function getModelsDevCatalog(options = {}) {
 }
 export function resetModelsDevCacheForTest() {
     catalogCache.value = undefined;
-    catalogCache.expiresAt = 0;
     catalogCache.retryAt = 0;
     catalogCache.pending = undefined;
 }
