@@ -1200,8 +1200,8 @@ export default function bootstrapProbe(pi) {
     `unexpected acknowledged default-endpoint models: ${JSON.stringify(ackMemory)}`,
   )
   assert(
-    ackMemory.published.length === 1 && ackMemory.published[0] === "e2e-default-responses",
-    `the default endpoint must retain its previous published model as the regression baseline: ${JSON.stringify(ackMemory)}`,
+    ackMemory.published.length === 0,
+    `the deleted-and-readded identity is not retained as a published baseline: ${JSON.stringify(ackMemory)}`,
   )
   console.log(`[ack persisted] ${JSON.stringify(ackMemory)}`)
 
