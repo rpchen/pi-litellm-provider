@@ -29,11 +29,18 @@ import {
   groupLiteLLMDeployments,
   inspectDiscoverySnapshot,
   lastKnownGoodKey,
+  mergeDiscoveryDiagnostics,
+  mergePublicationResults,
   modelFingerprint,
+  modelNameDelta,
+  modelNamesOfResponse,
+  needsCatalogRefresh,
   nextPublishedBaseline,
   normalizeLiteLLMURL,
   parsePublicationMemory,
+  responseForModelNames,
   serializePublicationMemory,
+  temporaryMetadataFailureModelNames,
   PUBLICATION_MEMORY_SCHEMA_VERSION,
   type BuildOptions,
   type CatalogPublication,
@@ -68,7 +75,12 @@ export interface DiscoveryDeps {
   fetchImpl?: FetchLike
   logger?: DiscoveryLogger
   /** Override models.dev catalog source (tests); production uses the shared cache. */
-  loadModelsDevCatalog?: (signal?: AbortSignal) => Promise<unknown>
+  loadModelsDevCatalog?: (
+    signal?: AbortSignal,
+    options?: { readonly cachedOnly?: boolean; readonly forceRefresh?: boolean },
+  ) => Promise<unknown | undefined>
+  /** Last successful round for this endpoint, when the host has one in memory. */
+  previous?: DiscoveryOutcome
   /**
    * Publication controller override (tests). Production resolves it from
    * the per-endpoint diagnostics state so degraded acceptance and the LKG
@@ -90,6 +102,8 @@ export interface DiscoveryDeps {
 
 /** Result of one network-phase discovery, before persistence. */
 export interface DiscoveryOutcome {
+  /** Eligible LiteLLM model_name identities observed in the successful round. */
+  modelNames: readonly string[]
   models: ProviderModelConfigLike[]
   specs: ModelSpec[]
   /**
@@ -101,6 +115,8 @@ export interface DiscoveryOutcome {
   diagnostics: DiscoveryDiagnostics
   publication: PublicationSummary
   catalog: CatalogPublication
+  /** Core publication partition retained so later rounds can process only additions. */
+  publicationResult: PublicationResult
 }
 
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>
@@ -142,52 +158,120 @@ export async function discoverModels(
 ): Promise<DiscoveryOutcome> {
   const addresses = normalizeLiteLLMURL(config.baseUrl)
   const litellmResponse = await fetchLiteLLMModelInfo(addresses, apiKey, deps.fetchImpl, signal)
-  let catalog: unknown
+  const delta = modelNameDelta(deps.previous?.modelNames ?? [], modelNamesOfResponse(litellmResponse))
+  const currentModelNames = [...delta.current]
+  const previous = deps.previous?.publicationResult ? deps.previous : undefined
+  const currentPreviousPublication = previous
+    ? mergePublicationResults(previous.publicationResult, undefined, new Set(currentModelNames))
+    : undefined
+  const recoveryNames = previous && currentPreviousPublication
+    ? temporaryMetadataFailureModelNames(currentPreviousPublication, previous.diagnostics)
+    : []
+  const processedModelNames = new Set([...delta.added, ...recoveryNames])
+  const retainedModelNames = new Set(currentModelNames.filter((name) => !processedModelNames.has(name)))
+
+  // LiteLLM route/base_model/deployment changes are deliberately outside the identity
+  // contract. Reuse the last successful Core result without touching models.dev or the
+  // metadata resolver when the model_name set is unchanged. Only models previously
+  // withheld because the catalog was degraded re-enter the existing recovery path.
+  if (previous && processedModelNames.size === 0 && delta.removed.length === 0) return previous
+
+  let catalog: unknown = {}
   let catalogFailure: MetadataFailure | undefined
-  try {
-    catalog = deps.loadModelsDevCatalog
-      ? await deps.loadModelsDevCatalog(signal)
-      : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal })
-  } catch (error) {
-    catalog = {}
-    catalogFailure = classifyMetadataFailure(error)
-  }
   const buildOptions = {
     contextTierCap: config.contextTierCap,
     protocolOverrides: config.protocolOverrides,
   }
   const now = deps.publication?.now ?? Date.now()
-  const publication = buildPublicationResult(litellmResponse, catalog, buildOptions, {
-    store: deps.publication?.store,
-    failure: catalogFailure,
-    now,
-  })
-  if (deps.publication?.store) {
-    seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now)
+  let publication: PublicationResult
+
+  const loadCatalog = (forceRefresh: boolean): Promise<unknown | undefined> => {
+    if (deps.loadModelsDevCatalog) {
+      return deps.loadModelsDevCatalog(signal, {
+        cachedOnly: !forceRefresh,
+        forceRefresh,
+      })
+    }
+    return getModelsDevCatalog({
+      fetchImpl: deps.fetchImpl,
+      logger: deps.logger,
+      signal,
+      cachedOnly: !forceRefresh,
+      forceRefresh,
+    })
   }
-  const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions)
+
+  if (processedModelNames.size === 0 && previous) {
+    // Deletions need no metadata work. Drop removed identities from the previous
+    // publication partition and retain all unchanged assessments verbatim.
+    publication = mergePublicationResults(previous.publicationResult, undefined, retainedModelNames)
+  } else {
+    const response = previous ? responseForModelNames(litellmResponse, processedModelNames) : litellmResponse
+    if (currentModelNames.length > 0) {
+      let cached: unknown | undefined
+      try {
+        cached = await loadCatalog(false)
+      } catch {
+        // A cached-read failure is not the final metadata failure: try the same
+        // demand-driven latest fetch below so the existing failure policy remains.
+      }
+      if (cached !== undefined) catalog = cached
+
+      let addedPublication = buildPublicationResult(response, catalog, buildOptions, {
+        store: deps.publication?.store,
+        now,
+      })
+      if (needsCatalogRefresh(addedPublication, processedModelNames)) {
+        try {
+          catalog = (await loadCatalog(true)) ?? {}
+        } catch (error) {
+          catalog = {}
+          catalogFailure = classifyMetadataFailure(error)
+        }
+        addedPublication = buildPublicationResult(response, catalog, buildOptions, {
+          store: deps.publication?.store,
+          failure: catalogFailure,
+          now,
+        })
+      }
+      publication = previous
+        ? mergePublicationResults(previous.publicationResult, addedPublication, retainedModelNames)
+        : addedPublication
+    } else if (previous) {
+      publication = mergePublicationResults(previous.publicationResult, undefined, retainedModelNames)
+    } else {
+      publication = buildPublicationResult(litellmResponse, catalog, buildOptions, { now })
+    }
+  }
+
+  if (deps.publication?.store) {
+    seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now, processedModelNames)
+  }
+  const changedDiagnostics = previous && processedModelNames.size > 0
+    ? diagnoseModelSpecs(responseForModelNames(litellmResponse, processedModelNames), catalog, buildOptions).diagnostics
+    : undefined
+  const diagnostics = previous
+    ? mergeDiscoveryDiagnostics(previous.diagnostics, changedDiagnostics, litellmResponse, currentModelNames, processedModelNames)
+    : diagnoseModelSpecs(litellmResponse, catalog, buildOptions).diagnostics
   const specs = publication.publishable.map((entry) => entry.spec)
   // Published specs are the only persisted specs: a withheld model never
   // survives into a snapshot, and no user confirmation can add one.
   const snapshotSpecs = [...specs]
   const catalogFacts = catalogFromPublication(publication, {
-    discovered: diagnosticsModelCount(diagnosed.diagnostics),
+    discovered: diagnostics.stats.models,
     previouslyPublished: deps.publication?.previouslyPublished,
   })
   return {
+    modelNames: currentModelNames,
     specs,
     snapshotSpecs,
     models: toProviderModelsWithPublication(publication.publishable, addresses.rootURL),
     fingerprint: modelFingerprint(specs),
-    diagnostics: diagnosed.diagnostics,
+    diagnostics,
     publication: summarizePublication(publication, catalogFacts, catalogFailure),
     catalog: catalogFacts,
+    publicationResult: publication,
   }
-}
-
-/** Discovered model count from the Core diagnostics (never a synthesized value). */
-function diagnosticsModelCount(diagnostics: DiscoveryDiagnostics): number {
-  return diagnostics.stats.models
 }
 
 /**
@@ -215,9 +299,11 @@ function seedPublicationLKG(
   buildOptions: BuildOptions,
   publication: { publishable: readonly PublishableEntry[] },
   now: number,
+  processedModelNames?: ReadonlySet<string>,
 ): void {
   const groups = new Map(groupLiteLLMDeployments(litellmResponse).map((item) => [item.modelName, item]))
   for (const entry of publication.publishable) {
+    if (processedModelNames && !processedModelNames.has(entry.spec.id)) continue
     if (entry.assessment.status !== "configured") continue
     const group = groups.get(entry.spec.id)
     if (!group) continue
@@ -403,9 +489,10 @@ export async function refreshProviderModels(
   }
 
   try {
+    const previous = coordinator.state(discoveryKey).value
     const coordinated = await coordinator.refresh(
       discoveryKey,
-      () => discoverModels(config, apiKey, context.signal, discoveryDeps),
+      () => discoverModels(config, apiKey, context.signal, { ...discoveryDeps, previous }),
       {
         forceRefresh: context.force === true,
         failurePolicy: (error) => {

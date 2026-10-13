@@ -12,7 +12,7 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildPublicationResult, catalogFromPublication, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, decideAcknowledgement, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, inspectDiscoverySnapshot, lastKnownGoodKey, modelFingerprint, nextPublishedBaseline, normalizeLiteLLMURL, parsePublicationMemory, serializePublicationMemory, PUBLICATION_MEMORY_SCHEMA_VERSION, } from "../core/index.js";
+import { buildPublicationResult, catalogFromPublication, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, decideAcknowledgement, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, inspectDiscoverySnapshot, lastKnownGoodKey, mergeDiscoveryDiagnostics, mergePublicationResults, modelFingerprint, modelNameDelta, modelNamesOfResponse, needsCatalogRefresh, nextPublishedBaseline, normalizeLiteLLMURL, parsePublicationMemory, responseForModelNames, serializePublicationMemory, temporaryMetadataFailureModelNames, PUBLICATION_MEMORY_SCHEMA_VERSION, } from "../core/index.js";
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog } from "../net/fetch.js";
 import { publicationControllerForState, setProviderDiagnostics, } from "./diagnostics.js";
 import { toProviderModels, toProviderModelsWithPublication } from "./map.js";
@@ -33,52 +33,121 @@ export function createProviderRefreshCoordinator() {
 export async function discoverModels(config, apiKey, signal, deps = {}) {
     const addresses = normalizeLiteLLMURL(config.baseUrl);
     const litellmResponse = await fetchLiteLLMModelInfo(addresses, apiKey, deps.fetchImpl, signal);
-    let catalog;
+    const delta = modelNameDelta(deps.previous?.modelNames ?? [], modelNamesOfResponse(litellmResponse));
+    const currentModelNames = [...delta.current];
+    const previous = deps.previous?.publicationResult ? deps.previous : undefined;
+    const currentPreviousPublication = previous
+        ? mergePublicationResults(previous.publicationResult, undefined, new Set(currentModelNames))
+        : undefined;
+    const recoveryNames = previous && currentPreviousPublication
+        ? temporaryMetadataFailureModelNames(currentPreviousPublication, previous.diagnostics)
+        : [];
+    const processedModelNames = new Set([...delta.added, ...recoveryNames]);
+    const retainedModelNames = new Set(currentModelNames.filter((name) => !processedModelNames.has(name)));
+    // LiteLLM route/base_model/deployment changes are deliberately outside the identity
+    // contract. Reuse the last successful Core result without touching models.dev or the
+    // metadata resolver when the model_name set is unchanged. Only models previously
+    // withheld because the catalog was degraded re-enter the existing recovery path.
+    if (previous && processedModelNames.size === 0 && delta.removed.length === 0)
+        return previous;
+    let catalog = {};
     let catalogFailure;
-    try {
-        catalog = deps.loadModelsDevCatalog
-            ? await deps.loadModelsDevCatalog(signal)
-            : await getModelsDevCatalog({ fetchImpl: deps.fetchImpl, logger: deps.logger, signal });
-    }
-    catch (error) {
-        catalog = {};
-        catalogFailure = classifyMetadataFailure(error);
-    }
     const buildOptions = {
         contextTierCap: config.contextTierCap,
         protocolOverrides: config.protocolOverrides,
     };
     const now = deps.publication?.now ?? Date.now();
-    const publication = buildPublicationResult(litellmResponse, catalog, buildOptions, {
-        store: deps.publication?.store,
-        failure: catalogFailure,
-        now,
-    });
-    if (deps.publication?.store) {
-        seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now);
+    let publication;
+    const loadCatalog = (forceRefresh) => {
+        if (deps.loadModelsDevCatalog) {
+            return deps.loadModelsDevCatalog(signal, {
+                cachedOnly: !forceRefresh,
+                forceRefresh,
+            });
+        }
+        return getModelsDevCatalog({
+            fetchImpl: deps.fetchImpl,
+            logger: deps.logger,
+            signal,
+            cachedOnly: !forceRefresh,
+            forceRefresh,
+        });
+    };
+    if (processedModelNames.size === 0 && previous) {
+        // Deletions need no metadata work. Drop removed identities from the previous
+        // publication partition and retain all unchanged assessments verbatim.
+        publication = mergePublicationResults(previous.publicationResult, undefined, retainedModelNames);
     }
-    const diagnosed = diagnoseModelSpecs(litellmResponse, catalog, buildOptions);
+    else {
+        const response = previous ? responseForModelNames(litellmResponse, processedModelNames) : litellmResponse;
+        if (currentModelNames.length > 0) {
+            let cached;
+            try {
+                cached = await loadCatalog(false);
+            }
+            catch {
+                // A cached-read failure is not the final metadata failure: try the same
+                // demand-driven latest fetch below so the existing failure policy remains.
+            }
+            if (cached !== undefined)
+                catalog = cached;
+            let addedPublication = buildPublicationResult(response, catalog, buildOptions, {
+                store: deps.publication?.store,
+                now,
+            });
+            if (needsCatalogRefresh(addedPublication, processedModelNames)) {
+                try {
+                    catalog = (await loadCatalog(true)) ?? {};
+                }
+                catch (error) {
+                    catalog = {};
+                    catalogFailure = classifyMetadataFailure(error);
+                }
+                addedPublication = buildPublicationResult(response, catalog, buildOptions, {
+                    store: deps.publication?.store,
+                    failure: catalogFailure,
+                    now,
+                });
+            }
+            publication = previous
+                ? mergePublicationResults(previous.publicationResult, addedPublication, retainedModelNames)
+                : addedPublication;
+        }
+        else if (previous) {
+            publication = mergePublicationResults(previous.publicationResult, undefined, retainedModelNames);
+        }
+        else {
+            publication = buildPublicationResult(litellmResponse, catalog, buildOptions, { now });
+        }
+    }
+    if (deps.publication?.store) {
+        seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now, processedModelNames);
+    }
+    const changedDiagnostics = previous && processedModelNames.size > 0
+        ? diagnoseModelSpecs(responseForModelNames(litellmResponse, processedModelNames), catalog, buildOptions).diagnostics
+        : undefined;
+    const diagnostics = previous
+        ? mergeDiscoveryDiagnostics(previous.diagnostics, changedDiagnostics, litellmResponse, currentModelNames, processedModelNames)
+        : diagnoseModelSpecs(litellmResponse, catalog, buildOptions).diagnostics;
     const specs = publication.publishable.map((entry) => entry.spec);
     // Published specs are the only persisted specs: a withheld model never
     // survives into a snapshot, and no user confirmation can add one.
     const snapshotSpecs = [...specs];
     const catalogFacts = catalogFromPublication(publication, {
-        discovered: diagnosticsModelCount(diagnosed.diagnostics),
+        discovered: diagnostics.stats.models,
         previouslyPublished: deps.publication?.previouslyPublished,
     });
     return {
+        modelNames: currentModelNames,
         specs,
         snapshotSpecs,
         models: toProviderModelsWithPublication(publication.publishable, addresses.rootURL),
         fingerprint: modelFingerprint(specs),
-        diagnostics: diagnosed.diagnostics,
+        diagnostics,
         publication: summarizePublication(publication, catalogFacts, catalogFailure),
         catalog: catalogFacts,
+        publicationResult: publication,
     };
-}
-/** Discovered model count from the Core diagnostics (never a synthesized value). */
-function diagnosticsModelCount(diagnostics) {
-    return diagnostics.stats.models;
 }
 /**
  * Restore the Core-validated publication memory into the endpoint controller.
@@ -97,9 +166,11 @@ function restorePublicationMemory(raw, controller) {
     }
 }
 /** Record complete configured models as Last Known Good for future outages. */
-function seedPublicationLKG(store, litellmResponse, catalog, buildOptions, publication, now) {
+function seedPublicationLKG(store, litellmResponse, catalog, buildOptions, publication, now, processedModelNames) {
     const groups = new Map(groupLiteLLMDeployments(litellmResponse).map((item) => [item.modelName, item]));
     for (const entry of publication.publishable) {
+        if (processedModelNames && !processedModelNames.has(entry.spec.id))
+            continue;
         if (entry.assessment.status !== "configured")
             continue;
         const group = groups.get(entry.spec.id);
@@ -257,7 +328,8 @@ export async function refreshProviderModels(config, context, deps = {}, coordina
         },
     };
     try {
-        const coordinated = await coordinator.refresh(discoveryKey, () => discoverModels(config, apiKey, context.signal, discoveryDeps), {
+        const previous = coordinator.state(discoveryKey).value;
+        const coordinated = await coordinator.refresh(discoveryKey, () => discoverModels(config, apiKey, context.signal, { ...discoveryDeps, previous }), {
             forceRefresh: context.force === true,
             failurePolicy: (error) => {
                 if (context.signal?.aborted)

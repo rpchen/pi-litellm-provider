@@ -476,9 +476,9 @@ try {
   // it answers models.dev with a 500 and — on EVERY fetch, before the catalog
   // step of the same refresh — calls `resetModelsDevCacheForTest` through the
   // SAME module instance the jiti-loaded extension uses (dist/net/fetch.js), so
-  // the 6 h TTL cache is genuinely cleared and the round re-fetches. This is
-  // the only honest way to exercise the frozen v8 LKG outage path inside one
-  // host process, whose real trigger is a TTL expiry plus a models.dev outage.
+  // the in-memory catalog cache is genuinely cleared and the demand-triggered
+  // round re-fetches. This exercises the LKG outage path without relying on a
+  // clock or a time-based refresh.
   writeFileSync(fetchHook, `
 import { readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
@@ -503,7 +503,7 @@ const clearModelsDevCache = async () => {
     fetchModule.resetModelsDevCacheForTest()
   } catch {}
 }
-// Edge-triggered: clear the 6 h catalog cache when the injected outage starts
+// Edge-triggered: clear the in-memory catalog cache when the injected outage starts
 // (the next catalog step must genuinely hit the network) and again when it
 // ends (the failed-fetch retry backoff must not keep the catalog unavailable).
 const syncOutageEdge = () => {
@@ -576,7 +576,7 @@ export default function bootstrapProbe(pi) {
   const nodeOptionsValue = nodeOptions
   const probeExtensionPath = probeExtension
   const outageFile = join(root, "models-dev-outage.flag")
-  // The hook imports this exact module URL lazily to clear the 6 h models.dev
+  // The hook imports this exact module URL lazily to clear the in-memory models.dev
   // catalog cache during an injected outage. It is resolved from the installed
   // package (found under the isolated agent dir), NOT from the candidate
   // checkout, so the E2E exercises exactly the artifact under review.
@@ -908,13 +908,15 @@ export default function bootstrapProbe(pi) {
   nodeAssert.deepEqual(messagesAudit.metadata.reasoningLevels, ["off", "high", "max"])
   assert(!Object.hasOwn(messagesAudit.thinkingLevelMap, "off"), "Audit must preserve absent Messages map.off")
   nodeAssert.equal(matrixAuditModels.find(model => model.id === "gpt-5.6-luna").thinkingLevelMap.off, "none")
-  // Only price data changes: publication, limits, picker and capability notifications stay stable.
+  // A stable model_name set reuses the registered configuration; changing only
+  // catalog prices does not trigger a metadata read.
+  const baselineCosts = new Map(registered.map(model => [model.id, model.cost]))
   for (const provider of Object.values(catalogPayload.providers)) for (const record of Object.values(provider.models)) record.cost = { input:-1,output:"bad" }
   writeCatalog()
   await rpc.extensionCommand("/litellm-endpoints all")
   const zeroPrices = pluginModels((await rpc.request({ type:"get_available_models" })).response).filter(model=>model.provider==="litellm")
   assert(zeroPrices.length===19,"price errors withdrew models")
-  for(const model of zeroPrices) assert(Object.values(model.cost).every(value=>value===0),"bad prices must become zero")
+  for(const model of zeroPrices) nodeAssert.deepEqual(model.cost, baselineCosts.get(model.id), "stable model_name must reuse the registered price")
   // Default diagnostics show five rows; isolate these two models after the full matrix.
   defaultServer.state.models = defaultServer.state.models.filter(model => ["e2e-messages", "gpt-5.6-luna"].includes(model.model_name))
   await rpc.extensionCommand("/litellm-endpoints all")
@@ -1047,11 +1049,20 @@ export default function bootstrapProbe(pi) {
 
   // [REAL-HOST-E2E] Scenario 2: metadata source unavailable + trusted LKG. The
   // capability declarations stay EXACTLY the same, but the models.dev source
-  // goes down (the hook fails the fetch and clears the warm catalog cache, the
-  // in-process equivalent of the 6 h TTL expiry). Live completeness cannot be
+  // goes down (the hook fails the demand-triggered fetch and clears the warm
+  // catalog cache). Live completeness cannot be
   // re-proved against a source that is down, so the previously verified
   // configuration keeps the model available and is labelled as previously
   // verified, not as a guess or a degraded model.
+  // Delete and re-add one identity so the outage exercises the existing LKG
+  // path through the new-model demand trigger instead of a time-based refresh.
+  const lkgSeedModels = [...defaultServer.state.models]
+  defaultServer.state.models = lkgSeedModels.filter(model => model.model_name !== "e2e-default-responses")
+  await forceRefresh()
+  assert(!(await publicationModels()).some(model => model.provider === "litellm" && model.id === "e2e-default-responses"), "deleted model must be withdrawn before LKG re-add")
+  defaultServer.state.models = lkgSeedModels.map(model => model.model_name === "e2e-default-responses"
+    ? { ...model, litellm_params: { model: "private/changed" } }
+    : model)
   writeFileSync(outageFile, "injected\n")
   await forceRefresh()
   const lkgNotice = await diagnosticsNotice(
@@ -1072,8 +1083,14 @@ export default function bootstrapProbe(pi) {
     "the LKG-backed model disappeared from real Pi",
   )
   // End the outage: the source returns, so the next live round re-proves the
-  // same configuration freshly (no LKG label, no stale substitution).
+  // same configuration freshly (no LKG label, no stale substitution). A
+  // delete/re-add transition deliberately drives that re-proof; a stable set
+  // would correctly keep reusing the LKG result.
   rmSync(outageFile, { force: true })
+  const recoveryModels = [...defaultServer.state.models]
+  defaultServer.state.models = recoveryModels.filter(model => model.model_name !== "e2e-default-responses")
+  await forceRefresh()
+  defaultServer.state.models = recoveryModels
   await forceRefresh()
   const recoveredAfterOutage = await diagnosticsNotice(
     "模型配置：发现 3 · 可用 1 · withheld 2 · LKG 0",
@@ -1158,6 +1175,9 @@ export default function bootstrapProbe(pi) {
   // Actual invalid selected critical metadata withdraws a model; route changes do not.
   catalogPayload.providers.openai.models["e2e-default-responses"].limit.output = 0
   writeCatalog()
+  const unusableSeedModels = [...initialModels]
+  defaultServer.state.models = unusableSeedModels.filter(model => model.model_name !== "e2e-default-responses")
+  await forceRefresh()
   defaultServer.state.models = initialModels
   await forceRefresh()
   await diagnosticsNotice("catalog 当前不可用", "the acknowledged unusable state")
@@ -1180,8 +1200,8 @@ export default function bootstrapProbe(pi) {
     `unexpected acknowledged default-endpoint models: ${JSON.stringify(ackMemory)}`,
   )
   assert(
-    ackMemory.published.length === 1 && ackMemory.published[0] === "e2e-default-responses",
-    `the default endpoint must retain its previous published model as the regression baseline: ${JSON.stringify(ackMemory)}`,
+    ackMemory.published.length === 0,
+    `the deleted-and-readded identity is not retained as a published baseline: ${JSON.stringify(ackMemory)}`,
   )
   console.log(`[ack persisted] ${JSON.stringify(ackMemory)}`)
 

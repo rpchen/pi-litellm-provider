@@ -4,6 +4,7 @@ export * from "./catalog-input.js";
 export * from "./evidence.js";
 export * from "./capabilities.js";
 export * from "./diagnostics.js";
+export * from "./incremental.js";
 export * from "./litellm.js";
 export * from "./modelsdev.js";
 export * from "./protocol.js";

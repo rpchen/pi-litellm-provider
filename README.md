@@ -120,7 +120,7 @@ endpoint 里发现了模型，不等于这个模型已经可以被安全使用�
 
 如果你之前用过的模型**现在**被 withheld，这是一次 regression，插件会明确告诉你哪个模型失去了可用状态、为什么、以及可以刷新（打开 `/model` 重新发现）后重试；它**不会**自动把你的请求切到另一个模型，也不会静默继续使用失去可信配置的模型。已经发出的请求不会被打断。
 
-**models.dev 暂时不可用时**，同 endpoint、凭据、协议配置与 model_name 下，Core 接受的前次完整配置（LKG）仍可用，保留能力和档位。内部 route、base_model、deployment ID 变化以及价格缺失或错误不会使它失效。年龄只作说明，不作 TTL；成功清单删除的模型和认证失败仍撤下。
+**models.dev 暂时不可用时**，同 endpoint、凭据、协议配置与 model_name 下，Core 接受的前次完整配置（LKG）仍可用，保留能力和档位。因临时 catalog 故障而 withheld 的 `metadata-unavailable` 模型会在后续刷新中重新处理，即使 LiteLLM 的 model_name 集合未变；正常注册模型继续复用，稳定 unmatched/invalid 结果不会因此反复请求。内部 route、base_model、deployment ID 变化以及价格缺失或错误不会使 LKG 失效。年龄只作说明，不作 TTL；成功清单删除的模型和认证失败仍撤下。
 
 `/litellm-diagnostics` 显示配置/暂不可用数量、实际元数据来源、推理支持与可选档位、实际失败原因、LKG 来源时间，以及 endpoint 状态和 Runtime Identity。`/litellm-audit-export` 主动导出公开 canonical/provider/record 引用、实际档位及最终注册值，不导出原始路由、地址和密钥。
 
@@ -129,6 +129,8 @@ endpoint 里发现了模型，不等于这个模型已经可以被安全使用�
 ### 模型元数据优先级与升级
 
 LiteLLM 提供模型清单、原始请求名和协议；models.dev 提供能力元数据。Core 按名称及公开 canonical 关系，以 **官方服务商 → OpenCode → OpenRouter** 选择一条整记录，能力、context/output、reasoning_options 和参考价均来自这条记录，不跨来源拼字段，也不要求配置 `models_dev_provider` 或证明实际 serving provider。
+
+每次实际发现都会先获取 LiteLLM 的 `model_name` 集合。集合不变时直接复用已注册配置，不重新匹配元数据，也不会因为时间经过而访问 models.dev；集合发生变化时只处理新增/删除项。新增模型先查本地 catalog，只有本地没有匹配记录时才请求最新 catalog。
 
 - 推理支持与可选档位分别处理：明确不支持为 `reasoning=false`；支持无可选 effort 为 `true` 且无额外默认档位；有 effort 时只提供记录列出的档位，`none` 映射为 Pi `off`。Messages 原有预算控制保持兼容。
 - DeepSeek V4.1 Flash、GLM-5.3 与 GLM-5.3 Flash 提供 low/high/max；GPT 模型分别取自身记录。DeepSeek Flash output 为 393216；GPT context 为 1050000 时不再被价格阶梯截为 272000。

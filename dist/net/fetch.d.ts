@@ -34,6 +34,10 @@ export interface ModelsDevOptions {
     logger?: CacheLogger;
     url?: string;
     signal?: AbortSignal;
+    /** Read the successful in-memory snapshot without starting a request. */
+    cachedOnly?: boolean;
+    /** Bypass the successful in-memory snapshot and ask for the latest catalog. */
+    forceRefresh?: boolean;
 }
-export declare function getModelsDevCatalog(options?: ModelsDevOptions): Promise<unknown>;
+export declare function getModelsDevCatalog(options?: ModelsDevOptions): Promise<unknown | undefined>;
 export declare function resetModelsDevCacheForTest(): void;

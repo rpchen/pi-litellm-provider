@@ -12,7 +12,7 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { type CatalogPublication, type DiscoveryCoordinator, type DiscoveryDiagnostics, type LastKnownGoodStore, type ModelSpec } from "../core/index.ts";
+import { type CatalogPublication, type DiscoveryCoordinator, type DiscoveryDiagnostics, type LastKnownGoodStore, type ModelSpec, type PublicationResult } from "../core/index.ts";
 import { type FetchLike } from "../net/fetch.ts";
 import type { ExtensionConfig } from "./config.ts";
 import { type ProviderDiagnosticsState, type PublicationSummary } from "./diagnostics.ts";
@@ -26,7 +26,12 @@ export interface DiscoveryDeps {
     fetchImpl?: FetchLike;
     logger?: DiscoveryLogger;
     /** Override models.dev catalog source (tests); production uses the shared cache. */
-    loadModelsDevCatalog?: (signal?: AbortSignal) => Promise<unknown>;
+    loadModelsDevCatalog?: (signal?: AbortSignal, options?: {
+        readonly cachedOnly?: boolean;
+        readonly forceRefresh?: boolean;
+    }) => Promise<unknown | undefined>;
+    /** Last successful round for this endpoint, when the host has one in memory. */
+    previous?: DiscoveryOutcome;
     /**
      * Publication controller override (tests). Production resolves it from
      * the per-endpoint diagnostics state so degraded acceptance and the LKG
@@ -47,6 +52,8 @@ export interface DiscoveryDeps {
 }
 /** Result of one network-phase discovery, before persistence. */
 export interface DiscoveryOutcome {
+    /** Eligible LiteLLM model_name identities observed in the successful round. */
+    modelNames: readonly string[];
     models: ProviderModelConfigLike[];
     specs: ModelSpec[];
     /**
@@ -58,6 +65,8 @@ export interface DiscoveryOutcome {
     diagnostics: DiscoveryDiagnostics;
     publication: PublicationSummary;
     catalog: CatalogPublication;
+    /** Core publication partition retained so later rounds can process only additions. */
+    publicationResult: PublicationResult;
 }
 export type ProviderRefreshCoordinator = DiscoveryCoordinator<DiscoveryOutcome>;
 /** Create one coordinator per registered provider instance. */
