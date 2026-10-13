@@ -36,8 +36,11 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
     const delta = modelNameDelta(deps.previous?.modelNames ?? [], modelNamesOfResponse(litellmResponse));
     const currentModelNames = [...delta.current];
     const previous = deps.previous?.publicationResult ? deps.previous : undefined;
-    const recoveryNames = previous
-        ? temporaryMetadataFailureModelNames(previous.publicationResult, previous.diagnostics)
+    const currentPreviousPublication = previous
+        ? mergePublicationResults(previous.publicationResult, undefined, new Set(currentModelNames))
+        : undefined;
+    const recoveryNames = previous && currentPreviousPublication
+        ? temporaryMetadataFailureModelNames(currentPreviousPublication, previous.diagnostics)
         : [];
     const processedModelNames = new Set([...delta.added, ...recoveryNames]);
     const retainedModelNames = new Set(currentModelNames.filter((name) => !processedModelNames.has(name)));
