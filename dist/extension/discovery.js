@@ -12,7 +12,7 @@
  * host's own `apiKey` reference resolution (which we cannot observe here). A missing key
  * is treated as "not configured": no network request, empty list.
  */
-import { buildPublicationResult, catalogFromPublication, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, decideAcknowledgement, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, isRecord, inspectDiscoverySnapshot, lastKnownGoodKey, modelFingerprint, nextPublishedBaseline, normalizeLiteLLMURL, parsePublicationMemory, serializePublicationMemory, PUBLICATION_MEMORY_SCHEMA_VERSION, } from "../core/index.js";
+import { buildPublicationResult, catalogFromPublication, classifyMetadataFailure, compareDiscoverySnapshots, createDiscoveryCacheDiagnostics, createDiscoveryCoordinator, createDiscoverySnapshot, capturedPublicationVerdict, createLastKnownGoodEntry, decideAcknowledgement, diagnoseModelSpecs, endpointFingerprint, groupLiteLLMDeployments, inspectDiscoverySnapshot, lastKnownGoodKey, mergeDiscoveryDiagnostics, mergePublicationResults, modelFingerprint, modelNameDelta, modelNamesOfResponse, needsCatalogRefresh, nextPublishedBaseline, normalizeLiteLLMURL, parsePublicationMemory, responseForModelNames, serializePublicationMemory, temporaryMetadataFailureModelNames, PUBLICATION_MEMORY_SCHEMA_VERSION, } from "../core/index.js";
 import { DiscoveryError, fetchLiteLLMModelInfo, getModelsDevCatalog } from "../net/fetch.js";
 import { publicationControllerForState, setProviderDiagnostics, } from "./diagnostics.js";
 import { toProviderModels, toProviderModelsWithPublication } from "./map.js";
@@ -33,13 +33,19 @@ export function createProviderRefreshCoordinator() {
 export async function discoverModels(config, apiKey, signal, deps = {}) {
     const addresses = normalizeLiteLLMURL(config.baseUrl);
     const litellmResponse = await fetchLiteLLMModelInfo(addresses, apiKey, deps.fetchImpl, signal);
-    const currentModelNames = modelNamesOf(litellmResponse);
+    const delta = modelNameDelta(deps.previous?.modelNames ?? [], modelNamesOfResponse(litellmResponse));
+    const currentModelNames = [...delta.current];
     const previous = deps.previous?.publicationResult ? deps.previous : undefined;
-    const delta = modelNameDelta(previous?.modelNames ?? [], currentModelNames);
+    const recoveryNames = previous
+        ? temporaryMetadataFailureModelNames(previous.publicationResult, previous.diagnostics)
+        : [];
+    const processedModelNames = new Set([...delta.added, ...recoveryNames]);
+    const retainedModelNames = new Set(currentModelNames.filter((name) => !processedModelNames.has(name)));
     // LiteLLM route/base_model/deployment changes are deliberately outside the identity
     // contract. Reuse the last successful Core result without touching models.dev or the
-    // metadata resolver when the model_name set is unchanged.
-    if (previous && delta.added.length === 0 && delta.removed.length === 0)
+    // metadata resolver when the model_name set is unchanged. Only models previously
+    // withheld because the catalog was degraded re-enter the existing recovery path.
+    if (previous && processedModelNames.size === 0 && delta.removed.length === 0)
         return previous;
     let catalog = {};
     let catalogFailure;
@@ -48,8 +54,6 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
         protocolOverrides: config.protocolOverrides,
     };
     const now = deps.publication?.now ?? Date.now();
-    const addedNames = new Set(delta.added);
-    let processedModelNames = addedNames;
     let publication;
     const loadCatalog = (forceRefresh) => {
         if (deps.loadModelsDevCatalog) {
@@ -66,14 +70,13 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
             forceRefresh,
         });
     };
-    if (delta.added.length === 0 && previous) {
+    if (processedModelNames.size === 0 && previous) {
         // Deletions need no metadata work. Drop removed identities from the previous
         // publication partition and retain all unchanged assessments verbatim.
-        publication = mergePublicationResults(previous.publicationResult, undefined, delta.unchanged);
-        processedModelNames = new Set();
+        publication = mergePublicationResults(previous.publicationResult, undefined, retainedModelNames);
     }
     else {
-        const response = previous ? responseForModelNames(litellmResponse, addedNames) : litellmResponse;
+        const response = previous ? responseForModelNames(litellmResponse, processedModelNames) : litellmResponse;
         if (currentModelNames.length > 0) {
             let cached;
             try {
@@ -89,7 +92,7 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
                 store: deps.publication?.store,
                 now,
             });
-            if (needsCatalogRefresh(addedPublication, addedNames)) {
+            if (needsCatalogRefresh(addedPublication, processedModelNames)) {
                 try {
                     catalog = (await loadCatalog(true)) ?? {};
                 }
@@ -104,26 +107,24 @@ export async function discoverModels(config, apiKey, signal, deps = {}) {
                 });
             }
             publication = previous
-                ? mergePublicationResults(previous.publicationResult, addedPublication, delta.unchanged)
+                ? mergePublicationResults(previous.publicationResult, addedPublication, retainedModelNames)
                 : addedPublication;
         }
         else if (previous) {
-            publication = mergePublicationResults(previous.publicationResult, undefined, delta.unchanged);
-            processedModelNames = new Set();
+            publication = mergePublicationResults(previous.publicationResult, undefined, retainedModelNames);
         }
         else {
             publication = buildPublicationResult(litellmResponse, catalog, buildOptions, { now });
-            processedModelNames = new Set();
         }
     }
     if (deps.publication?.store) {
         seedPublicationLKG(deps.publication.store, litellmResponse, catalog, buildOptions, publication, now, processedModelNames);
     }
-    const changedDiagnostics = previous && delta.added.length > 0
-        ? diagnoseModelSpecs(responseForModelNames(litellmResponse, addedNames), catalog, buildOptions).diagnostics
+    const changedDiagnostics = previous && processedModelNames.size > 0
+        ? diagnoseModelSpecs(responseForModelNames(litellmResponse, processedModelNames), catalog, buildOptions).diagnostics
         : undefined;
     const diagnostics = previous
-        ? mergeDiagnostics(previous.diagnostics, changedDiagnostics, litellmResponse, currentModelNames, addedNames)
+        ? mergeDiscoveryDiagnostics(previous.diagnostics, changedDiagnostics, litellmResponse, currentModelNames, processedModelNames)
         : diagnoseModelSpecs(litellmResponse, catalog, buildOptions).diagnostics;
     const specs = publication.publishable.map((entry) => entry.spec);
     // Published specs are the only persisted specs: a withheld model never
@@ -179,92 +180,6 @@ function seedPublicationLKG(store, litellmResponse, catalog, buildOptions, publi
             // Seeding is best-effort; it must never fail a discovery.
         }
     }
-}
-function modelNamesOf(response) {
-    return groupLiteLLMDeployments(response)
-        .map((group) => group.modelName)
-        .sort((left, right) => left.localeCompare(right, "en"));
-}
-function modelNameDelta(previous, current) {
-    const previousSet = new Set(previous);
-    const currentSet = new Set(current);
-    return {
-        current,
-        added: current.filter((name) => !previousSet.has(name)),
-        removed: previous.filter((name) => !currentSet.has(name)),
-        unchanged: new Set(current.filter((name) => previousSet.has(name))),
-    };
-}
-function responseForModelNames(response, names) {
-    if (!isRecord(response) || !Array.isArray(response.data))
-        return response;
-    return {
-        ...response,
-        data: response.data.filter((item) => isRecord(item) && typeof item.model_name === "string" && names.has(item.model_name)),
-    };
-}
-function mergePublicationResults(previous, added, unchanged) {
-    if (!previous)
-        return added ?? { publishable: [], blocked: [], assessments: new Map() };
-    const publishable = [
-        ...previous.publishable.filter((entry) => unchanged.has(entry.spec.id)),
-        ...(added?.publishable ?? []),
-    ].sort((left, right) => left.spec.id.localeCompare(right.spec.id, "en"));
-    const blocked = [
-        ...previous.blocked.filter((entry) => unchanged.has(entry.spec.id)),
-        ...(added?.blocked ?? []),
-    ].sort((left, right) => left.spec.id.localeCompare(right.spec.id, "en"));
-    const assessments = new Map(previous.assessments);
-    for (const id of [...assessments.keys()]) {
-        if (!unchanged.has(id))
-            assessments.delete(id);
-    }
-    for (const [id, assessment] of added?.assessments ?? [])
-        assessments.set(id, assessment);
-    return { publishable, blocked, assessments };
-}
-function needsCatalogRefresh(result, added) {
-    return [...result.publishable, ...result.blocked]
-        .some((entry) => added.has(entry.spec.id) && entry.assessment.identity.selected === undefined);
-}
-function responseEntryCount(response) {
-    return isRecord(response) && Array.isArray(response.data) ? response.data.length : undefined;
-}
-function mergeDiagnostics(previous, changed, response, currentNames, added) {
-    const source = changed ?? previous;
-    const current = new Set(currentNames);
-    const models = [
-        ...previous.models.filter((model) => current.has(model.id) && !added.has(model.id)),
-        ...(changed?.models ?? []),
-    ].sort((left, right) => left.id.localeCompare(right.id, "en"));
-    const modelIssues = [
-        ...previous.issues.filter((issue) => issue.modelId !== undefined && current.has(issue.modelId) && !added.has(issue.modelId)),
-        ...(changed?.issues.filter((issue) => issue.modelId !== undefined) ?? []),
-    ];
-    const groups = groupLiteLLMDeployments(response);
-    const deployments = groups.reduce((count, group) => count + group.deployments.length, 0);
-    const responseEntries = responseEntryCount(response) ?? source.stats.responseEntries;
-    const matched = models.filter((model) => model.modelsDev.matched).length;
-    const protocolFallbacks = models.filter((model) => model.protocol.reason === "fallback" || model.protocol.reason === "mixed-fallback").length;
-    return {
-        ...source,
-        modelInfo: {
-            ...source.modelInfo,
-            status: responseEntryCount(response) === undefined ? "invalid" : "ok",
-        },
-        stats: {
-            ...source.stats,
-            responseEntries,
-            deployments,
-            filteredEntries: Math.max(0, responseEntries - deployments),
-            models: models.length,
-            modelsDevMatched: matched,
-            modelsDevUnmatched: models.length - matched,
-            protocolFallbacks,
-        },
-        models,
-        issues: [...source.issues.filter((issue) => issue.modelId === undefined), ...modelIssues],
-    };
 }
 function summarizePublication(publication, catalogFacts, failure) {
     const lkgDetail = publication.publishable

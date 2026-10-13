@@ -70,6 +70,7 @@ describe("incremental Pi discovery", () => {
     let fetches = 0
     let catalogRequests = 0
     let forceCatalogRequests = 0
+    let forceCatalogFailure = false
     const fetchImpl: FetchLike = async () => {
       fetches += 1
       return new Response(JSON.stringify(live), { status: 200 })
@@ -83,6 +84,7 @@ describe("incremental Pi discovery", () => {
         catalogRequests += 1
         if (request.forceRefresh) {
           forceCatalogRequests += 1
+          if (forceCatalogFailure) throw Object.assign(new Error("models.dev offline"), { code: "ECONNREFUSED" })
           return latestCatalog
         }
         return localCatalog
@@ -121,5 +123,31 @@ describe("incremental Pi discovery", () => {
     expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b"])
     expect(catalogRequests).toBe(4)
     expect(forceCatalogRequests).toBe(1)
+
+    // A newly added model withheld by a temporary catalog outage is reprocessed
+    // on the next unchanged model-set refresh; already registered models remain.
+    forceCatalogFailure = true
+    live = response(["model-a", "model-b", "model-d"])
+    expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b"])
+    expect(diagnostics.current.publication?.withheld.map((entry) => entry.id)).toEqual(["model-d"])
+    expect(diagnostics.current.publication?.failureKind).toBe("unreachable")
+
+    forceCatalogFailure = false
+    latestCatalog = catalog(["model-a", "model-b", "model-d"])
+    expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b", "model-d"])
+    expect(diagnostics.current.publication?.withheld).toEqual([])
+    expect(forceCatalogRequests).toBe(3)
+
+    // A complete catalog with a stable unmatched identity is not a temporary
+    // metadata failure and does not trigger another catalog request next round.
+    localCatalog = catalog(["model-a", "model-b", "model-d"])
+    latestCatalog = catalog(["model-a", "model-b", "model-d"])
+    live = response(["model-a", "model-b", "model-d", "stable-unmatched"])
+    expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b", "model-d"])
+    const catalogRequestsAfterStableMiss = catalogRequests
+    expect(diagnostics.current.publication?.withheld[0]?.status).toBe("unmatched")
+    latestCatalog = catalog(["model-a", "model-b", "model-d", "stable-unmatched"])
+    expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b", "model-d"])
+    expect(catalogRequests).toBe(catalogRequestsAfterStableMiss)
   })
 })

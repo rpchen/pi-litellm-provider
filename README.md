@@ -120,7 +120,7 @@ endpoint 里发现了模型，不等于这个模型已经可以被安全使用�
 
 如果你之前用过的模型**现在**被 withheld，这是一次 regression，插件会明确告诉你哪个模型失去了可用状态、为什么、以及可以刷新（打开 `/model` 重新发现）后重试；它**不会**自动把你的请求切到另一个模型，也不会静默继续使用失去可信配置的模型。已经发出的请求不会被打断。
 
-**models.dev 暂时不可用时**，同 endpoint、凭据、协议配置与 model_name 下，Core 接受的前次完整配置（LKG）仍可用，保留能力和档位。内部 route、base_model、deployment ID 变化以及价格缺失或错误不会使它失效。年龄只作说明，不作 TTL；成功清单删除的模型和认证失败仍撤下。
+**models.dev 暂时不可用时**，同 endpoint、凭据、协议配置与 model_name 下，Core 接受的前次完整配置（LKG）仍可用，保留能力和档位。因临时 catalog 故障而 withheld 的 `metadata-unavailable` 模型会在后续刷新中重新处理，即使 LiteLLM 的 model_name 集合未变；正常注册模型继续复用，稳定 unmatched/invalid 结果不会因此反复请求。内部 route、base_model、deployment ID 变化以及价格缺失或错误不会使 LKG 失效。年龄只作说明，不作 TTL；成功清单删除的模型和认证失败仍撤下。
 
 `/litellm-diagnostics` 显示配置/暂不可用数量、实际元数据来源、推理支持与可选档位、实际失败原因、LKG 来源时间，以及 endpoint 状态和 Runtime Identity。`/litellm-audit-export` 主动导出公开 canonical/provider/record 引用、实际档位及最终注册值，不导出原始路由、地址和密钥。
 

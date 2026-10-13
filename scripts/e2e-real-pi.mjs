@@ -1049,8 +1049,8 @@ export default function bootstrapProbe(pi) {
 
   // [REAL-HOST-E2E] Scenario 2: metadata source unavailable + trusted LKG. The
   // capability declarations stay EXACTLY the same, but the models.dev source
-  // goes down (the hook fails the fetch and clears the warm catalog cache, the
-  // in-process equivalent of the 6 h TTL expiry). Live completeness cannot be
+  // goes down (the hook fails the demand-triggered fetch and clears the warm
+  // catalog cache). Live completeness cannot be
   // re-proved against a source that is down, so the previously verified
   // configuration keeps the model available and is labelled as previously
   // verified, not as a guess or a degraded model.
