@@ -149,5 +149,18 @@ describe("incremental Pi discovery", () => {
     latestCatalog = catalog(["model-a", "model-b", "model-d", "stable-unmatched"])
     expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b", "model-d"])
     expect(catalogRequests).toBe(catalogRequestsAfterStableMiss)
+
+    // If a transiently withheld identity is deleted while the set also contains
+    // a stable unmatched model, the deleted candidate is pruned before recovery
+    // selection and the deletion performs no metadata request.
+    forceCatalogFailure = true
+    live = response(["model-a", "model-b", "model-d", "stable-unmatched", "deleted-temporary"])
+    expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b", "model-d"])
+    expect(diagnostics.current.publication?.withheld.map((entry) => entry.id).sort()).toEqual(["deleted-temporary", "stable-unmatched"])
+    live = response(["model-a", "model-b", "model-d", "stable-unmatched"])
+    const requestsBeforeDeletion = catalogRequests
+    expect((await refresh()).map((model) => model.id)).toEqual(["model-a", "model-b", "model-d"])
+    expect(catalogRequests).toBe(requestsBeforeDeletion)
+    expect(diagnostics.current.publication?.withheld.map((entry) => entry.id)).toEqual(["stable-unmatched"])
   })
 })
