@@ -9,8 +9,8 @@
 ## 2. Evidence and delivery
 
 - [x] 2.1 Add adapter tests for temporary metadata recovery on the unchanged model set and stable unmatched non-retry.
-- [ ] 2.2 Run Pi full gates and Real Pi 0.87.1 E2E at the final immutable candidate commit; record CI evidence.
-- [ ] 2.3 Strict-validate and archive this follow-up change after adapter CI/E2E passes; rerun OpenSpec closure.
+- [x] 2.2 Run Pi full gates and Real Pi 0.87.1 E2E at immutable candidate `2c5b1d057f9c4485cca41cc2ae1976f02df49797`; CI run `38334901847` passed both CI and Real Pi 0.87.1 E2E. Local full Bun suite: 339 passed, 3 skipped; `verify:dist`, typecheck, package, release metadata, scenario coverage and strict spec validation passed.
+- [x] 2.3 Archive this follow-up with the OpenSpec CLI, then rerun strict validation and OpenSpec closure.
 
 ### Scenario → test evidence
 
