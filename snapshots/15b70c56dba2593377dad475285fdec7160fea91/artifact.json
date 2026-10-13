@@ -1,0 +1,12 @@
+{
+    "schema_version": 2,
+    "commit": "15b70c56dba2593377dad475285fdec7160fea91",
+    "indexed_at": "2026-10-13T06:51:04Z",
+    "project": "pi-litellm-provider-main-15b70c56dba2593377dad475285fdec7160fea91",
+    "nodes": 3819,
+    "edges": 6398,
+    "original_size": 10944512,
+    "compressed_size": 1510817,
+    "compression_level": 9,
+    "reconcile_basis": "git-clean-head"
+}
