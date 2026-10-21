@@ -267,6 +267,8 @@ activation 独立保存在 `~/.pi/agent/litellm.activation.json`。缺省为全�
 
 `/v1/model/info` 是模型清单来源，models.dev 不会添加 LiteLLM 未返回的模型。模型名称与所选公开记录决定配置；描述性部署差异不覆盖该记录。未知或非法关键能力不会以默认值注册成可用模型。
 
+LiteLLM 管理员在 Models 页面暂停（Disable）的 deployment（`model_info.blocked: true`）不会参与模型发布；同名 deployment 全部暂停时，该模型会在下一次成功刷新后从宿主列表移除。同名模型仍有未暂停的对话 deployment 时继续参与发现。`/model/info` 可能仍包含暂停项；插件由共享 Core 过滤，不把 embedding 等非对话模型注册到模型选择器。
+
 > `pi update --models` 只处理 `models.json`，不会加载扩展，因此不会刷新本插件的模型清单。
 
 ## 从手工 `models.json` 迁移

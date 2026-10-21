@@ -439,6 +439,14 @@ try {
   const frozenCatalog = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/metadata-priority/modelsdev-subset.json"), "utf8"))
   const oracle = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/metadata-priority/expected-16.json"), "utf8"))
   const catalogPayload = structuredClone(frozenCatalog)
+  const blockedInfo = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/blocked-deployments/model-info.json"), "utf8"))
+  const blockedCatalog = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/blocked-deployments/modelsdev-catalog.json"), "utf8"))
+  const blockedVisible = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/blocked-deployments/visible-models.json"), "utf8"))
+  for (const [id, record] of Object.entries(blockedCatalog.models)) catalogPayload.models[id] ??= record
+  for (const [owner, provider] of Object.entries(blockedCatalog.providers)) {
+    catalogPayload.providers[owner] ??= { models: {} }
+    for (const [id, record] of Object.entries(provider.models)) catalogPayload.providers[owner].models[id] ??= record
+  }
   const addRecord = (owner, name, context, output, reasoning = false, reasoning_options = []) => {
     const canonical = owner + "/" + name
     const record = { id: name, canonical_model_id: canonical, tool_call: true, reasoning, reasoning_options,
@@ -908,6 +916,31 @@ export default function bootstrapProbe(pi) {
   nodeAssert.deepEqual(messagesAudit.metadata.reasoningLevels, ["off", "high", "max"])
   assert(!Object.hasOwn(messagesAudit.thinkingLevelMap, "off"), "Audit must preserve absent Messages map.off")
   nodeAssert.equal(matrixAuditModels.find(model => model.id === "gpt-5.6-luna").thinkingLevelMap.off, "none")
+  // [BLOCKED-HOST-REFRESH] [BLOCKED-HOST-ISOLATION] Actual Pi registry and diagnostics command.
+  // Synthetic 29/25 deployment layout copied from Core, not a company service export.
+  const registryIDs = async provider => pluginModels((await rpc.request({ type: "get_available_models" })).response)
+    .filter(model => model.provider === provider).map(model => model.id).sort()
+  const defaultBeforePause = await registryIDs("litellm")
+  const companyBeforePause = companyServer.state.models
+  companyServer.state.models = blockedInfo.data.map(row => ({ ...row, model_info: { ...row.model_info, blocked: false } }))
+  await rpc.extensionCommand("/litellm-endpoints all")
+  nodeAssert.deepEqual(await registryIDs("litellm-company"), Object.keys(blockedCatalog.providers.openai.models).sort())
+  companyServer.state.models = blockedInfo.data
+  await rpc.extensionCommand("/litellm-endpoints all")
+  const pausedExpected = Array.from({ length: 13 }, (_, i) => `chat-model-${String(i + 1).padStart(2, "0")}`)
+  const pausedActual = await registryIDs("litellm-company")
+  nodeAssert.deepEqual(pausedActual, pausedExpected)
+  assert(pausedActual.every(id => blockedVisible.data.some(model => model.id === id)), "Paused registry exceeds visible names")
+  nodeAssert.deepEqual(await registryIDs("litellm"), defaultBeforePause, "Company pause changed default endpoint")
+  const pausedDiagnostics = await rpc.extensionCommand("/litellm-diagnostics company")
+  const pausedNotice = await rpc.waitFor(record => record?.type === "extension_ui_request" && record.method === "notify"
+    && record.message?.includes("Endpoint：company"), { after: pausedDiagnostics.after })
+  assert(pausedNotice.message.includes("已注册模型：13"), "Company diagnostics differs from real registered models")
+  companyServer.state.models = companyBeforePause
+  await rpc.extensionCommand("/litellm-endpoints all")
+  nodeAssert.deepEqual(await registryIDs("litellm-company"), ["e2e-company-chat", "e2e-company-reasoning"])
+  console.log("Real Pi blocked deployments: company 20 → 13, default unchanged, diagnostics passed")
+
   // A stable model_name set reuses the registered configuration; changing only
   // catalog prices does not trigger a metadata read.
   const baselineCosts = new Map(registered.map(model => [model.id, model.cost]))
