@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
 import { strict as nodeAssert } from "node:assert"
 
-const EXPECTED_PI_VERSION = process.env.E2E_PI_VERSION ?? "0.87.1"
+const EXPECTED_PI_VERSION = process.env.E2E_PI_VERSION?.trim()
+if (!EXPECTED_PI_VERSION || !/^\d+\.\d+\.\d+$/.test(EXPECTED_PI_VERSION)) throw new Error("E2E_PI_VERSION must be an exact stable Pi version")
 const PACKAGE_SPEC = process.env.E2E_PACKAGE_SPEC?.trim()
 const PI_BIN = process.env.PI_BIN?.trim() || (process.platform === "win32" ? "pi.cmd" : "pi")
 const TIMEOUT_MS = Number(process.env.E2E_TIMEOUT_MS ?? 30_000)
@@ -381,7 +382,7 @@ let rpc
 try {
   const version = runChecked(PI_BIN, ["--version"], { cwd: workDir, env: isolatedEnv })
   assert(
-    version.includes(EXPECTED_PI_VERSION),
+    version === EXPECTED_PI_VERSION,
     `Expected real Pi ${EXPECTED_PI_VERSION}, got: ${version || "<empty>"}`,
   )
 

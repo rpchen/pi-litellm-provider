@@ -18,7 +18,7 @@ pi install git:github.com/rpchen/pi-litellm-provider
 pi install git:github.com/rpchen/pi-litellm-provider#v0.11.1
 ```
 
-要求：Pi `>=0.87.1`；LiteLLM 地址使用 `http://` 或 `https://`；API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型。
+要求：Pi `>=0.87.1`；LiteLLM 地址使用 `http://` 或 `https://`；API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型。 CI 和 Release 验证运行时解析的最新稳定 Pi；实际版本以每次运行的日志为准。
 
 **2. 配置 LiteLLM 地址**
 
