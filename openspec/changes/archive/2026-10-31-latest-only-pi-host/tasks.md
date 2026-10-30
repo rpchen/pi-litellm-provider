@@ -8,6 +8,6 @@
 
 ## 2. GitHub 门禁与收尾
 
-- [ ] 2.1 在 PR 产生并验证 `Real Pi latest E2E` 检查。
-- [ ] 2.2 原样保留其他规则，仅将 GitHub 必需检查切换为 latest，读取前后规则验证。
-- [ ] 2.3 同步 canonical specs 并归档变更，重新验证 OpenSpec。
+- [x] 2.1 在 PR 产生并验证 `Real Pi latest E2E` 检查。
+- [x] 2.2 原样保留其他规则，仅将 GitHub 必需检查切换为 latest，读取前后规则验证。
+- [x] 2.3 同步 canonical specs 并归档变更，重新验证 OpenSpec。
