@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "typecheck": "bun scripts/run-with-core.ts tsc --noEmit",
-    "test": "bun scripts/run-with-core.ts bun test",
+    "test": "bun scripts/run-with-core.ts bun test ./test/",
     "build:dist": "bun scripts/build.ts",
     "verify:dist": "bun scripts/verify-dist.ts",
     "test:package": "bun scripts/test-package.ts",
