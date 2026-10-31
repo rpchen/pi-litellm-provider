@@ -6,7 +6,7 @@
  * Freezes the `Protect main` ruleset baseline:
  *   - active enforcement on refs/heads/main
  *   - strict required status checks
- *   - check contexts exactly { CI, Real Pi 0.87.1 E2E }
+ *   - check contexts exactly { CI, Real Pi latest E2E }
  *   - squash-only merge method, no bypass actors
  *   - review-thread resolution, deletion + non-fast-forward protection
  */
@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process"
 
 const REPO = "rpchen/pi-litellm-provider"
 const RULESET_NAME = "Protect main"
-const REQUIRED_CHECKS = ["CI", "Real Pi 0.87.1 E2E"]
+const REQUIRED_CHECKS = ["CI", "Real Pi latest E2E"]
 const EXPECTED = {
   enforcement: "active",
   allowedMergeMethods: ["squash"],

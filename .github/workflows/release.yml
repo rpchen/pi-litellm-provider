@@ -14,7 +14,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -56,7 +56,7 @@ jobs:
         run: bun run typecheck
 
       - name: Run tests
-        run: bun test
+        run: bun run test
 
       - name: Validate OpenSpec
         run: npm run validate:spec
@@ -67,15 +67,18 @@ jobs:
       - name: Test package without lifecycle scripts
         run: bun run test:package
 
-      - name: Install real Pi host
-        run: npm install --global @earendil-works/pi-coding-agent@0.87.1
+      - name: Resolve the latest stable Pi version
+        run: |
+          version="$(npm view @earendil-works/pi-coding-agent@latest version)"
+          node -e 'if (!/^\d+\.\d+\.\d+$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "E2E_PI_VERSION=$version" >> "$GITHUB_ENV"
+          echo "Testing Pi $version"
 
-      - name: Verify real host version
-        run: pi --version
+      - name: Install latest Pi host
+        run: npm install --global @earendil-works/pi-coding-agent@${E2E_PI_VERSION}
 
-      - name: Run real host E2E against tagged Git package
+      - name: Run latest host E2E against tagged Git package
         env:
-          E2E_PI_VERSION: "0.87.1"
           E2E_PACKAGE_SPEC: git:github.com/${{ github.repository }}@${{ github.ref_name }}
         run: npm run test:e2e:pi
 

@@ -35,7 +35,7 @@
 - **THEN** 扩展不改写该文件，最终模型清单按 pi 宿主的 provider 组合规则呈现
 
 ### Requirement: 真实 Pi 宿主契约必须有永久 E2E 门禁
-涉及 Pi 宿主契约的候选变更 SHALL 在 CI 中使用真实 `@earendil-works/pi-coding-agent@0.87.1` 验证，而不是只依赖模拟 `ExtensionAPI`、直接调用 extension factory 或 package 文件存在性检查。E2E MUST 使用 Pi 自己的 `pi install` 安装固定 Git commit，MUST 隔离 `HOME`、XDG 与 `PI_CODING_AGENT_DIR`，MUST 使用本地 fake LiteLLM 与脱敏测试凭据，并 MUST 经过真实 extension loader、ModelRuntime、credential store、command registry 与 `refreshModels`。
+涉及 Pi 宿主契约的候选变更 SHALL 在 CI 中使用从 npm latest 解析的精确版本的真实 `@earendil-works/pi-coding-agent` 验证，而不是只依赖模拟 `ExtensionAPI`、直接调用 extension factory 或 package 文件存在性检查。E2E MUST 使用 Pi 自己的 `pi install` 安装固定 Git commit，MUST 隔离 `HOME`、XDG 与 `PI_CODING_AGENT_DIR`，MUST 使用本地 fake LiteLLM 与脱敏测试凭据，并 MUST 经过真实 extension loader、ModelRuntime、credential store、command registry 与 `refreshModels`。
 
 #### Scenario: 固定 Git 候选由真实 Pi 加载
 - **WHEN** CI 用 Pi 自己的 package installer 安装当前不可变 Git commit 并启动 RPC 宿主
