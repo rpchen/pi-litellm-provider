@@ -17,6 +17,8 @@ bun run typecheck
 bun test
 npm run validate:spec
 npm run test:openspec-closure
+npm run test:e2e-gate
+npm run test:e2e:pi:inputs
 npm run test:release-metadata
 # 宿主契约变更：先安装 @earendil-works/pi-coding-agent@0.87.1，
 # 再将 E2E_PACKAGE_SPEC 指向待验证的不可变 Git commit/tag：
@@ -38,7 +40,7 @@ E2E_PACKAGE_SPEC=git:github.com/rpchen/pi-litellm-provider@<sha> npm run test:e2
 - 新增用户可见功能至少有一条纵向自动化链路，Pi 功能应覆盖到 command / UI；
 - PR 描述提供 `Requirement / Scenario → Test Evidence`，说明破坏某 Scenario 时哪项测试会失败；
 - CI 全绿是必要条件，但不能替代 Scenario 级闭环；
-- 涉及 Pi 宿主 API、provider/model、credential/login、command/UI、插件安装/加载或用户可见宿主行为时，必须通过 `Real Pi 0.87.1 E2E`。该门禁必须用 Pi 自己的 `pi install` 安装固定 Git 候选，并在隔离 agent dir 中验证真实宿主状态；mock/factory/package smoke 不能替代。
+- 涉及 Pi 宿主 API、provider/model、credential/login、command/UI、插件安装/加载或用户可见宿主行为时，必须通过 `Real Pi latest E2E`。该门禁必须用 Pi 自己的 `pi install` 安装固定 Git 候选，并在隔离 agent dir 中验证真实宿主状态；mock/factory/package smoke 不能替代。
 
 ## 用户文档门禁
 
@@ -57,3 +59,5 @@ Release 由 tag 触发（`release.yml` 监听 `v*.*.*`，并强校验 tag == `v`
 5. workflow 自动完成全套门禁 → tagged Git 包冒烟 → `npm pack` + SHA256 → 创建 GitHub Release（附 `.tgz` / `.sha256` 与安装命令），发布后核对 tag SHA / Release / 附件
 
 `pi install git:`（无 ref）用户始终跟随 `main`；`#vX.Y.Z` 锁定安装与 Release 附件依赖 tag——合入用户可见变更后记得检查 tag 是否落后于 `main`。
+
+CI完整矩阵与匹配实际输入的基线复用说明见[CI说明](docs/e2e-ci.md)，共享政策以Core testing-standard第4.1节为准。每轮当前候选真实交付仍验证，缺证据完整运行；tag Release保留完整E2E。

@@ -1,18 +1,54 @@
 import { createServer } from "node:http"
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, dirname } from "node:path"
+import { join, dirname, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { spawn, spawnSync } from "node:child_process"
 import { strict as nodeAssert } from "node:assert"
+import { environmentRecord, hostExecutableDigest } from "./e2e-host.mjs"
+
+/** Pi host package the E2E is allowed to run against (the workflow may override it). */
+const HOST_PACKAGE = process.env.E2E_PI_HOST_PACKAGE?.trim() || "@earendil-works/pi-coding-agent"
+/** Host command name that the private prefix puts first on PATH. */
+const HOST_COMMAND = process.env.E2E_PI_HOST_COMMAND?.trim() || "pi"
+/**
+ * The only peers the extension may resolve at runtime. Pi's own loader aliases
+ * both to the host implementation (dist/core/extensions/loader.js `getAliases()`),
+ * so the extension never needs a nested copy. [E2E-INPUTS-HOST-PEERS]
+ */
+const HOST_PEERS = Object.freeze(["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"])
+/** Marker that replaces the candidate's own SHA in cross-run evidence. */
+const CANDIDATE_SHA_MARKER = "<candidate>"
+const CANDIDATE_SHA_PATTERN = /^[0-9a-f]{40}$/u
+const SCOPE = parseScopeValue(process.env.E2E_SCOPE)
+
+// `--self-check` exercises the scope parsing and the runtime-input evidence
+// contract without a host, a network or a LiteLLM endpoint. It runs before any
+// E2E input validation, so the evidence format can be gated on its own.
+// [E2E-SCOPE-INVALID] [E2E-INPUTS-HOST-PEERS] [E2E-INPUTS-EXTRA-DEP] [E2E-INPUTS-NO-ALIAS]
+if (process.argv.includes("--self-check")) {
+  runSelfCheck()
+  writeSync(1, "pi E2E input evidence self-check ok\n")
+  process.exit(0)
+}
 
 const EXPECTED_PI_VERSION = process.env.E2E_PI_VERSION?.trim()
 if (!EXPECTED_PI_VERSION || !/^\d+\.\d+\.\d+$/.test(EXPECTED_PI_VERSION)) throw new Error("E2E_PI_VERSION must be an exact stable Pi version")
 const PACKAGE_SPEC = process.env.E2E_PACKAGE_SPEC?.trim()
-const PI_BIN = process.env.PI_BIN?.trim() || (process.platform === "win32" ? "pi.cmd" : "pi")
+/** Private npm prefix that holds the exact host version resolved for this run. */
+const PI_HOST_PREFIX = process.env.E2E_PI_HOST_PREFIX?.trim()
+const PI_BIN = process.env.PI_BIN?.trim()
+  || (PI_HOST_PREFIX ? hostCommandPath(PI_HOST_PREFIX) : (process.platform === "win32" ? "pi.cmd" : "pi"))
 const TIMEOUT_MS = Number(process.env.E2E_TIMEOUT_MS ?? 30_000)
 /** The candidate checkout (repository root of this script). */
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+const startedAtMs = Date.now()
+const startedAt = new Date(startedAtMs).toISOString()
+/** Candidate commit parsed from the install spec; only an immutable commit can be verified. */
+const CANDIDATE_SHA = (() => {
+  const parsed = parseGitCandidateSpec(PACKAGE_SPEC)
+  return parsed && CANDIDATE_SHA_PATTERN.test(parsed.ref) ? parsed.ref : null
+})()
 
 if (!PACKAGE_SPEC) {
   throw new Error("E2E_PACKAGE_SPEC is required and must point at an immutable Git commit or tag")
@@ -20,6 +56,453 @@ if (!PACKAGE_SPEC) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
+}
+
+/**
+ * Parse `E2E_SCOPE`. Unset (or blank) keeps the historic behaviour: the full
+ * matrix. An unknown value fails instead of picking a default, so a typo can
+ * never silently shrink the gate. [E2E-SCOPE-FULL] [E2E-SCOPE-DELIVERY]
+ */
+function parseScopeValue(value) {
+  const normalized = String(value ?? "").trim().toLowerCase()
+  if (normalized === "") return "full"
+  if (normalized === "full" || normalized === "delivery") return normalized
+  throw new Error(`E2E_SCOPE must be "full" or "delivery", got ${JSON.stringify(value)}`)
+}
+
+/** Host command inside a private npm prefix (Windows npm creates `.cmd` shims). */
+function hostCommandPath(prefix, platform = process.platform) {
+  const target = join(prefix, "node_modules", ".bin", "pi")
+  return platform === "win32" ? `${target}.cmd` : target
+}
+
+/** Parse the `git:<host>/<owner>/<repo>@<ref>` spec Pi's installer takes. */
+function parseGitCandidateSpec(spec) {
+  const match = String(spec ?? "").trim().match(/^git:([^/@\s]+)\/([^/@\s]+\/[^/@\s]+?)@(\S+)$/u)
+  if (!match) return null
+  return { host: match[1], path: match[2], ref: match[3] }
+}
+
+function plainObjectOrEmpty(value) {
+  if (value === undefined || value === null) return {}
+  nodeAssert.equal(typeof value, "object", `expected an object, got ${typeof value}`)
+  nodeAssert.ok(!Array.isArray(value), "expected an object, got an array")
+  return { ...value }
+}
+
+function sortObjectByKey(value) {
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)))
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+}
+
+/**
+ * Decide whether the runtime inputs of the **installed** candidate form reusable
+ * evidence, and normalize the result for cross-run comparison.
+ *
+ * Everything here is pure so the negative paths can be proven without a host.
+ * A missing support always lands on `complete: false` with a reason: reusing a
+ * full matrix is only ever allowed on complete evidence. The candidate's own SHA
+ * is replaced by a marker because candidate equality is decided separately by the
+ * candidate/harness tree comparison. [E2E-INPUTS-HOST-PEERS] [E2E-INPUTS-EXTRA-DEP]
+ * [E2E-INPUTS-NO-ALIAS]
+ */
+function evaluateRuntimeInputs({ manifest, cloneSha, expectedSha, hostAliases, bundledPeers = [], installedDevDependencies = [] }) {
+  const dependencies = plainObjectOrEmpty(manifest?.dependencies)
+  const optionalDependencies = plainObjectOrEmpty(manifest?.optionalDependencies)
+  const peerDependencies = plainObjectOrEmpty(manifest?.peerDependencies)
+  const peerDependenciesMeta = plainObjectOrEmpty(manifest?.peerDependenciesMeta)
+
+  if (Object.keys(dependencies).length > 0) {
+    return { complete: false, reason: `installed manifest declares runtime dependencies: ${Object.keys(dependencies).sort().join(", ")}` }
+  }
+  if (Object.keys(optionalDependencies).length > 0) {
+    return { complete: false, reason: `installed manifest declares optional runtime dependencies: ${Object.keys(optionalDependencies).sort().join(", ")}` }
+  }
+  const peerNames = Object.keys(peerDependencies).sort()
+  if (peerNames.length !== HOST_PEERS.length || !HOST_PEERS.every((peer) => peerNames.includes(peer))) {
+    return { complete: false, reason: `peer dependencies must be exactly ${[...HOST_PEERS].sort().join(", ")}, got ${peerNames.join(", ") || "<none>"}` }
+  }
+  const rangedPeers = peerNames.filter((peer) => peerDependencies[peer] !== "*")
+  if (rangedPeers.length > 0) {
+    return { complete: false, reason: `peer dependencies must stay host-resolved "*": ${rangedPeers.map((peer) => `${peer}@${peerDependencies[peer]}`).join(", ")}` }
+  }
+  if (Object.keys(peerDependenciesMeta).length > 0) {
+    return { complete: false, reason: `peer dependency metadata is not supported: ${Object.keys(peerDependenciesMeta).sort().join(", ")}` }
+  }
+  if (bundledPeers.length > 0) {
+    return { complete: false, reason: `installed clone bundles host peers instead of using the host alias: ${[...bundledPeers].sort().join(", ")}` }
+  }
+  if (installedDevDependencies.length > 0) {
+    return { complete: false, reason: `development dependencies were installed into the runtime tree: ${[...installedDevDependencies].sort().join(", ")}` }
+  }
+  if (hostAliases === null) {
+    return { complete: false, reason: "the installed host package could not be located, so its loader aliases are unverified" }
+  }
+  const missingAliases = HOST_PEERS.filter((peer) => !hostAliases.includes(peer))
+  if (missingAliases.length > 0) {
+    return { complete: false, reason: `host loader does not alias ${missingAliases.join(", ")}` }
+  }
+  if (!CANDIDATE_SHA_PATTERN.test(String(cloneSha ?? ""))) {
+    return { complete: false, reason: "the installed clone does not expose a full Git commit SHA" }
+  }
+  if (!expectedSha) {
+    return { complete: false, reason: "the install spec is not an immutable commit, so the installed clone cannot be matched" }
+  }
+  if (cloneSha !== expectedSha) {
+    return { complete: false, reason: "the installed clone SHA does not match the candidate commit" }
+  }
+  return {
+    complete: true,
+    installedCloneSha: CANDIDATE_SHA_MARKER,
+    hostPeerAliases: hostAliases.filter((peer) => HOST_PEERS.includes(peer)).sort(),
+    manifest: {
+      name: String(manifest?.name ?? ""),
+      type: String(manifest?.type ?? ""),
+      dependencies,
+      optionalDependencies,
+      peerDependencies: sortObjectByKey(peerDependencies),
+    },
+  }
+}
+
+/** Names of the candidate's declared development dependencies that are really installed. */
+function installedDevDependencyNames(manifest, nodeModulesDir) {
+  const declared = Object.keys(plainObjectOrEmpty(manifest?.devDependencies))
+  return declared.filter((name) => existsSync(join(nodeModulesDir, ...name.split("/"))))
+}
+
+/** Host peers copied into the installed clone's `node_modules` (would bypass the alias). */
+function bundledHostPeersIn(cloneDir) {
+  const nodeModulesDir = join(cloneDir, "node_modules")
+  if (!existsSync(nodeModulesDir)) return []
+  return HOST_PEERS.filter((peer) => existsSync(join(nodeModulesDir, ...peer.split("/"))))
+}
+
+function isHostPackageDir(dir) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"))
+    return manifest?.name === HOST_PACKAGE
+  } catch {
+    return false
+  }
+}
+
+/** Locate the actually installed host package (prefix, explicit dir, or the real binary). */
+function resolveHostPackageDir() {
+  const explicit = process.env.E2E_PI_HOST_PACKAGE_DIR?.trim()
+  if (explicit) return isHostPackageDir(explicit) ? explicit : null
+  if (PI_HOST_PREFIX) {
+    const dir = join(PI_HOST_PREFIX, "node_modules", ...HOST_PACKAGE.split("/"))
+    if (isHostPackageDir(dir)) return dir
+  }
+  let current
+  try {
+    current = dirname(realpathSync(PI_BIN))
+  } catch {
+    return null
+  }
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (isHostPackageDir(current)) return current
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return null
+}
+
+/**
+ * Read the installed host loader's jiti alias table. `null` means "could not be
+ * verified" - never "verified empty".
+ */
+function readHostLoaderAliases(hostDir) {
+  const loaderPath = join(hostDir, "dist", "core", "extensions", "loader.js")
+  let source
+  try {
+    source = readFileSync(loaderPath, "utf8")
+  } catch {
+    return null
+  }
+  return HOST_PEERS.filter((peer) => new RegExp(`["']${escapeRegExp(peer)}["']\\s*:`, "u").test(source))
+}
+
+/**
+ * Collect the runtime input evidence from the installed clone (not the checkout)
+ * and the installed host. [E2E-INPUTS-HOST-PEERS]
+ */
+function collectDeliveryInputs() {
+  const parsed = parseGitCandidateSpec(PACKAGE_SPEC)
+  if (!parsed) {
+    return { complete: false, reason: "E2E_PACKAGE_SPEC is not a git:<host>/<owner>/<repo>@<ref> spec" }
+  }
+  const cloneDir = join(agentDir, "git", parsed.host, ...parsed.path.split("/"))
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(join(cloneDir, "package.json"), "utf8"))
+  } catch {
+    return { complete: false, reason: "the installed candidate clone has no readable package manifest" }
+  }
+  let cloneSha
+  try {
+    cloneSha = runChecked("git", ["rev-parse", "HEAD"], { cwd: cloneDir })
+  } catch {
+    return { complete: false, reason: "the installed candidate clone does not expose a Git HEAD" }
+  }
+  const hostDir = resolveHostPackageDir()
+  return evaluateRuntimeInputs({
+    manifest,
+    cloneSha,
+    expectedSha: CANDIDATE_SHA,
+    hostAliases: hostDir ? readHostLoaderAliases(hostDir) : null,
+    bundledPeers: bundledHostPeersIn(cloneDir),
+    installedDevDependencies: installedDevDependencyNames(manifest, join(cloneDir, "node_modules")),
+  })
+}
+
+/**
+ * Verify that the host command the E2E will actually spawn lives inside the
+ * private prefix that holds the lock resolved for this run.
+ */
+function verifyHostBinary() {
+  if (!PI_HOST_PREFIX) return null
+  assert(existsSync(PI_BIN), `Locked host command is missing: ${PI_BIN}`)
+  const realBin = realpathSync(PI_BIN)
+  const realPrefix = realpathSync(PI_HOST_PREFIX)
+  assert(
+    realBin === realPrefix || realBin.startsWith(`${realPrefix}${sep}`),
+    `Host command resolves outside the locked prefix: ${realBin}`,
+  )
+  return realBin
+}
+
+/** Directory of the installed artifact that carries runtime identity + core provenance. */
+function findInstalledDistDir() {
+  const candidates = []
+  const visit = (dir, depth = 0) => {
+    if (depth > 6 || candidates.length > 0) return
+    let names = []
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return
+    }
+    if (names.includes("runtime-identity.json") && names.includes("core-provenance.json")) {
+      candidates.push(dir)
+      return
+    }
+    for (const name of names) {
+      if (name === "node_modules" || name.startsWith(".")) continue
+      let entry = null
+      try {
+        entry = statSync(join(dir, name))
+      } catch {
+        continue
+      }
+      if (entry.isDirectory()) visit(join(dir, name), depth + 1)
+    }
+  }
+  for (const dir of [agentDir, home, xdgState, xdgConfig]) visit(dir)
+  assert(candidates.length > 0, "Installed package runtime identity was not found under the isolated Pi dirs")
+  return candidates[0]
+}
+
+/** Observe this runner, independently of the resolver's host record. */
+async function hostInputRecord() {
+  let npmVersion = null
+  try {
+    npmVersion = runChecked("npm", ["--version"], { cwd: repoRoot, env: process.env }).trim() || null
+  } catch {
+    // Incomplete environment evidence only disables reuse.
+  }
+  return environmentRecord({
+    version: EXPECTED_PI_VERSION, hostPackage: HOST_PACKAGE,
+    candidateSha: CANDIDATE_SHA, npmVersion,
+  })
+}
+
+/** Missing executable evidence disables reuse, preserving the real result. */
+async function withHostExecutableDigest(evidence) {
+  if (!evidence || evidence.complete !== true) return evidence
+  const digest = hostExecutableDigest(HOST_COMMAND, process.env)
+  return digest ? { ...evidence, hostExecutableDigest: digest }
+    : { complete: false, reason: "the actual host executable could not be read" }
+}
+
+/** Assemble the machine-readable E2E report (pure; see writeE2EReport). */
+function buildE2EReport({ scope, status, candidateSha, candidateSpec, deliveryInputs, hostInput, startedAt: started, finishedAt, durationMs }) {
+  return {
+    scope,
+    group: "pi",
+    status,
+    hostInput: hostInput ?? null,
+    deliveryInputs: deliveryInputs ?? { complete: false, reason: "delivery input evidence was not collected" },
+    candidateSpec: candidateSpec ?? null,
+    candidateSha: candidateSha ?? null,
+    durationMs,
+    startedAt: started,
+    finishedAt,
+  }
+}
+
+/**
+ * Write the report before the temporary HOME is removed. This is best effort:
+ * a missing report means "no evidence" (so no reuse), and it must never mask a
+ * real E2E failure with a successful exit code. [E2E-SCOPE-FULL]
+ */
+async function writeE2EReport(status) {
+  const file = process.env.E2E_TIMING_FILE?.trim()
+  if (!file) return
+  const finishedAtMs = Date.now()
+  try {
+    const report = buildE2EReport({
+      scope: SCOPE,
+      status,
+      candidateSha: CANDIDATE_SHA,
+      candidateSpec: PACKAGE_SPEC,
+      deliveryInputs: await withHostExecutableDigest(deliveryInputs),
+      hostInput: await hostInputRecord(),
+      startedAt,
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      durationMs: finishedAtMs - startedAtMs,
+    })
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`)
+    console.log(`E2E report written to ${file} (scope=${report.scope} group=${report.group} status=${report.status})`)
+  } catch (error) {
+    process.stderr.write(`E2E report was not written (${file}): ${error.code ?? error.message}\n`)
+  }
+}
+
+/**
+ * Self-check for the scope parsing and the runtime-input evidence contract.
+ * Pure: no host, no network, no temporary directories.
+ * [E2E-SCOPE-INVALID] [E2E-INPUTS-HOST-PEERS] [E2E-INPUTS-EXTRA-DEP] [E2E-INPUTS-NO-ALIAS]
+ */
+function runSelfCheck() {
+  nodeAssert.equal(parseScopeValue(undefined), "full", "unset E2E_SCOPE must keep the full matrix")
+  nodeAssert.equal(parseScopeValue("   "), "full", "blank E2E_SCOPE must keep the full matrix")
+  nodeAssert.equal(parseScopeValue("full"), "full")
+  nodeAssert.equal(parseScopeValue(" DELIVERY "), "delivery")
+  nodeAssert.throws(() => parseScopeValue("partial"), /E2E_SCOPE/u, "unknown scopes must fail instead of defaulting")
+  nodeAssert.throws(() => parseScopeValue("delivery-"), /E2E_SCOPE/u)
+
+  const sha = "a".repeat(40)
+  const manifest = {
+    name: "pi-litellm-provider",
+    version: "1.0.0",
+    type: "module",
+    peerDependencies: { "@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": "*" },
+    devDependencies: { typescript: "5.8.2" },
+  }
+  const base = {
+    manifest,
+    cloneSha: sha,
+    expectedSha: sha,
+    hostAliases: [...HOST_PEERS],
+    bundledPeers: [],
+    installedDevDependencies: [],
+  }
+
+  const accepted = evaluateRuntimeInputs(base)
+  nodeAssert.equal(accepted.complete, true, "a clean installed clone must be reusable evidence")
+  nodeAssert.equal(accepted.installedCloneSha, CANDIDATE_SHA_MARKER, "the candidate SHA must be normalized out")
+  nodeAssert.deepEqual(accepted.manifest.peerDependencies, base.manifest.peerDependencies)
+  nodeAssert.deepEqual(
+    evaluateRuntimeInputs({ ...base, manifest: { ...manifest, version: "9.9.9" } }),
+    accepted,
+    "a version-only candidate change must not change the dependency contract",
+  )
+
+  const extraDependency = evaluateRuntimeInputs({ ...base, manifest: { ...manifest, dependencies: { "left-pad": "1.0.0" } } })
+  nodeAssert.equal(extraDependency.complete, false, "direct runtime dependencies must be rejected")
+  nodeAssert.match(extraDependency.reason, /runtime dependencies/u)
+
+  const optionalDependency = evaluateRuntimeInputs({ ...base, manifest: { ...manifest, optionalDependencies: { fsevents: "2.3.3" } } })
+  nodeAssert.equal(optionalDependency.complete, false, "optional runtime dependencies must be rejected")
+
+  const unknownPeer = evaluateRuntimeInputs({ ...base, manifest: { ...manifest, peerDependencies: { ...manifest.peerDependencies, "left-pad": "*" } } })
+  nodeAssert.equal(unknownPeer.complete, false, "peer dependencies outside the allowed set must be rejected")
+
+  const rangedPeer = evaluateRuntimeInputs({ ...base, manifest: { ...manifest, peerDependencies: { ...manifest.peerDependencies, "@earendil-works/pi-ai": "^1.0.0" } } })
+  nodeAssert.equal(rangedPeer.complete, false, "peers must stay host-resolved")
+
+  const optionalPeer = evaluateRuntimeInputs({ ...base, manifest: { ...manifest, peerDependenciesMeta: { "@earendil-works/pi-ai": { optional: true } } } })
+  nodeAssert.equal(optionalPeer.complete, false, "peer metadata must not weaken the contract")
+
+  const bundled = evaluateRuntimeInputs({ ...base, bundledPeers: ["@earendil-works/pi-ai"] })
+  nodeAssert.equal(bundled.complete, false, "a bundled host peer must not be accepted")
+
+  const devInstalled = evaluateRuntimeInputs({ ...base, installedDevDependencies: ["typescript"] })
+  nodeAssert.equal(devInstalled.complete, false, "development dependencies in the runtime tree must not be accepted")
+
+  const unverifiedAliases = evaluateRuntimeInputs({ ...base, hostAliases: null })
+  nodeAssert.equal(unverifiedAliases.complete, false, "unverifiable host aliases must not be accepted")
+
+  const partialAliases = evaluateRuntimeInputs({ ...base, hostAliases: ["@earendil-works/pi-ai"] })
+  nodeAssert.equal(partialAliases.complete, false, "a missing host alias must not be accepted")
+
+  const shaMismatch = evaluateRuntimeInputs({ ...base, cloneSha: "b".repeat(40) })
+  nodeAssert.equal(shaMismatch.complete, false, "an unexpected installed clone SHA must not be accepted")
+
+  const mutableSpec = evaluateRuntimeInputs({ ...base, expectedSha: null })
+  nodeAssert.equal(mutableSpec.complete, false, "a mutable install spec must not produce reusable evidence")
+
+  const parsed = parseGitCandidateSpec(`git:github.com/rpchen/pi-litellm-provider@${sha}`)
+  nodeAssert.deepEqual(parsed, { host: "github.com", path: "rpchen/pi-litellm-provider", ref: sha })
+  nodeAssert.equal(parseGitCandidateSpec(`github:rpchen/pi-litellm-provider#${sha}`), null)
+  nodeAssert.equal(parseGitCandidateSpec("git:github.com/rpchen/pi-litellm-provider"), null)
+  nodeAssert.equal(parseGitCandidateSpec(`git:github.com/rpchen/pi-litellm-provider@${sha}`).ref, sha)
+
+  nodeAssert.equal(hostCommandPath("/tmp/prefix", "linux"), join("/tmp/prefix", "node_modules", ".bin", "pi"))
+  nodeAssert.equal(hostCommandPath("/tmp/prefix", "win32"), `${join("/tmp/prefix", "node_modules", ".bin", "pi")}.cmd`)
+
+  const fallbackHostInput = environmentRecord({
+    hostPackage: HOST_PACKAGE,
+    version: "1.4.0",
+    candidateSha: sha,
+    npmVersion: "11.0.0",
+    nodeVersion: "v22.23.4",
+    platform: "linux",
+    arch: "x64",
+    release: "6.11.0",
+    env: { ImageOS: "ubuntu24", ImageVersion: "20260101.1" },
+  })
+  nodeAssert.deepEqual(Object.keys(fallbackHostInput).sort(), ["candidateSha", "hostPackage", "hostVersion", "node", "npm", "os", "resolvedAt", "runner"])
+  nodeAssert.equal(fallbackHostInput.hostPackage, HOST_PACKAGE)
+  nodeAssert.equal(fallbackHostInput.runner.ImageOS, "ubuntu24")
+  nodeAssert.equal(fallbackHostInput.os.platform, "linux")
+  nodeAssert.equal(fallbackHostInput.npm, "11.0.0")
+
+  const report = buildE2EReport({
+    scope: "delivery",
+    status: "failed",
+    candidateSha: sha,
+    candidateSpec: `git:github.com/rpchen/pi-litellm-provider@${sha}`,
+    deliveryInputs: undefined,
+    hostInput: { hostPackage: HOST_PACKAGE },
+    startedAt: "2026-01-01T00:00:00.000Z",
+    finishedAt: "2026-01-01T00:00:01.000Z",
+    durationMs: 1000,
+  })
+  nodeAssert.equal(report.group, "pi")
+  nodeAssert.equal(report.status, "failed", "a failed run must be reported as failed")
+  nodeAssert.equal(report.deliveryInputs.complete, false, "a missing evidence record must not look reusable")
+
+  const okReport = buildE2EReport({
+    scope: "full",
+    status: "ok",
+    candidateSha: sha,
+    candidateSpec: `git:github.com/rpchen/pi-litellm-provider@${sha}`,
+    deliveryInputs: accepted,
+    hostInput: { hostPackage: HOST_PACKAGE },
+    startedAt: "2026-01-01T00:00:00.000Z",
+    finishedAt: "2026-01-01T00:00:01.000Z",
+    durationMs: 1000,
+  })
+  nodeAssert.equal(okReport.scope, "full")
+  nodeAssert.equal(okReport.deliveryInputs.complete, true)
 }
 
 function runChecked(command, args, options = {}) {
@@ -378,17 +861,30 @@ delete isolatedEnv.LITELLM_API_KEY
 let defaultServer
 let companyServer
 let rpc
+/** Report status: only a scope that finished every check sets it to "ok". */
+let reportStatus = "failed"
+/** Runtime input evidence collected by whichever scope ran. */
+let deliveryInputs
 
-try {
+/**
+ * The full matrix (`E2E_SCOPE=full`, the default). Every assertion that existed
+ * before this change lives below, unchanged: verification scopes may not shrink
+ * the real host gate. [E2E-SCOPE-FULL]
+ */
+async function runFullScope() {
   const version = runChecked(PI_BIN, ["--version"], { cwd: workDir, env: isolatedEnv })
   assert(
     version === EXPECTED_PI_VERSION,
     `Expected real Pi ${EXPECTED_PI_VERSION}, got: ${version || "<empty>"}`,
   )
+  verifyHostBinary()
 
   runChecked(PI_BIN, ["install", PACKAGE_SPEC], { cwd: workDir, env: isolatedEnv })
   const installed = runChecked(PI_BIN, ["list"], { cwd: workDir, env: isolatedEnv })
   assert(installed.includes("pi-litellm-provider") || installed.includes(PACKAGE_SPEC), "Pi did not list the installed LiteLLM package")
+  // Evidence for a later run: read from the installed clone, never the checkout.
+  deliveryInputs = collectDeliveryInputs()
+  if (deliveryInputs.complete !== true) console.log(`runtime input evidence incomplete: ${deliveryInputs.reason}`)
 
   defaultServer = await startFakeLiteLLM("default", "sk-default-e2e", [
     modelInfo("e2e-default-responses", "responses"),
@@ -1763,7 +2259,262 @@ export default function bootstrapProbe(pi) {
   console.log(
     `real Pi ${EXPECTED_PI_VERSION} E2E ok: installed ${PACKAGE_SPEC}; commands, credentials, models, limits, diagnostics, activation and endpoint management verified`,
   )
+  reportStatus = "ok"
+}
+
+const DELIVERY_MODEL = "e2e-delivery-chat"
+
+/**
+ * Delivery scope (`E2E_SCOPE=delivery`): prove that the candidate commit really
+ * installs, loads in the real host, exposes the extension commands through the
+ * installed package, runs the artifact its provenance describes, and answers one
+ * real model request. Any real failure fails the job. [E2E-SCOPE-DELIVERY]
+ * [E2E-DELIVERY-FAIL]
+ */
+async function runDeliveryScope() {
+  const version = runChecked(PI_BIN, ["--version"], { cwd: workDir, env: isolatedEnv })
+  assert(
+    version === EXPECTED_PI_VERSION,
+    `Expected real Pi ${EXPECTED_PI_VERSION}, got: ${version || "<empty>"}`,
+  )
+  verifyHostBinary()
+
+  runChecked(PI_BIN, ["install", PACKAGE_SPEC], { cwd: workDir, env: isolatedEnv })
+  const installed = runChecked(PI_BIN, ["list"], { cwd: workDir, env: isolatedEnv })
+  assert(installed.includes("pi-litellm-provider") || installed.includes(PACKAGE_SPEC), "Pi did not list the installed LiteLLM package")
+  deliveryInputs = collectDeliveryInputs()
+  if (deliveryInputs.complete !== true) console.log(`runtime input evidence incomplete: ${deliveryInputs.reason}`)
+
+  defaultServer = await startFakeLiteLLM("default", "sk-delivery-e2e", [
+    modelInfo(DELIVERY_MODEL, "chat", 32_000, 4_096),
+  ])
+  writeFileSync(
+    join(agentDir, "litellm.json"),
+    JSON.stringify({
+      pollInterval: 300,
+      contextTierCap: false,
+      endpoints: {
+        default: {
+          baseUrl: defaultServer.baseUrl,
+          protocolOverrides: { [DELIVERY_MODEL]: "chat" },
+        },
+      },
+    }, null, 2) + "\n",
+  )
+  writeFileSync(
+    join(agentDir, "auth.json"),
+    JSON.stringify({ litellm: { type: "api_key", key: defaultServer.apiKey } }, null, 2) + "\n",
+    { mode: 0o600 },
+  )
+
+  // A deterministic models.dev answer keeps one real request independent of an
+  // external service; it declares the same public record the endpoint does.
+  const deliveryCatalogFile = join(root, "delivery-models-dev-catalog.json")
+  writeFileSync(deliveryCatalogFile, `${JSON.stringify({
+    models: {
+      [`openai/${DELIVERY_MODEL}`]: {
+        id: DELIVERY_MODEL,
+        canonical_model_id: `openai/${DELIVERY_MODEL}`,
+        tool_call: true,
+        reasoning: false,
+        reasoning_options: [],
+        modalities: { input: ["text"], output: ["text"] },
+        limit: { context: 32_000, output: 4_096 },
+      },
+    },
+    providers: {
+      openai: {
+        models: {
+          [DELIVERY_MODEL]: {
+            id: DELIVERY_MODEL,
+            canonical_model_id: `openai/${DELIVERY_MODEL}`,
+            tool_call: true,
+            reasoning: false,
+            reasoning_options: [],
+            modalities: { input: ["text"], output: ["text"] },
+            limit: { context: 32_000, output: 4_096 },
+          },
+        },
+      },
+    },
+  })}\n`)
+  const deliveryFetchHook = join(root, "delivery-fetch-hook.mjs")
+  // Same shape as the full matrix's stub: a data property so Pi's own
+  // `globalThis.fetch = ...` wiring still lands while the visible fetch stays ours.
+  writeFileSync(deliveryFetchHook, `
+import { readFileSync } from "node:fs"
+const originalFetch = globalThis.fetch.bind(globalThis)
+let baseFetch = originalFetch
+let depth = 0
+const isModelsDev = (input) => {
+  let url = ""
+  if (typeof input === "string") url = input
+  else if (input instanceof URL) url = input.href
+  else if (input && typeof input.url === "string") url = input.url
+  return url === "https://models.dev/api.json" || url === "https://models.dev/catalog.json"
+}
+const hookedFetch = (input, init) => {
+  if (isModelsDev(input)) {
+    let body = "{}"
+    try { body = readFileSync(process.env.E2E_MODELS_DEV_CATALOG, "utf8") } catch {}
+    return Promise.resolve(new Response(body, { status: 200, headers: { "content-type": "application/json" } }))
+  }
+  if (depth > 0) return originalFetch(input, init)
+  depth += 1
+  return Promise.resolve(baseFetch(input, init)).finally(() => { depth -= 1 })
+}
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  enumerable: true,
+  get() { return hookedFetch },
+  set(value) { if (typeof value === "function") baseFetch = value },
+})
+`)
+
+  // A fresh `--no-session` host needs one model to start with; this bootstrap
+  // provider is a local stand-in only for the RPC handshake, never for the
+  // delivery request, which goes to the installed extension's provider.
+  const deliveryProbe = join(root, "delivery-bootstrap-probe.ts")
+  writeFileSync(deliveryProbe, `
+export default function deliveryBootstrapProbe(pi) {
+  pi.registerProvider("e2e-bootstrap", {
+    name: "E2E Bootstrap",
+    baseUrl: "http://127.0.0.1:1/v1",
+    apiKey: "$E2E_BOOTSTRAP_KEY",
+    api: "openai-completions",
+    models: [{
+      id: "bootstrap",
+      name: "bootstrap",
+      api: "openai-completions",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1024,
+      maxTokens: 128,
+    }],
+  })
+}
+`)
+
+  const deliveryNodeOptions = [isolatedEnv.NODE_OPTIONS, `--import=${pathToFileURL(deliveryFetchHook).href}`]
+    .filter(Boolean)
+    .join(" ")
+  rpc = new RpcClient(spawn(
+    PI_BIN,
+    ["--mode", "rpc", "--no-session", "--extension", deliveryProbe, "--model", "e2e-bootstrap/bootstrap"],
+    {
+      cwd: workDir,
+      env: {
+        ...isolatedEnv,
+        NODE_OPTIONS: deliveryNodeOptions,
+        E2E_MODELS_DEV_CATALOG: deliveryCatalogFile,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    },
+  ))
+
+  // Real load: the extension must come from the installed package, not the checkout.
+  const commands = (await rpc.request({ type: "get_commands" })).response?.data?.commands
+  assert(Array.isArray(commands), "get_commands did not return a command list")
+  for (const name of ["litellm-endpoints", "litellm-diagnostics", "litellm-audit-export"]) {
+    const command = commands.find((entry) => entry?.name === name)
+    assert(command, `Real Pi did not load extension command /${name}`)
+    assert(command.source === "extension", `/${name} is not an extension command`)
+    assert(command.sourceInfo?.origin === "package", `/${name} was not loaded from an installed package`)
+  }
+
+  const activation = await rpc.extensionCommand("/litellm-endpoints all")
+  const activationNotice = await rpc.waitFor(
+    (record) =>
+      record?.type === "extension_ui_request" &&
+      record.method === "notify" &&
+      typeof record.message === "string" &&
+      record.message.includes("已激活 endpoint："),
+    { after: activation.after },
+  )
+  assert(activationNotice.message.includes("default"), `delivery activation did not enable the endpoint: ${activationNotice.message}`)
+  const models = pluginModels((await rpc.request({ type: "get_available_models" })).response)
+  const delivered = models.find((model) => model.provider === "litellm" && model.id === DELIVERY_MODEL)
+  assert(delivered, `Real Pi did not register ${DELIVERY_MODEL} from the installed package`)
+  assert(delivered.api === "openai-completions", `Delivery model API mismatch: ${delivered.api}`)
+  assert(delivered.contextWindow > 0 && delivered.maxTokens > 0, "Delivery model has non-operational limits")
+  assert(defaultServer.requests.length > 0, "Delivery endpoint received no discovery request")
+  assert(
+    defaultServer.requests.every((request) => request.authorization === `Bearer ${defaultServer.apiKey}`),
+    "Delivery endpoint received a wrong credential",
+  )
+
+  // Provenance: the running artifact is the installed one, and its identity
+  // matches the provenance the install shipped with.
+  const installedDistDir = findInstalledDistDir()
+  const installedIdentity = JSON.parse(readFileSync(join(installedDistDir, "runtime-identity.json"), "utf8"))
+  const installedProvenance = JSON.parse(readFileSync(join(installedDistDir, "core-provenance.json"), "utf8"))
+  assert(
+    typeof installedIdentity.coreCommit === "string" && /^[0-9a-f]{40}$/u.test(installedIdentity.coreCommit),
+    "Installed runtime identity has no full Core commit",
+  )
+  assert(installedIdentity.coreCommit === installedProvenance.sha, "Installed identity coreCommit differs from provenance")
+  assert(/^\d+\.\d+\.\d+$/u.test(String(installedIdentity.pluginVersion ?? "")), "Installed runtime identity has no plugin version")
+  assert(
+    /^sha256:[0-9a-f]{64}$/u.test(String(installedIdentity.artifactDigest ?? "")),
+    "Installed runtime identity has no artifact digest",
+  )
+
+  const diagnostics = await rpc.extensionCommand("/litellm-diagnostics default")
+  const diagnosticNotice = await rpc.waitFor(
+    (record) =>
+      record?.type === "extension_ui_request" &&
+      record.method === "notify" &&
+      typeof record.message === "string" &&
+      record.message.includes("Endpoint：default"),
+    { after: diagnostics.after },
+  )
+  assert(diagnosticNotice.message.includes("状态：正常"), "Delivery diagnostics did not report a ready endpoint")
+  assert(diagnosticNotice.message.includes("Runtime Identity"), "Delivery diagnostics did not show the Runtime Identity")
+  const runningVersion = (diagnosticNotice.message.match(/Plugin Version\s+(\S+)/u) ?? [])[1]
+  const runningArtifact = (diagnosticNotice.message.match(/Artifact\s+([0-9a-f]{8}|unknown)/u) ?? [])[1]
+  const runningCore = (diagnosticNotice.message.match(/Core Commit\s+([0-9a-f]{8}|unknown)/u) ?? [])[1]
+  assert(runningVersion && runningVersion !== "unknown", "Delivery plugin version is missing")
+  assert(runningArtifact && runningArtifact !== "unknown", "Delivery artifact digest is missing")
+  assert(runningCore && runningCore !== "unknown", "Delivery core commit is missing")
+  assert(runningCore === installedIdentity.coreCommit.slice(0, 8), "Running core commit differs from the installed provenance")
+  assert(
+    runningVersion === installedIdentity.pluginVersion,
+    `Running plugin version ${runningVersion} differs from the installed artifact ${installedIdentity.pluginVersion}`,
+  )
+  assert(
+    installedIdentity.artifactDigest.slice(7, 15) === runningArtifact,
+    "Running artifact digest differs from the installed artifact",
+  )
+  assert(!diagnosticNotice.message.includes(defaultServer.apiKey), "Delivery diagnostics leaked the API key")
+  assert(!diagnosticNotice.message.includes(defaultServer.baseUrl), "Delivery diagnostics leaked the LiteLLM URL")
+
+  // One real model request through the installed extension's provider.
+  await rpc.request({ type: "set_model", provider: "litellm", modelId: DELIVERY_MODEL })
+  await rpc.request({ type: "set_thinking_level", level: "off" })
+  const requestStart = defaultServer.requests.length
+  const run = await rpc.request({ type: "prompt", message: "Reply ok without tools." })
+  await rpc.waitFor((record) => record.type === "agent_end", { after: run.after })
+  const posts = defaultServer.requests.slice(requestStart).filter((request) => request.method === "POST")
+  assert(posts.length === 1, `delivery must send exactly one real model request, got ${posts.length}`)
+  const [request] = posts
+  assert(request.url === "/v1/chat/completions", `delivery request reached ${request.url}`)
+  assert(request.body?.model === DELIVERY_MODEL, `delivery request model differs: ${request.body?.model}`)
+  assert(request.authorization === `Bearer ${defaultServer.apiKey}`, "delivery request carried a wrong credential")
+
+  console.log(
+    `real Pi ${EXPECTED_PI_VERSION} delivery E2E ok: installed ${PACKAGE_SPEC}; commands, registry identity, provenance and one real request verified`,
+  )
+  reportStatus = "ok"
+}
+
+try {
+  if (SCOPE === "delivery") await runDeliveryScope()
+  else await runFullScope()
 } finally {
+  // Report first: the temporary HOME (and the evidence source) goes away below.
+  await writeE2EReport(reportStatus)
   if (rpc) await rpc.close().catch(() => {})
   if (defaultServer) await defaultServer.close().catch(() => {})
   if (companyServer) await companyServer.close().catch(() => {})

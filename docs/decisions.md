@@ -79,3 +79,10 @@
 ## 恢复模型元数据优先级（2026-10-10）
 
 用户批准 restore-model-metadata-priority 设计。Core PR #34 于 2026-10-10 squash 合并，merge SHA `cf797e953eb1f6de8e7c3e0fd5e98094398c26f9`；该 SHA 的完整 CI 和准确 SHA 索引发布已通过，Pi 与 OpenCode 的 v0.10.1 构建固定此 Core SHA。旧 serving proof、部署交集、价格权威与价格 cap 规则由本 change 替代；Pi 明确 verdict 与全 null 无 effort 映射，无 SDK tools 字段时不伪造。Real Pi 0.87.1 E2E 验证冻结的 16 项注册/picker 与实际请求；Pi PR #55 于 2026-10-11 合并（merge SHA `6007c4b5d5588ad2dfa14d1577c00df7ce74d844`），CI 和真实宿主 E2E 均通过。`v0.10.1` 已于 2026-10-11 发布，tag SHA `0a6172954bcfa1337cf54f4511ae755444a7db83` 与 Pi 当前 main 一致，main CI、索引发布和 Release workflow 均成功。历史 archive 未修改。
+
+
+## 实际输入匹配的真实宿主验证复用（2026-10-31）
+
+用户批准以Core docs/testing-standard第4.1节为共享权威，PR/main常规CI与准确main索引每次运行；完整真实Pi矩阵为默认，只在candidate/harness完整Git对象、精确宿主锁、实际安装依赖/peer提供、Node/npm/OS/runner和相关配置与已核实同仓完整成功run/attempt/步骤一致时复用。当前候选仍真实pi install、加载、Runtime Identity/provenance、注册与一次模型请求；缺证据全跑，交付失败阻断，delivery不成为基线。只改版本元数据也必须逐字段核实，禁止按标题/分支名判断。
+
+同一job使用resolve已安装的私有宿主前缀，避免重复安装。Pi tag Release完整E2E、package/附件职责保留；没有更改产品src/dist、Core SHA或主保护check名称/strict规则。对应OpenSpec verified-e2e-input-reuse与Core同名change、OpenCode optimize-real-host-e2e互引，审核与合入顺序Core→adapters→workspace，不授予自动合并或发版权限。
