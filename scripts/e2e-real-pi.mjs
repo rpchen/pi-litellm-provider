@@ -376,9 +376,35 @@ async function writeE2EReport(status) {
 }
 
 /**
- * Self-check for the scope parsing and the runtime-input evidence contract.
+ * Decide whether an `agent_end` event proves the delivery model turn succeeded.
+ *
+ * Pi resolves the prompt RPC as soon as prompt preflight accepts it, and the agent
+ * loop still ends with `agent_end` when the response stream failed, so neither the
+ * RPC success nor the outgoing POST says anything about the turn's outcome. The
+ * final assistant message is the authoritative result: `error`/`aborted` mean the
+ * request was sent but never delivered a usable response. Pure, so the delivery
+ * path and the self-check share exactly this judgement. [E2E-DELIVERY-FAIL]
+ */
+function evaluateDeliveryTurn(agentEndRecord) {
+  const messages = Array.isArray(agentEndRecord?.messages) ? agentEndRecord.messages : []
+  let final
+  for (const message of messages) {
+    if (message?.role === "assistant") final = message
+  }
+  if (!final) return { ok: false, reason: "agent_end carried no assistant message" }
+  if (final.stopReason === "error" || final.stopReason === "aborted") {
+    const detail = typeof final.errorMessage === "string" && final.errorMessage ? `: ${final.errorMessage}` : ""
+    return { ok: false, reason: `final assistant turn ended with stopReason ${final.stopReason}${detail}` }
+  }
+  return { ok: true, reason: `final assistant turn ended with stopReason ${final.stopReason}` }
+}
+
+/**
+ * Self-check for the scope parsing, the runtime-input evidence contract and the
+ * delivery turn judgement.
  * Pure: no host, no network, no temporary directories.
  * [E2E-SCOPE-INVALID] [E2E-INPUTS-HOST-PEERS] [E2E-INPUTS-EXTRA-DEP] [E2E-INPUTS-NO-ALIAS]
+ * [E2E-DELIVERY-FAIL]
  */
 function runSelfCheck() {
   nodeAssert.equal(parseScopeValue(undefined), "full", "unset E2E_SCOPE must keep the full matrix")
@@ -503,6 +529,52 @@ function runSelfCheck() {
   })
   nodeAssert.equal(okReport.scope, "full")
   nodeAssert.equal(okReport.deliveryInputs.complete, true)
+
+  // Delivery uses exactly this judgement: a sent POST plus `agent_end` is not proof
+  // of success, the final assistant turn is. [E2E-DELIVERY-FAIL]
+  const deliveryTurn = (messages) => ({ type: "agent_end", messages })
+  const okTurn = evaluateDeliveryTurn(deliveryTurn([
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "stop" },
+  ]))
+  nodeAssert.equal(okTurn.ok, true, "a completed assistant turn must satisfy delivery")
+  nodeAssert.match(okTurn.reason, /stopReason stop/u)
+
+  const errorTurn = evaluateDeliveryTurn(deliveryTurn([
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [], stopReason: "error", errorMessage: "stream decode failed after POST" },
+  ]))
+  nodeAssert.equal(errorTurn.ok, false, "a response stream that failed after the POST must not pass delivery")
+  nodeAssert.match(errorTurn.reason, /stopReason error/u)
+  nodeAssert.match(errorTurn.reason, /stream decode failed after POST/u, "the real failure must reach the report")
+
+  const abortedTurn = evaluateDeliveryTurn(deliveryTurn([
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [], stopReason: "aborted" },
+  ]))
+  nodeAssert.equal(abortedTurn.ok, false, "an aborted turn must not pass delivery")
+  nodeAssert.match(abortedTurn.reason, /stopReason aborted/u)
+
+  const noAssistantTurn = evaluateDeliveryTurn(deliveryTurn([{ role: "user", content: "Reply ok without tools." }]))
+  nodeAssert.equal(noAssistantTurn.ok, false, "a turn without an assistant message must not pass delivery")
+  nodeAssert.equal(evaluateDeliveryTurn({ type: "agent_end" }).ok, false, "an agent_end without messages must not pass delivery")
+  nodeAssert.equal(evaluateDeliveryTurn(undefined).ok, false, "a missing agent_end record must not pass delivery")
+
+  const recoveredTurn = evaluateDeliveryTurn(deliveryTurn([
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [], stopReason: "error", errorMessage: "earlier failure" },
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "stop" },
+  ]))
+  nodeAssert.equal(recoveredTurn.ok, true, "the final assistant turn decides, not an earlier one")
+
+  const lateFailureTurn = evaluateDeliveryTurn(deliveryTurn([
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "stop" },
+    { role: "user", content: "Reply ok without tools." },
+    { role: "assistant", content: [], stopReason: "error", errorMessage: "stream decode failed after POST" },
+  ]))
+  nodeAssert.equal(lateFailureTurn.ok, false, "a failing final assistant turn must fail delivery")
 }
 
 function runChecked(command, args, options = {}) {
@@ -2495,7 +2567,11 @@ export default function deliveryBootstrapProbe(pi) {
   await rpc.request({ type: "set_thinking_level", level: "off" })
   const requestStart = defaultServer.requests.length
   const run = await rpc.request({ type: "prompt", message: "Reply ok without tools." })
-  await rpc.waitFor((record) => record.type === "agent_end", { after: run.after })
+  // The prompt RPC resolving only means Pi accepted it, and `agent_end` also fires for
+  // a failed stream, so the delivery conclusion comes from the final assistant turn.
+  const agentEnd = await rpc.waitFor((record) => record.type === "agent_end", { after: run.after })
+  const turn = evaluateDeliveryTurn(agentEnd)
+  assert(turn.ok, `delivery model turn did not succeed: ${turn.reason}`)
   const posts = defaultServer.requests.slice(requestStart).filter((request) => request.method === "POST")
   assert(posts.length === 1, `delivery must send exactly one real model request, got ${posts.length}`)
   const [request] = posts
@@ -2504,7 +2580,7 @@ export default function deliveryBootstrapProbe(pi) {
   assert(request.authorization === `Bearer ${defaultServer.apiKey}`, "delivery request carried a wrong credential")
 
   console.log(
-    `real Pi ${EXPECTED_PI_VERSION} delivery E2E ok: installed ${PACKAGE_SPEC}; commands, registry identity, provenance and one real request verified`,
+    `real Pi ${EXPECTED_PI_VERSION} delivery E2E ok: installed ${PACKAGE_SPEC}; commands, registry identity, provenance and one successful real model turn verified`,
   )
   reportStatus = "ok"
 }

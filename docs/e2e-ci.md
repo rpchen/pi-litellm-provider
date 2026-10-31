@@ -7,7 +7,7 @@
 | `E2E_SCOPE` | 做什么 | 是否可产生可复用基线 |
 |---|---|---|
 | `full`（未设置时的默认值） | 变更前的全部真实断言：安装/加载、command registry、provider/model 注册表、operational limits、diagnostics 与 Runtime Identity、audit 导出、冻结 16 模型矩阵与真实协议请求、blocked 集合、metadata priority、LKG/outage、通知与 acknowledgement 重启、endpoint 管理全链路、legacy 迁移 | 是（仅当本轮实际成功） |
-| `delivery` | 用 Pi 自己的 installer 安装固定 Git commit → 从已安装包真实加载扩展 → 核实 command registry 与 provider/model 注册表身份 → 核对运行中产物与已安装 provenance → 发出**恰好一次**真实模型请求 | 否 |
+| `delivery` | 用 Pi 自己的 installer 安装固定 Git commit → 从已安装包真实加载扩展 → 核实 command registry 与 provider/model 注册表身份 → 核对运行中产物与已安装 provenance → 发出**恰好一次**真实模型请求 → 核实该回合的最终 assistant 消息不是 `error`/`aborted` | 否 |
 
 `E2E_SCOPE` 取其他值直接失败，不会回退到某个默认范围。
 
@@ -61,12 +61,13 @@ required check 始终执行本轮 delivery 验证；汇总只显示本轮 scope�
 ## 失败语义
 
 - delivery 的任一步真实失败（安装、加载、command、注册表身份、provenance 不一致、真实请求失败或请求体/协议不符）都会让 job 失败。
+- Pi 的 prompt RPC 成功只代表 preflight 接受，`agent_end` 在响应流失败（`stopReason` 为 `error`/`aborted`）时同样发出，因此请求已发出不是成功证据；delivery 以 `agent_end` 中最后一个 assistant 消息的 `stopReason` 判定，`error`/`aborted` 一律判失败。
 - 报告是附加证据，不改变退出码。
 - `release.yml`（tag 触发的完整 E2E）不受影响；本门禁不做并行分组、不裁剪 Pi 矩阵，也不检查 Release 附件。
 
 ## 集成与验证状态
 
-通用助手已作为本仓库自有脚本交付，不依赖平级仓库运行。宿主在私有prefix只解析/安装一次，随后直接用于探针与完整范围。`test:e2e-gate`覆盖宿主锁、Git双输入与GitHub完整基线回读；`test:e2e:pi:inputs`覆盖Pi依赖/peer/安装身份与scope。实际Linux CI完整、复用和失败证据回填OpenSpec tasks，不把本地Windows/Node24运行等同CI。Pi tag工作流未修改。
+通用助手已作为本仓库自有脚本交付，不依赖平级仓库运行。宿主在私有prefix只解析/安装一次，随后直接用于探针与完整范围。`test:e2e-gate`覆盖宿主锁、Git双输入与GitHub完整基线回读；`test:e2e:pi:inputs`覆盖Pi依赖/peer/安装身份、scope与delivery回合判定（成功、`error`、`aborted`、缺消息负例）。实际Linux CI完整、复用和失败证据回填OpenSpec tasks，不把本地Windows/Node24运行等同CI。Pi tag工作流未修改。
 
 ## 真实Linux验收（2026-10-31）
 
