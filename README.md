@@ -304,6 +304,7 @@ pi remove git:github.com/rpchen/pi-litellm-provider
 - [v0.11.1 release notes](docs/releases/v0.11.1.md)
 - [v0.11.0 release notes](docs/releases/v0.11.0.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
+- [真实宿主 CI 与输入复用](docs/e2e-ci.md)
 - [litellm-discovery-core](https://github.com/rpchen/litellm-discovery-core)
 - [验收记录](docs/research/acceptance-notes.md)
 

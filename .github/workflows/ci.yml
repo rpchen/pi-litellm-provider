@@ -104,32 +104,165 @@ jobs:
         run: node scripts/codebase-memory-main.mjs build
 
 
+      - name: Test actual-input comparison and baseline helpers
+        run: npm run test:e2e-gate
+
+
   real-pi-host:
     name: Real Pi latest E2E
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # `actions: read` lets the verification plan read the artifacts of the run
+    # whose full matrix it may reuse; `contents: read` is everything else.
+    permissions:
+      contents: read
+      actions: read
+    env:
+      # The candidate is the pull request head (or the pushed commit); the
+      # harness is the checkout the scripts and fixtures come from.
+      E2E_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # Git input comparison needs both PR head and merge checkout objects.
+          fetch-depth: 0
 
       - name: Set up supported Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.23.4
 
-      - name: Resolve the latest stable Pi version
+      - name: Self-check the E2E scope and runtime input evidence
+        run: npm run test:e2e:pi:inputs
+
+      - name: Initialize the isolated host prefix
         run: |
-          version="$(npm view @earendil-works/pi-coding-agent@latest version)"
-          node -e 'if (!/^\d+\.\d+\.\d+$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "E2E_PI_HOST_DIR=$RUNNER_TEMP/pi-host" >> "$GITHUB_ENV"
+          echo "E2E_PI_HOST_PREFIX=$RUNNER_TEMP/pi-host" >> "$GITHUB_ENV"
+
+      - name: Resolve the latest stable Pi host input once
+        # Exact-version host resolution is shared with the OpenCode gate:
+        # `latest` is resolved exactly once per run and locked in a private npm
+        # project. --host-package/--host-command select the Pi host.
+        run: |
+          node scripts/e2e-host.mjs resolve \
+            --output "$E2E_PI_HOST_DIR" \
+            --host-package @earendil-works/pi-coding-agent \
+            --host-command pi \
+            --candidate "$E2E_CANDIDATE_SHA" \
+            --repository "$GITHUB_REPOSITORY"
+          version="$(node -e 'const record = require(process.argv[1]); if (!/^\d+\.\d+\.\d+$/.test(record.hostVersion ?? "")) throw new Error("resolver did not record an exact host version"); console.log(record.hostVersion)' "$E2E_PI_HOST_DIR/host-input.json")"
           echo "E2E_PI_VERSION=$version" >> "$GITHUB_ENV"
           echo "Testing Pi $version"
 
-      - name: Install real Pi host
-        run: npm install --global @earendil-works/pi-coding-agent@${E2E_PI_VERSION}
+      - name: Use the resolved Pi host from its private prefix
+        run: |
+          echo "$E2E_PI_HOST_PREFIX/node_modules/.bin" >> "$GITHUB_PATH"
+          # The E2E derives its host command from this prefix and fails when the
+          # binary it would spawn resolves outside it.
+          echo "E2E_PI_HOST_PACKAGE_DIR=$E2E_PI_HOST_PREFIX/node_modules/@earendil-works/pi-coding-agent" >> "$GITHUB_ENV"
 
-      - name: Run real host E2E against immutable Git candidate
+      - name: Run the real Pi delivery probe
         env:
+          E2E_SCOPE: delivery
           E2E_PACKAGE_SPEC: git:github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}
+          E2E_TIMING_FILE: ${{ runner.temp }}/e2e-delivery-report.json
         run: npm run test:e2e:pi
+
+      - name: Plan the E2E verification mode
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/e2e-validation.mjs plan \
+            --adapter pi \
+            --root "$GITHUB_WORKSPACE" \
+            --host-dir "$E2E_PI_HOST_DIR" \
+            --delivery-report "${{ runner.temp }}/e2e-delivery-report.json" \
+            --candidate "$E2E_CANDIDATE_SHA" \
+            --harness "$(git rev-parse HEAD)" \
+            --source-head "$E2E_CANDIDATE_SHA" \
+            --output "${{ runner.temp }}/e2e-plan.json"
+
+      - name: Require an explicit valid verification plan
+        env:
+          VERIFICATION_MODE: ${{ steps.plan.outputs.verification-mode }}
+          VERIFICATION_BASELINE: ${{ steps.plan.outputs.verification-baseline }}
+        run: |
+          case "$VERIFICATION_MODE" in
+            full) ;;
+            delivery) [[ "$VERIFICATION_BASELINE" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]] ;;
+            *) echo "Missing or invalid real E2E verification plan" >&2; exit 1 ;;
+          esac
+
+      - name: Run full real Pi host E2E
+        if: steps.plan.outputs.verification-mode == 'full'
+        env:
+          E2E_SCOPE: full
+          E2E_PACKAGE_SPEC: git:github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}@${{ github.event.pull_request.head.sha || github.sha }}
+          E2E_TIMING_FILE: ${{ runner.temp }}/e2e-full-reports/report.json
+        run: npm run test:e2e:pi
+
+      - name: Record the full E2E validation baseline
+        if: steps.plan.outputs.verification-mode == 'full'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/e2e-validation.mjs record \
+            --adapter pi \
+            --root "$GITHUB_WORKSPACE" \
+            --host-dir "$E2E_PI_HOST_DIR" \
+            --reports-dir "${{ runner.temp }}/e2e-full-reports" \
+            --candidate "$E2E_CANDIDATE_SHA" \
+            --harness "$(git rev-parse HEAD)" \
+            --source-head "$E2E_CANDIDATE_SHA" \
+            --output "${{ runner.temp }}/e2e-full-validation/validation.json"
+
+      - name: Upload the full E2E validation baseline
+        # Only a full run may produce a reusable baseline; a delivery run never does.
+        if: steps.plan.outputs.verification-mode == 'full'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-full-validation
+          path: ${{ runner.temp }}/e2e-full-validation/validation.json
+          if-no-files-found: error
+
+      - name: Summarise the real Pi E2E verification
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Real Pi latest E2E"
+            if [ -f "${{ runner.temp }}/e2e-plan.json" ]; then
+              node -e '
+                const plan = require(process.argv[1])
+                const baseline = plan.baseline ? ` (${plan.baseline.url ?? "run " + plan.baseline.runId})` : ""
+                console.log(`- verification mode: ${plan.mode}${baseline}`)
+                console.log(`- candidate: ${plan.candidateSha}`)
+                console.log(`- harness: ${plan.harnessSha}`)
+                console.log(`- reason: ${plan.reason ?? "none"}`)
+              ' "${{ runner.temp }}/e2e-plan.json"
+            else
+              echo "- verification mode: unknown (no plan was produced)"
+            fi
+            echo "- delivery probe: every run; the full matrix only runs when the plan says full."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload current verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-current-verification
+          path: |
+            ${{ runner.temp }}/e2e-delivery-report.json
+            ${{ runner.temp }}/e2e-plan.json
+            ${{ runner.temp }}/e2e-full-reports/report.json
+            ${{ runner.temp }}/pi-host/host-input.json
+            ${{ runner.temp }}/pi-host/package.json
+            ${{ runner.temp }}/pi-host/package-lock.json
+          if-no-files-found: warn
+          retention-days: 14
