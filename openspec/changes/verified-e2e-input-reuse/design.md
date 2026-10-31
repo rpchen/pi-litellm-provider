@@ -32,8 +32,8 @@
 **D2. 把现有完整矩阵整体搬进 `runFullScope()`，`delivery` 走独立的 `runDeliveryScope()`。**
 理由：两者共享的只有隔离环境目录与常量；把 setup 抽成公共流程会改动 1300 行既有断言的上下文，风险大于重复约 40 行安装/配置代码。`runFullScope()` 的函数体缩进与原 `try` 块一致，diff 只有边界行，断言逐字不变。备选（共享 bootstrap 抽取）被否：任何抽取都要重排既有断言顺序。
 
-**D3. `hostInput` 由本轮脚本自己观察本 runner（优先调用共享 `e2e-host.mjs` 的 `environmentRecord`），不复制解析器的 `host-input.json`。**
-理由：解析器记录的是解析步骤看到的宿主/锁，报告要证明的是“真正执行这次 E2E 的 runner”。直接调用同一个 `environmentRecord` 保证字段 schema 一致（`hostPackage`/`hostVersion`/`candidateSha`/`node`/`npm`/`os`/`runner`），而不引入新的 hostInput 字段；助手未就位时按同一 schema 从运行时事实生成，字段不齐自然导致计划侧不匹配 → 完整跑。
+**D3. `hostInput` 由本轮脚本自己观察本 runner（直接调用随仓库交付的 `e2e-host.mjs` 的 `environmentRecord`），不复制解析器的 `host-input.json`。**
+理由：解析器记录的是解析步骤看到的宿主/锁，报告要证明的是“真正执行这次 E2E 的 runner”。直接调用同一个 `environmentRecord` 保证字段 schema 一致（`hostPackage`/`hostVersion`/`candidateSha`/`node`/`npm`/`os`/`runner`），而不引入新的 hostInput 字段；共享助手随仓库交付，缺字段导致计划侧不匹配 → 完整跑。
 
 **D4. 运行时输入证据只采信实际安装克隆，不采信候选 checkout。**
 理由：候选 checkout 的 `package.json` 不能证明"装进去的东西"就是它，也不能证明安装后被 npm 改写/补装了什么。实现读取 `<agentDir>/git/<host>/<owner>/<repo>/package.json`（Pi 1.4.0 实际安装路径）并 `git rev-parse HEAD` 核实不可变 SHA。
@@ -56,8 +56,8 @@
 **D10. 证据自检以 `node scripts/e2e-real-pi.mjs --self-check` 形式内建，不新增测试文件。**
 理由：本 change 的文件所有权只覆盖该脚本，纯函数自检（scope 解析、归一化、拒绝路径、hostInput schema）可在无宿主无网络下运行并作为负向证据；真实闭环仍由 CI 的真实 E2E 提供，不用自检冒充 E2E。
 
-**D11. 宿主可执行文件摘要作为 `deliveryInputs` 内的可选有界证据。**
-理由：共享助手导出 `hostExecutableDigest(command, env)` 时把“实际执行的宿主二进制”摘要并入 `deliveryInputs`，不新增 `hostInput` 字段、不扩建通用指纹平台；摘要缺失不影响依赖证据的完整性，助手未拷入时明确留作主会话跟进项。
+**D11. 宿主可执行文件摘要作为 `deliveryInputs` 内的有界证据。**
+理由：共享助手导出 `hostExecutableDigest(command, env)` 时把“实际执行的宿主二进制”摘要并入 `deliveryInputs`，不新增 `hostInput` 字段、不扩建通用指纹平台；摘要缺失使证据不完整，回退完整矩阵；助手随仓库交付。
 
 **共享 core 差异（config 规则要求列表说明）**
 
@@ -73,14 +73,14 @@
 
 - [Pi 发布版的安装路径或 loader alias 结构变化，导致证据无法核实] → 判 `complete: false` 并退化为完整矩阵运行（安全方向），并在 `docs/e2e-ci.md` 记录取证依据与升级方式。
 - [delivery 只发一次请求，覆盖不到协议矩阵/凭据隔离/生命周期] → 明确由完整矩阵或基线引用负责；门禁汇总必须显示本轮 scope，禁止把 delivery 结论当完整验收。
-- [报告与验证计划耦合（字段名/位置）] → 字段名按跨仓库约定的最小集合实现，`docs/e2e-ci.md` 与 change 规格同步记录；通用助手未落地前 workflow 步骤属待集成状态。
+- [报告与验证计划耦合（字段名/位置）] → 字段名按跨仓库约定的最小集合实现，`docs/e2e-ci.md` 与 change 规格同步记录；通用助手已随仓库交付，实际Linux分流仍须运行证据。
 - [delivery 增加一轮宿主安装/加载时间] → 与省下的完整矩阵（约 90 秒量级）相比可接受；若实测 delivery 明显变慢，按真实数据再调整，不预先增加机制。
 - [同一 job 内先 delivery 后 full，失败归因变复杂] → 步骤名固定且各自独立失败，汇总步骤在 `always()` 下输出 scope/结论。
 
 ## Migration Plan
 
 1. 脚本先落地（含 `--self-check`）并通过本地自检；
-2. workflow 改为 resolve → install → delivery → plan → 条件 full → record → upload，先与通用助手一同就位；助手未拷入前该 job 视为待集成，不得宣称分流生效；
+2. workflow 改为 resolve → install → delivery → plan → 条件 full → record → upload，先与通用助手一同就位；实际Linux分流以CI记录为准，不以本地自检代替；
 3. 首次真实 CI 成功后才可能产生可复用基线；此前所有运行都是完整矩阵，行为等价于旧门禁；
 4. 回滚：`E2E_SCOPE` 不设置即完整矩阵；必要时把 workflow 的 delivery/plan 步骤移除即回到单步完整运行，脚本本身不会改变既有断言。
 

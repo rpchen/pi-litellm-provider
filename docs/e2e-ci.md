@@ -33,7 +33,7 @@ npm run test:e2e:pi:inputs
 - `scope`：`full` | `delivery`。
 - `group`：Pi 侧固定 `pi`。
 - `status`：`ok` | `failed`。
-- `hostInput`：**本轮 runner 的实际环境**，字段与共享 `e2e-host.mjs` 的 `environmentRecord` 一致（`hostPackage` / `hostVersion` / `candidateSha` / `node` / `npm` / `os` / `runner.ImageOS` / `runner.ImageVersion`）。共享助手存在时直接调用它；不存在时本地按同一 schema 从运行时事实生成。绝不从解析器写下的 `host-input.json` 复制。
+- `hostInput`：**本轮 runner 的实际环境**，字段与共享 `e2e-host.mjs` 的 `environmentRecord` 一致（`hostPackage` / `hostVersion` / `candidateSha` / `node` / `npm` / `os` / `runner.ImageOS` / `runner.ImageVersion`）。直接调用随仓库交付的共享助手。绝不从解析器写下的 `host-input.json` 复制。
 - `deliveryInputs`：运行时输入证据，见下。`complete` 不可能是"部分为真"。
 
 ## `deliveryInputs` 取证依据
