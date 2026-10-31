@@ -2272,6 +2272,8 @@ const DELIVERY_MODEL = "e2e-delivery-chat"
  * [E2E-DELIVERY-FAIL]
  */
 async function runDeliveryScope() {
+  // Temporary CI acceptance input; never merged into the implementation.
+  throw new Error("Controlled delivery failure for required Pi gate acceptance")
   const version = runChecked(PI_BIN, ["--version"], { cwd: workDir, env: isolatedEnv })
   assert(
     version === EXPECTED_PI_VERSION,
