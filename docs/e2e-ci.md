@@ -67,3 +67,9 @@ required check 始终执行本轮 delivery 验证；汇总只显示本轮 scope�
 ## 集成与验证状态
 
 通用助手已作为本仓库自有脚本交付，不依赖平级仓库运行。宿主在私有prefix只解析/安装一次，随后直接用于探针与完整范围。`test:e2e-gate`覆盖宿主锁、Git双输入与GitHub完整基线回读；`test:e2e:pi:inputs`覆盖Pi依赖/peer/安装身份与scope。实际Linux CI完整、复用和失败证据回填OpenSpec tasks，不把本地Windows/Node24运行等同CI。Pi tag工作流未修改。
+
+## 真实Linux验收（2026-10-31）
+
+完整基线[41179193705](https://github.com/rpchen/pi-litellm-provider/actions/runs/41179193705)：candidate05dd726、PR merge harness534bfed，完整报告kind=full/complete。同一临时PR追加版本元数据提交后的[41179482645](https://github.com/rpchen/pi-litellm-provider/actions/runs/41179482645)以candidate03c037b、mergeb85df2e实测delivery，引用原run/attempt，探针3.762秒、host job25秒、常规CI74秒，full步骤明确skipped且没有新full artifact。
+
+该临时PR再注入仅delivery范围失败，[41179734333](https://github.com/rpchen/pi-litellm-provider/actions/runs/41179734333)的探针实际失败→必需Real Pi latest E2E失败，常规CI成功，未以旧绿色覆盖当前失败。临时PR65及其本次分支/worktree已关闭清理，故障代码不在本实现分支。tag Release差异为空。

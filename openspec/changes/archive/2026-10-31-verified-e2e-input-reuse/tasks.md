@@ -26,8 +26,14 @@
 
 ## 5. 集成验收
 
-- [ ] 5.1 真实 CI 中确认：delivery 运行的报告与结论、full 运行的既有断言全绿、`e2e-full-validation` 只在 full 成功时上传，且必需 check 名称仍为 `Real Pi latest E2E`
-- [ ] 5.2 真实 CI 验证"缺证据 → 完整跑"与"delivery 失败 → 门禁失败"至少各一次，并记录实际 job 的 scope 汇总
-- [ ] 5.3 真实 CI 通过后再按 OpenSpec 归档流程归档本 change（未通过前保持 active）
+- [x] 5.1 真实 CI 中确认：delivery 运行的报告与结论、full 运行的既有断言全绿、`e2e-full-validation` 只在 full 成功时上传，且必需 check 名称仍为 `Real Pi latest E2E`
+- [x] 5.2 真实 CI 验证"缺证据 → 完整跑"与"delivery 失败 → 门禁失败"至少各一次，并记录实际 job 的 scope 汇总
+- [x] 5.3 真实 CI 通过后再按 OpenSpec 归档流程归档本 change（未通过前保持 active）
 
 父整合：静态导入共享助手，删除实施期间临时schema/动态导入后备；记录自身runner环境及实际PATH宿主执行文件摘要；Pi宿主不再重复安装，完整默认/tag路径不变。本地自检通过，Linux结果待回填。
+
+## 最终实施验收证据
+
+Linux完整基线41179193705/1：candidate05dd726、harness534bfed，full/complete，两required成功。真实同PR追加版本候选03c037b/mergeb85df2e在41179482645引用原基线，探针3.762秒、hostjob25秒，full明确skipped，无新full artifact。再在仅临时分支delivery范围注入故障，41179734333中当前探针和必需hostcheck失败、常规CI成功，证明旧成功不能掩盖当前失败。临时PR65/本次branch/worktree已清理，故障不在实现分支。
+
+Astra R1浅checkout已修fetch-depth0，R2文档/助手后备已清理；只允许当前完整step名，固定artifact根文件。tag Release和index/merge-gate文件差异为空；ruleset回读CI+Real Pi latest E2E、strict和squash保持。跨仓Core40、OpenCode74、workspace4按共享政策顺序审核，不合并/发版。归档后的准确SHA CI仍需最后通过，不能以旧提交状态替代。
