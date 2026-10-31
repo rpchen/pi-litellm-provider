@@ -121,13 +121,13 @@ jobs:
       # The candidate is the pull request head (or the pushed commit); the
       # harness is the checkout the scripts and fixtures come from.
       E2E_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      E2E_PI_HOST_DIR: ${{ github.workspace }}/.tmp/pi-host
-      E2E_PI_HOST_PREFIX: ${{ github.workspace }}/.tmp/pi-host
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # Git input comparison needs both PR head and merge checkout objects.
+          fetch-depth: 0
 
       - name: Set up supported Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -136,6 +136,11 @@ jobs:
 
       - name: Self-check the E2E scope and runtime input evidence
         run: npm run test:e2e:pi:inputs
+
+      - name: Initialize the isolated host prefix
+        run: |
+          echo "E2E_PI_HOST_DIR=$RUNNER_TEMP/pi-host" >> "$GITHUB_ENV"
+          echo "E2E_PI_HOST_PREFIX=$RUNNER_TEMP/pi-host" >> "$GITHUB_ENV"
 
       - name: Resolve the latest stable Pi host input once
         # Exact-version host resolution is shared with the OpenCode gate:
@@ -256,8 +261,8 @@ jobs:
             ${{ runner.temp }}/e2e-delivery-report.json
             ${{ runner.temp }}/e2e-plan.json
             ${{ runner.temp }}/e2e-full-reports/report.json
-            ${{ github.workspace }}/.tmp/pi-host/host-input.json
-            ${{ github.workspace }}/.tmp/pi-host/package.json
-            ${{ github.workspace }}/.tmp/pi-host/package-lock.json
+            ${{ runner.temp }}/pi-host/host-input.json
+            ${{ runner.temp }}/pi-host/package.json
+            ${{ runner.temp }}/pi-host/package-lock.json
           if-no-files-found: warn
           retention-days: 14
