@@ -75,7 +75,11 @@ jobs:
           echo "Testing Pi $version"
 
       - name: Install latest Pi host
-        run: npm install --global @earendil-works/pi-coding-agent@${E2E_PI_VERSION}
+        run: |
+          npm install --global @earendil-works/pi-coding-agent@${E2E_PI_VERSION}
+          # npm run prepends the repository's older devDependency binary to PATH.
+          # Capture the installed release host before entering npm's script environment.
+          echo "PI_BIN=$(command -v pi)" >> "$GITHUB_ENV"
 
       - name: Run latest host E2E against tagged Git package
         env:
