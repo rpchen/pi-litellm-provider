@@ -15,7 +15,7 @@ pi install git:github.com/rpchen/pi-litellm-provider
 锁定当前发行版：
 
 ```bash
-pi install git:github.com/rpchen/pi-litellm-provider#v0.11.1
+pi install git:github.com/rpchen/pi-litellm-provider#v0.11.2
 ```
 
 要求：Pi `>=0.87.1`；LiteLLM 地址使用 `http://` 或 `https://`；API Key 能访问 `/v1/model/info`（旧版可回退 `/model/info`）以及实际要调用的模型。 CI 和 Release 验证运行时解析的最新稳定 Pi；实际版本以每次运行的日志为准。
@@ -301,6 +301,7 @@ pi remove git:github.com/rpchen/pi-litellm-provider
 
 开发、构建、测试、OpenSpec 和共享 Core 说明请看：
 
+- [v0.11.2 release notes](docs/releases/v0.11.2.md)
 - [v0.11.1 release notes](docs/releases/v0.11.1.md)
 - [v0.11.0 release notes](docs/releases/v0.11.0.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -325,3 +326,9 @@ pi remove git:github.com/rpchen/pi-litellm-provider
 ### main 索引同步的安全检查
 
 新任务/合并收尾会在索引下载后及返回 ready 前重新核验远端 main，记录最终核验时刻；分支或源码并发变化会保留工作并失败。发布任务按完整 SHA 隔离排队，快照从固定干净检出生成。已选择子仓的损坏 metadata 会阻止整体 ready；缺失工作 artifact 必须成功恢复。共享缓存竞争只复用完整且身份/校验一致的赢家。四客户端共用 MCP 失败门禁；每次新任务调用 prepare 仍需代理遵循 AGENTS，不能把安装配置当作宿主级强制任务拦截。详见 [索引说明](docs/codebase-memory.md#本轮审核后的同步安全边界)。
+
+## 同名模型更新后的输出额度
+
+本版本修复 models.dev 保留旧编号时，同名 API 已明确指向新版却被排除的问题：仍按官方 → OpenCode → OpenRouter 取一条完整记录，不拼参数、不硬编码模型、不用 LiteLLM 描述裁剪。例如 deepseek-v4.1-flash 通过目录明确关系找到官方记录后，最大输出额度为393216，上下文窗口为1048576。
+
+升级后请重新启动宿主运行实例并完成一次成功的模型发现，以替换旧快照；正在运行的旧实例不会因安装更新自动换入新代码。T3 Code 中请重建 Pi 运行实例后再继续会话。

@@ -86,3 +86,7 @@
 用户批准以Core docs/testing-standard第4.1节为共享权威，PR/main常规CI与准确main索引每次运行；完整真实Pi矩阵为默认，只在candidate/harness完整Git对象、精确宿主锁、实际安装依赖/peer提供、Node/npm/OS/runner和相关配置与已核实同仓完整成功run/attempt/步骤一致时复用。当前候选仍真实pi install、加载、Runtime Identity/provenance、注册与一次模型请求；缺证据全跑，交付失败阻断，delivery不成为基线。只改版本元数据也必须逐字段核实，禁止按标题/分支名判断。
 
 同一job使用resolve已安装的私有宿主前缀，避免重复安装。Pi tag Release完整E2E、package/附件职责保留；没有更改产品src/dist、Core SHA或主保护check名称/strict规则。对应OpenSpec verified-e2e-input-reuse与Core同名change、OpenCode optimize-real-host-e2e互引，审核与合入顺序Core→adapters→workspace，不授予自动合并或发版权限。
+
+## 消费同名canonical关系修复（2026-11-13）
+
+用户批准官方同名记录优先确定编号；官方API改名时由OpenCode精确同名记录的明确relation搭桥，再按官方优先取整记录。Core #41 merge SHA为90adfe8b0cde94ece261867997990b6f36d3e984，插件仅更新dist/provenance并以该SHA复验，不复制业务算法、不以LiteLLM上限裁剪。公开模型ID保持不变，成功的新实例网络发现会替换旧快照；当前运行实例的增量复用不保证重算已有模型。
