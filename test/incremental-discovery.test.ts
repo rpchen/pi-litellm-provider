@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { getModelsDevCatalog, resetModelsDevCacheForTest } from "../src/net/fetch.ts"
 import { describe, expect, test } from "bun:test"
 import { officialCatalog } from "./fixtures/catalog.ts"
 import { createProviderDiagnosticsState } from "../src/extension/diagnostics.ts"
@@ -164,3 +168,30 @@ describe("incremental Pi discovery", () => {
     expect(diagnostics.current.publication?.withheld.map((entry) => entry.id)).toEqual(["stable-unmatched"])
   })
 })
+
+ test("[CATALOG-RESTART] fresh Pi state registers cached models offline and respects deletion", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-catalog-restart-"))
+  const cachePath = join(directory, "catalog.json")
+  try {
+    await getModelsDevCatalog({ cachePath, fetchImpl: async () => Response.json(catalog(["model-a", "model-b"])) })
+    resetModelsDevCacheForTest()
+    let catalogRequests = 0
+    let live = response(["model-a"])
+    const state = createProviderDiagnosticsState()
+    const coordinator = createProviderRefreshCoordinator()
+    const deps = {
+      fetchImpl: async () => Response.json(live),
+      loadModelsDevCatalog: async (_signal: AbortSignal | undefined, options: { cachedOnly?: boolean; forceRefresh?: boolean } = {}) =>
+        getModelsDevCatalog({ ...options, cachePath, fetchImpl: async () => { catalogRequests++; throw new Error("offline") } }),
+    }
+    const models = await refreshProviderModels(config(), context(), deps, coordinator, state)
+    expect(models.map(model => model.id)).toEqual(["model-a"])
+    expect(catalogRequests).toBe(0)
+    live = response([])
+    expect(await refreshProviderModels(config(), context(), deps, coordinator, state)).toEqual([])
+    expect(catalogRequests).toBe(0)
+  } finally {
+    resetModelsDevCacheForTest()
+    rmSync(directory, { recursive: true, force: true })
+  }
+ })
