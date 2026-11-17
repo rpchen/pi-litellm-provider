@@ -195,3 +195,31 @@ describe("incremental Pi discovery", () => {
     rmSync(directory, { recursive: true, force: true })
   }
  })
+
+ test("[CATALOG-RESTART-NEW] an offline new-model miss retains existing cached models and retries", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-catalog-new-"))
+  const cachePath = join(directory, "catalog.json")
+  try {
+    await getModelsDevCatalog({ cachePath, fetchImpl: async () => Response.json(catalog(["model-a"])) })
+    resetModelsDevCacheForTest()
+    let offline = true
+    let clock = 1000
+    const state = createProviderDiagnosticsState()
+    const coordinator = createProviderRefreshCoordinator()
+    const deps = {
+      fetchImpl: async () => Response.json(response(["model-a", "model-b"])),
+      loadModelsDevCatalog: async (_signal: AbortSignal | undefined, options: { cachedOnly?: boolean; forceRefresh?: boolean } = {}) =>
+        getModelsDevCatalog({ ...options, cachePath, now: () => clock, fetchImpl: async () => {
+          if (offline) throw new Error("offline")
+          return Response.json(catalog(["model-a", "model-b"]))
+        } }),
+    }
+    expect((await refreshProviderModels(config(), context(), deps, coordinator, state)).map(model => model.id)).toEqual(["model-a"])
+    offline = false
+    clock += 60001
+    expect((await refreshProviderModels(config(), context(), deps, coordinator, state)).map(model => model.id)).toEqual(["model-a", "model-b"])
+  } finally {
+    resetModelsDevCacheForTest()
+    rmSync(directory, { recursive: true, force: true })
+  }
+ })

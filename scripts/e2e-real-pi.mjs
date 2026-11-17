@@ -1077,7 +1077,7 @@ const outageRequested = () => {
 const clearModelsDevCache = async () => {
   try {
     const fetchModule = await import(pathToFileURL(process.env.E2E_FETCH_MODULE).href)
-    fetchModule.resetModelsDevCacheForTest()
+    fetchModule.resetModelsDevCacheForTest(true)
   } catch {}
 }
 // Edge-triggered: clear the in-memory catalog cache when the injected outage starts
