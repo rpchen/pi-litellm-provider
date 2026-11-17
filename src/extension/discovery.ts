@@ -222,6 +222,11 @@ export async function discoverModels(
         now,
       })
       if (needsCatalogRefresh(addedPublication, processedModelNames)) {
+        // Preserve locally resolved models before trying metadata for new misses.
+        // A failed latest request must not withdraw these or make new misses stable.
+        if (deps.publication?.store) {
+          seedPublicationLKG(deps.publication.store, response, catalog, buildOptions, addedPublication, now, processedModelNames)
+        }
         try {
           catalog = (await loadCatalog(true)) ?? {}
         } catch (error) {
